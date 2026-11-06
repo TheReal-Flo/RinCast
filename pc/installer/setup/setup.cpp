@@ -34,7 +34,7 @@ namespace {
 
 constexpr char kMagic[8] = {'R', 'C', 'S', 'E', 'T', 'U', 'P', '1'};
 constexpr wchar_t kUninstallKey[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RinCast";
-constexpr wchar_t kDownloadUrl[] = L"https://rincast.justfeli.dev/#download";
+constexpr wchar_t kDownloadUrl[] = L"https://rincast.com/#download";
 
 // ---- small helpers --------------------------------------------------------------------
 

@@ -161,7 +161,7 @@ const std::vector<Scene>& Scenes() {
         {"environment", "home", 4, [](App&) {}},
         {"settings", "home", 5, [](App&) {}},
         {"account-signed-out", "home", 6, [](App&) {}},
-        {"account-code", "home", 6, [](App& a) { a.account.state = Cloud::SignInState::WaitingForApproval; a.account.code = "K7QM-2XPL"; a.account.url = "https://rincast.justfeli.dev/link"; }},
+        {"account-code", "home", 6, [](App& a) { a.account.state = Cloud::SignInState::WaitingForApproval; a.account.code = "K7QM-2XPL"; a.account.url = "https://rincast.com/link"; }},
         {"account-signed-in", "home", 6, [](App& a) { a.account.state = Cloud::SignInState::SignedIn; a.account.user = "Sam"; }},
         {"help", "home", 7, [](App& a) { Live(a); }},
         {"computers-take-over", "home", 0, [](App& a) { a.lan.pcs = {{"b", "Living room", "", true}}; }},

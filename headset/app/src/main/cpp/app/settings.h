@@ -49,7 +49,7 @@ struct HeadsetSettings {
     int vrMenuHints = 0;                // times the "how to open the menu" hint was shown
 
     // Account
-    std::string cloudServer = "https://rincast.justfeli.dev";
+    std::string cloudServer = "https://rincast.com";
     std::string cloudRefreshToken;
     std::string cloudUserName;
     std::string lastPc;

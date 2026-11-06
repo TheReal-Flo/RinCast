@@ -4,7 +4,7 @@
 
 namespace rc {
 
-inline constexpr const char* kDownloadUrl = "https://rincast.justfeli.dev/#download";
-inline constexpr const char* kDownloadSite = "rincast.justfeli.dev";  // to read out or type in a headset
+inline constexpr const char* kDownloadUrl = "https://rincast.com/#download";
+inline constexpr const char* kDownloadSite = "rincast.com";  // to read out or type in a headset
 
 }  // namespace rc

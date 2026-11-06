@@ -55,7 +55,7 @@ struct Settings {
     bool autoRegisterSteamVrDriver = true;
 
     // Cloud
-    std::string cloudUrl = "https://rincast.justfeli.dev";
+    std::string cloudUrl = "https://rincast.com";
     bool allowRemote = true;
     std::string cloudRefreshTokenProtected;  // DPAPI
     std::string cloudUserName;
