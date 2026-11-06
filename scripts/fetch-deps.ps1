@@ -9,9 +9,11 @@
   builds need Android Studio (or the SDK + NDK 27.3.13750724 + CMake 3.22.1).
 #>
 [CmdletBinding()]
-param([string]$Dest = (Join-Path $PSScriptRoot '..\deps'))
+param([string]$Dest)
 
 $ErrorActionPreference = 'Stop'
+# Not as the parameter's default: $PSScriptRoot can be empty there (seen on GitHub's runners).
+if (-not $Dest) { $Dest = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\deps' }
 $wdkVersion = '10.0.28000.2526'
 $sdkVersion = '10.0.28000.1721'
 

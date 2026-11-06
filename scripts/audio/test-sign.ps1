@@ -14,9 +14,11 @@
   Shipping builds must be attestation-signed through the Microsoft Partner Center.
 #>
 [CmdletBinding()]
-param([string]$Package = (Join-Path $PSScriptRoot '..\..\build\audio\package'))
+param([string]$Package)
 
 $ErrorActionPreference = 'Stop'
+# Not as the parameter's default: $PSScriptRoot can be empty there (seen on GitHub's runners).
+if (-not $Package) { $Package = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\..\build\audio\package' }
 $Package = (Resolve-Path $Package).Path
 
 $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subject -eq 'CN=RinCast Test Signing' | Select-Object -First 1
