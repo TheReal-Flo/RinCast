@@ -1,0 +1,78 @@
+name: Release
+
+# Pushing a tag v<VERSION> creates a draft release to review and publish by hand.
+# Optional repository secrets for a signed APK: RINCAST_KEYSTORE_BASE64,
+# RINCAST_KEYSTORE_PASSWORD, RINCAST_KEY_ALIAS, RINCAST_KEY_PASSWORD. Without them the
+# draft gets a debug-signed APK, labelled as such.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag against VERSION
+        run: |
+          $version = (Get-Content VERSION -TotalCount 1).Trim()
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match VERSION $version" }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the NDK and CMake
+        run: |
+          & "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" --install "ndk;27.3.13750724" "cmake;3.22.1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Decode the signing key, if there is one
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RINCAST_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RINCAST_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RINCAST_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RINCAST_KEY_PASSWORD }}
+        run: |
+          if ($env:KEYSTORE_BASE64 -and $env:KEYSTORE_PASSWORD -and $env:KEY_ALIAS -and $env:KEY_PASSWORD) {
+            $path = Join-Path $env:RUNNER_TEMP 'rincast-release.keystore'
+            [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+            Add-Content $env:GITHUB_ENV "RINCAST_KEYSTORE=$path"
+            Add-Content $env:GITHUB_ENV "RINCAST_KEYSTORE_PASSWORD=$env:KEYSTORE_PASSWORD"
+            Add-Content $env:GITHUB_ENV "RINCAST_KEY_ALIAS=$env:KEY_ALIAS"
+            Add-Content $env:GITHUB_ENV "RINCAST_KEY_PASSWORD=$env:KEY_PASSWORD"
+            Add-Content $env:GITHUB_ENV 'APK_SIGNED=true'
+          } else {
+            Write-Host 'No signing secrets; the APK will be debug-signed.'
+            Add-Content $env:GITHUB_ENV 'APK_SIGNED=false'
+          }
+
+      - name: Build and package
+        run: |
+          $extra = if ($env:APK_SIGNED -eq 'true') { @() } else { @('-DebugApk') }
+          powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1 -Package -Skip audio @extra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -TotalCount 1).Trim()
+          $files = @(
+            Get-ChildItem "dist\RinCast-$version-*.zip", "dist\RinCast-$version-Setup.exe", "dist\RinCast-$version*.apk","dist\rincast-server-$version-*"
+            Get-Item dist\SHA256SUMS.txt, dist\LICENSE, dist\THIRD_PARTY_NOTICES.md
+          ) | ForEach-Object { $_.FullName }
+          $notes = "Draft for $env:GITHUB_REF_NAME. See CHANGELOG.md."
+          if ($env:APK_SIGNED -ne 'true') {
+            $notes += "`n`nThe APK is debug-signed because no signing secrets were set. Replace it before publishing."
+          }
+          gh release create $env:GITHUB_REF_NAME --draft --title "RinCast $version" --notes $notes @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

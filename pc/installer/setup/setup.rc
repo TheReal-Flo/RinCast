@@ -1,0 +1,30 @@
+#include <winres.h>
+#include "../../streamer/src/version.h"
+
+1 ICON "../../../assets/brand/rincast.ico"
+1 RT_MANIFEST "setup.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION RINCAST_VERSION_MAJOR,RINCAST_VERSION_MINOR,RINCAST_VERSION_PATCH,0
+ PRODUCTVERSION RINCAST_VERSION_MAJOR,RINCAST_VERSION_MINOR,RINCAST_VERSION_PATCH,0
+ FILEFLAGSMASK 0x3fL
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "RinCast"
+            VALUE "FileDescription", "RinCast Setup"
+            VALUE "FileVersion", RINCAST_VERSION_STRING
+            VALUE "ProductName", "RinCast"
+            VALUE "ProductVersion", RINCAST_VERSION_STRING
+            VALUE "OriginalFilename", "RinCast Setup.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

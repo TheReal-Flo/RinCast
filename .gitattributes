@@ -1,0 +1,20 @@
+* text=auto
+
+# Windows scripts stay CRLF, Unix scripts stay LF, wherever they are checked out.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
+headset/gradlew text eol=lf
+
+*.png binary
+*.jpg binary
+*.ttf binary
+*.rctx binary
+*.lib binary
+*.jar binary
+*.exe binary
+*.apk binary
+*.zip binary
+
+third_party/** linguist-vendored

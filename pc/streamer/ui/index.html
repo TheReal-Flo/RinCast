@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>RinCast Streamer</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside class="rail">
+    <div class="brand"><svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><circle cx="30" cy="34" r="15" fill="none" stroke="currentColor" stroke-width="7"/><circle cx="30" cy="34" r="6" fill="currentColor"/><path d="M37 11a24 24 0 0 1 16 16" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg><span>RinCast</span></div>
+    <nav id="nav" aria-label="Sections">
+      <button data-page="home" aria-current="page">Home</button>
+      <button data-page="video">Streaming</button>
+      <button data-page="audio">Audio</button>
+      <button data-page="vr">SteamVR</button>
+      <button data-page="devices">Headsets</button>
+      <button data-page="general">General</button>
+      <button data-page="account">Account</button>
+    </nav>
+  </aside>
+
+  <main id="main" tabindex="-1">
+    <div class="banner" id="banner" role="alert" hidden>
+      <span id="bannerText"></span>
+      <button class="btn" id="bannerClose">Dismiss</button>
+    </div>
+
+    <!-- Home -->
+    <section class="page active" data-page="home" aria-labelledby="headline">
+      <header class="top">
+        <div>
+          <h1 id="headline" tabindex="-1">RinCast Streamer</h1>
+          <p id="subline" class="lead"></p>
+        </div>
+        <div class="actions" id="homeActions"></div>
+      </header>
+      <div class="sr-only" id="liveStatus" role="status"></div>
+      <div class="numbers" id="numbers" hidden></div>
+      <ul class="issues" id="issues"></ul>
+
+      <ol class="steps" id="steps" hidden>
+        <li><span>Install RinCast on your Quest. <button class="link" id="downloadLink"></button></span></li>
+        <li>Open it with the Quest and this PC on the same network.</li>
+        <li><span>Choose <span id="stepPcName"></span>, then allow the headset here.</span></li>
+      </ol>
+
+      <div class="live" id="live" hidden>
+        <figure class="chart">
+          <figcaption><span>Bitrate, last minute</span><span id="sparkRange"></span></figcaption>
+          <div class="plot"><canvas id="spark" role="img" aria-label="Bitrate over the last minute"></canvas></div>
+        </figure>
+        <figure class="stages" id="stagesBox" hidden>
+          <figcaption>Latency by stage</figcaption>
+          <div id="stages"></div>
+        </figure>
+      </div>
+      <dl class="facts" id="facts"></dl>
+    </section>
+
+    <!-- Streaming -->
+    <section class="page" data-page="video" aria-labelledby="h-video">
+      <h1 id="h-video" tabindex="-1">Streaming</h1>
+      <div class="cols">
+        <div>
+          <h2>Bitrate limit</h2>
+          <h3>Games</h3>
+          <label class="bar" id="vrBitrateBar"><input type="range" min="20" max="500" step="10" data-setting="vrBitrateMbps" aria-label="Bitrate limit for games"><output></output></label>
+                    <h3>Desktop</h3>
+          <label class="bar"><input type="range" min="10" max="150" step="5" data-setting="desktopBitrateMbps" aria-label="Bitrate limit for the desktop"><output></output></label>
+          <label class="check"><input type="checkbox" data-setting="adaptiveBitrate"><span>Adjust bitrate automatically</span></label>
+          <p class="note" id="overrideNote"></p>
+        </div>
+        <div>
+          <h2>Image</h2>
+          <h3 id="l-codec">Video codec</h3>
+          <div class="options grid" id="codecOptions" role="radiogroup" aria-labelledby="l-codec">
+            <label><input type="radio" name="codec" data-setting="codec" value="auto"><span>Automatic</span></label>
+            <label><input type="radio" name="codec" data-setting="codec" value="hevc"><span>HEVC</span></label>
+            <label><input type="radio" name="codec" data-setting="codec" value="av1"><span>AV1</span></label>
+            <label><input type="radio" name="codec" data-setting="codec" value="h264"><span>H.264</span></label>
+          </div>
+          
+          <label class="check spaced" id="tenBitRow"><input type="checkbox" data-setting="tenBit"><span>10-bit color</span><small id="tenBitHint" hidden>Needs HEVC or AV1</small></label>
+          <label class="check" id="foveatedRow"><input type="checkbox" data-setting="foveatedEncoding"><span>Sharper center in VR</span><small>Fewer bits at the lens edges. NVIDIA only</small></label>
+          <label class="check" id="aqRow"><input type="checkbox" data-setting="adaptiveQuantization"><span>Adaptive quantization</span><small>More bits for flat areas like skies, where blocks show first. NVIDIA and AMD</small></label>
+          <label class="check" id="twoPassRow"><input type="checkbox" data-setting="twoPassEncoding"><span>Two-pass encoding in VR</span><small>Spreads bits better in fast motion, but each frame takes longer to encode. Desktop always uses it. NVIDIA and AMD</small></label>
+        </div>
+      </div>
+      <div class="cols">
+        <div>
+          <h2 id="l-desktop-res">Desktop resolution</h2>
+          <div class="options" role="radiogroup" aria-labelledby="l-desktop-res">
+            <label><input type="radio" name="desktopMaxHeight" data-setting="desktopMaxHeight" value="0"><span>Same as monitor</span></label>
+            <label><input type="radio" name="desktopMaxHeight" data-setting="desktopMaxHeight" value="2160"><span>Up to 2160p</span></label>
+            <label><input type="radio" name="desktopMaxHeight" data-setting="desktopMaxHeight" value="1440"><span>Up to 1440p</span></label>
+            <label><input type="radio" name="desktopMaxHeight" data-setting="desktopMaxHeight" value="1080"><span>Up to 1080p</span></label>
+          </div>
+        </div>
+        <div>
+          <h2 id="l-fec">Repair lost packets</h2>
+          <div class="options" role="radiogroup" aria-labelledby="l-fec" aria-describedby="fecNote">
+            <label><input type="radio" name="fecPercent" data-setting="fecPercent" value="0"><span>Off</span></label>
+            <label><input type="radio" name="fecPercent" data-setting="fecPercent" value="3"><span>Light</span></label>
+            <label><input type="radio" name="fecPercent" data-setting="fecPercent" value="5"><span>Balanced</span></label>
+            <label><input type="radio" name="fecPercent" data-setting="fecPercent" value="10"><span>Strong</span></label>
+            <label><input type="radio" name="fecPercent" data-setting="fecPercent" value="20"><span>Maximum</span></label>
+          </div>
+          <p class="note" id="fecNote">Stronger repair uses more of the bitrate</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Audio -->
+    <section class="page" data-page="audio" aria-labelledby="h-audio">
+      <h1 id="h-audio" tabindex="-1">Audio</h1>
+      <div class="cols">
+        <div>
+          <h2>Sound</h2>
+          <label class="check"><input type="checkbox" data-setting="streamAudio"><span>Play PC sound in the headset</span></label>
+          <label class="check" id="playOnPcRow"><input type="checkbox" data-setting="playOnPcToo"><span>Also play on this PC</span></label>
+          <label class="check" id="micRow"><input type="checkbox" data-setting="micPassthrough"><span>Use the headset microphone</span><small id="micHint"></small></label>
+          <label class="check"><input type="checkbox" data-setting="switchDefaultAudio"><span>Switch Windows' default devices while connected</span></label>
+        </div>
+        <div>
+          <h2 id="l-audio-dev">Audio devices</h2>
+          <div class="options" role="radiogroup" aria-labelledby="l-audio-dev" aria-describedby="audioDevicesHint">
+            <label><input type="radio" name="audioDevices" data-setting="audioDevices" value="auto"><span>Automatic</span></label>
+            <label id="audioRincast"><input type="radio" name="audioDevices" data-setting="audioDevices" value="rincast"><span>RinCast Speaker and Microphone</span></label>
+            <label id="audioSteam"><input type="radio" name="audioDevices" data-setting="audioDevices" value="steam"><span>Steam Streaming devices</span></label>
+            <label><input type="radio" name="audioDevices" data-setting="audioDevices" value="system"><span>Default devices, no microphone</span></label>
+          </div>
+          <p class="note" id="audioDevicesHint"></p>
+          <p class="note warn" id="audioMissing"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SteamVR -->
+    <section class="page" data-page="vr" aria-labelledby="h-vr">
+      <h1 id="h-vr" tabindex="-1">SteamVR</h1>
+      <dl class="facts tight" id="vrFacts"></dl>
+      <div class="btns spaced">
+        <button class="btn" id="launchSteamVR">Start SteamVR</button>
+        <button class="btn" id="restartSteamVR">Restart SteamVR</button>
+        <button class="btn" id="registerDriver">Add RinCast to SteamVR</button>
+        <button class="btn primary" id="getSteamVR">Get SteamVR</button>
+      </div>
+      <label class="check spaced"><input type="checkbox" data-setting="autoRegisterSteamVrDriver"><span>Add RinCast to SteamVR automatically</span></label>
+      <div id="runtimeRow">
+        <h2 id="runtimeLabel">OpenXR games run through</h2>
+        <div class="options inline" id="runtimeSeg" role="radiogroup" aria-labelledby="runtimeLabel" aria-describedby="runtimeNote">
+          <label><input type="radio" name="openxrRuntime" value="rincast"><span>RinCast</span></label>
+          <label><input type="radio" name="openxrRuntime" value="steamvr"><span>SteamVR</span></label>
+        </div>
+        <p class="note" id="runtimeNote"></p>
+      </div>
+    </section>
+
+    <!-- Devices -->
+    <section class="page" data-page="devices" aria-labelledby="h-devices">
+      <h1 id="h-devices" tabindex="-1">Headsets</h1>
+      <h2 class="first">Always allowed</h2>
+      <ul class="devices" id="devices"></ul>
+      <h2>New headsets</h2>
+      <label class="check"><input type="checkbox" data-setting="requireApproval"><span>Ask before a new headset connects</span><small>Without this, anyone on this network can control your PC</small></label>
+    </section>
+
+    <!-- Account -->
+    <section class="page" data-page="account" aria-labelledby="h-account">
+      <h1 id="h-account" tabindex="-1">Account</h1>
+      <div id="accountView"></div>
+    </section>
+
+    <!-- General -->
+    <section class="page" data-page="general" aria-labelledby="h-general">
+      <h1 id="h-general" tabindex="-1">General</h1>
+      <div class="cols">
+        <div>
+          <h2>This PC</h2>
+          <h3><label for="pcName">Name</label></h3>
+          <input type="text" id="pcName" data-setting="pcName" maxlength="40" spellcheck="false">
+          <label class="check spaced"><input type="checkbox" data-setting="startWithWindows"><span>Start with Windows</span></label>
+          <label class="check"><input type="checkbox" data-setting="preventSleep"><span>Keep the PC awake while streaming</span></label>
+          <h2>Networks</h2>
+          <label class="check" id="publicRow"><input type="checkbox" id="allowPublic"><span>Allow headsets on Public networks</span><small id="publicNote"></small></label>
+        </div>
+        <div>
+          <h2>Advanced</h2>
+          <h3><label for="cloudUrl">Account server</label></h3>
+          <input type="url" id="cloudUrl" data-setting="cloudUrl" spellcheck="false">
+          <p class="note">Only change this if you run your own server</p>
+          <div class="btns spaced"><button class="btn" id="openLogs">Open logs folder</button></div>
+        </div>
+      </div>
+      <h2>About</h2>
+      <dl class="facts tight" id="aboutFacts"></dl>
+      <p class="note selectable" id="aboutLine"></p>
+    </section>
+  </main>
+
+  <footer class="status" id="status" aria-label="Connection"></footer>
+
+  <dialog id="approval" aria-labelledby="approvalTitle" aria-describedby="approvalText">
+    <h2 id="approvalTitle">Allow this headset?</h2>
+    <p id="approvalText"></p>
+    <p class="warn-note">It will see your screen and control your mouse and keyboard. If this wasn't you, don't allow it.</p>
+    <div class="dialog-actions">
+      <button class="btn" id="denyBtn" autofocus>Don't allow</button>
+      <span class="grow"></span>
+      <button class="btn" id="allowBtn">Always allow</button>
+      <button class="btn primary" id="allowOnceBtn">Allow once</button>
+    </div>
+  </dialog>
+
+  <dialog id="confirm" aria-labelledby="confirmTitle" aria-describedby="confirmText">
+    <h2 id="confirmTitle"></h2>
+    <p id="confirmText"></p>
+    <div class="dialog-actions">
+      <span class="grow"></span>
+      <button class="btn" id="confirmNo" autofocus>Cancel</button>
+      <button class="btn danger" id="confirmYes"></button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,135 @@
+// One connected headset: control protocol, desktop & VR video streams,
+// input injection and audio in both directions.
+#pragma once
+
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "../capture/monitors.h"
+#include "../net/stream_server.h"
+#include "../util.h"
+#include "rc/connection.h"
+#include "rc/protocol.h"
+
+namespace rcs {
+
+class DesktopStream;
+class VrStream;
+class AudioStreamer;
+class MicPlayer;
+
+struct ClientCaps {
+    bool h264 = true, hevc = true, hevc10 = false, av1 = false, av110 = false;
+    uint32_t maxDecodeWidth = 4096, maxDecodeHeight = 4096;
+    std::vector<float> refreshRates{72, 90};
+    uint32_t recommendedEyeWidth = 1832, recommendedEyeHeight = 1920;
+    float fovTan[2][4] = {{1.0f, 0.9f, 0.95f, 1.1f}, {0.9f, 1.0f, 0.95f, 1.1f}};
+    float ipd = 0.063f;
+};
+
+struct ClientStreamSettings {
+    std::string codec = "auto";
+    bool tenBit = false;
+    bool frameGeneration = false;
+    std::string vrQuality = "high";   // low | medium | high | ultra | godlike
+    float refreshRate = 90;
+    int vrBitrateMbps = 0;            // 0 = PC default
+    int desktopBitrateMbps = 0;
+    int desktopFps = 0;
+    bool adaptiveBitrate = true;
+    bool streamAudio = true;
+    bool micPassthrough = true;
+};
+
+class ClientSession : public std::enable_shared_from_this<ClientSession> {
+   public:
+    ClientSession(std::unique_ptr<rc::Connection> connection, const HelloInfo& hello, std::string clientPkHex,
+                  std::vector<uint8_t> welcome, bool remote, bool vpn);
+    ~ClientSession();
+
+    void Start();
+    void Close(const std::string& reason);
+
+    void HandleDatagram(const uint8_t* data, size_t size, const rc::NetAddress& from);
+    void Tick(int64_t nowNs);
+
+    const std::string& DeviceId() const { return m_hello.deviceId; }
+    const std::string& DeviceKey() const { return m_hello.deviceKey; }
+    const std::string& DeviceName() const { return m_hello.deviceName; }
+    const std::string& Model() const { return m_hello.model; }
+    const std::string& ClientPublicKeyHex() const { return m_clientPk; }
+    const std::vector<uint8_t>& WelcomePacket() const { return m_welcome; }
+    int64_t LastReceiveNs() const { return m_connection->LastReceiveNs(); }
+    bool PeerDisconnected() const { return m_connection->PeerDisconnected(); }
+    bool IsRemote() const { return m_remote; }
+    rc::Connection* Connection() { return m_connection.get(); }
+
+    void SendControl(const json& message);
+    json StatusJson();
+
+    // Called by the VR stream when the producer state changes.
+    void NotifyVrState(const std::string& state, const std::string& producer, const std::string& app,
+                       const std::string& error = {});
+    void OnSettingsChanged();  // PC-side settings changed in the UI
+    void OnMonitorsChanged();
+
+    rc::VideoCodec ChooseCodec(bool forVr) const;
+    ClientCaps Caps();
+    ClientStreamSettings StreamSettings();
+
+   private:
+    void OnControl(const std::string& text);
+    void OnPacket(rc::PacketType type, const uint8_t* payload, size_t size);
+    void WorkerLoop();
+    void HandleMessage(const json& m);
+
+    void SendServerInfo();
+    void SendMonitors();
+    void StartDesktop(const json& m);
+    void StopDesktop();
+    void StartVr();
+    void StopVr();
+    void LaunchSteamVr();
+    void UpdateAudio();
+    void ApplyClientInfo(const json& m);
+
+    std::unique_ptr<rc::Connection> m_connection;
+    HelloInfo m_hello;
+    std::string m_clientPk;
+    std::vector<uint8_t> m_welcome;
+    bool m_remote;    // through the account, with its proof
+    bool m_vpn;       // no account, but through a tunnel
+    bool m_slowPath;  // either way: smaller packets, a careful bitrate
+    std::atomic<bool> m_closed{false};
+
+    // Control work happens off the network thread.
+    std::thread m_worker;
+    std::mutex m_queueMutex;
+    std::condition_variable m_queueCv;
+    std::deque<json> m_queue;
+
+    std::mutex m_mutex;  // protects everything below
+    ClientCaps m_caps;
+    ClientStreamSettings m_settings;
+    std::vector<MonitorInfo> m_monitors;
+    std::map<uint8_t, std::unique_ptr<DesktopStream>> m_desktop;  // by stream id
+    std::unique_ptr<VrStream> m_vr;
+    std::unique_ptr<AudioStreamer> m_audio;
+    std::unique_ptr<MicPlayer> m_mic;
+    std::string m_vrState = "idle";
+    std::string m_vrProducer;
+    std::string m_vrApp;
+    int64_t m_steamVrLaunchNs = 0;
+    int64_t m_connectedAtNs = 0;
+    json m_clientStats;
+    uint32_t m_lastMouseMonitor = 0;
+};
+
+}  // namespace rcs

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Build: dotnet build -c Release -p:VRCFTCore="<path to VRCFaceTracking.Core.dll>"
+       The DLL comes with VRCFaceTracking, or from building https://github.com/benaclejames/VRCFaceTracking.
+       Match TargetFramework to the VRCFaceTracking release it's for. -->
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RinCastModule</AssemblyName>
+    <RootNamespace>RinCast.VRCFaceTracking</RootNamespace>
+    <VRCFTCore Condition="'$(VRCFTCore)' == ''">VRCFaceTracking.Core.dll</VRCFTCore>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VRCFaceTracking.Core">
+      <HintPath>$(VRCFTCore)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="7.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,205 @@
+;
+; RinCast Virtual Audio
+;
+; Root-enumerated WaveRT driver exposing three endpoints:
+;   RinCast Speaker          (render)  PC audio streamed to the headset (WASAPI loopback)
+;   RinCast Microphone       (capture) the headset microphone, for any app
+;   RinCast Microphone Feed  (render)  internal: the streamer plays the headset mic here;
+;                                      it is looped back into RinCast Microphone
+;
+; Based on Microsoft's SimpleAudioSample (MS-PL).
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = MEDIA
+Provider    = %ProviderName%
+ClassGUID   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+DriverVer   = 10/19/2026,1.0.0.0
+CatalogFile = rincastaudio.cat
+PnpLockDown = 1
+
+[SourceDisksNames]
+222 = %DiskName%,"",222
+
+[SourceDisksFiles]
+rincastaudio.sys = 222
+
+[SignatureAttributes]
+rincastaudio.sys = SignatureAttributes.DRM
+
+[SignatureAttributes.DRM]
+DRMLevel = 1300
+
+[SignatureAttributes.PETrust]
+PETrust = true
+
+[Manufacturer]
+%MfgName% = RinCast, NTamd64.10.0...22000, NTamd64
+
+[RinCast.NTamd64.10.0...22000]
+%RinCast.DeviceDesc% = RinCastAudio, ROOT\RinCastAudio
+
+[RinCast.NTamd64]
+%RinCast.DeviceDesc% = RinCastAudio, ROOT\RinCastAudio
+
+[DestinationDirs]
+RinCastAudio.CopyList = 13 ; driver store
+
+;======================================================
+; RinCastAudio
+;======================================================
+[RinCastAudio.CopyList]
+rincastaudio.sys
+
+[RinCastAudio.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+HKR,,Driver,,rincastaudio.sys
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%RinCast.DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%RinCast.DeviceDesc%
+HKR,PowerSettings,SingleComponentMultiFxStates,3,1,0,0,0
+HKR,PowerSettings,ConservationIdleTime,3,3,0,0,0
+HKR,PowerSettings,PerformanceIdleTime,3,3,0,0,0
+HKR,PowerSettings,IdlePowerState,3,3,0,0,0
+
+; Endpoint names (KSPIN_DESCRIPTOR.Name GUIDs of the topology bridge pins).
+HKLM,%MediaCategories%\%RinCastSpeakerName%,Name,,%RinCastSpeakerNameStr%
+HKLM,%MediaCategories%\%RinCastSpeakerName%,Display,1,00,00,00,00
+HKLM,%MediaCategories%\%RinCastMicName%,Name,,%RinCastMicNameStr%
+HKLM,%MediaCategories%\%RinCastMicName%,Display,1,00,00,00,00
+HKLM,%MediaCategories%\%RinCastFeedName%,Name,,%RinCastFeedNameStr%
+HKLM,%MediaCategories%\%RinCastFeedName%,Display,1,00,00,00,00
+
+[RinCastAudio.NT]
+Include = ks.inf,wdmaudio.inf
+Needs   = KS.Registration, WDMAUDIO.Registration
+CopyFiles = RinCastAudio.CopyList
+AddReg  = RinCastAudio.AddReg
+
+[RinCastAudio.NT.Interfaces]
+; RinCast Speaker
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveSpeaker%,    RinCast.I.WaveSpeaker
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveSpeaker%,    RinCast.I.WaveSpeaker
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%,    RinCast.I.WaveSpeaker
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologySpeaker%, RinCast.I.TopologySpeaker
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, RinCast.I.TopologySpeaker
+
+; RinCast Microphone Feed
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveMicFeed%,    RinCast.I.WaveMicFeed
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveMicFeed%,    RinCast.I.WaveMicFeed
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveMicFeed%,    RinCast.I.WaveMicFeed
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicFeed%, RinCast.I.TopologyMicFeed
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicFeed%, RinCast.I.TopologyMicFeed
+
+; RinCast Microphone
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveMicArray1%,    RinCast.I.WaveMicArray1
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveMicArray1%,    RinCast.I.WaveMicArray1
+AddInterface = %KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicArray1%,    RinCast.I.WaveMicArray1
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicArray1%, RinCast.I.TopologyMicArray1
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicArray1%, RinCast.I.TopologyMicArray1
+
+[RinCast.I.WaveSpeaker]
+AddReg = RinCast.I.WaveSpeaker.AddReg
+[RinCast.I.WaveSpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastSpeakerNameStr%
+
+[RinCast.I.TopologySpeaker]
+AddReg = RinCast.I.TopologySpeaker.AddReg
+[RinCast.I.TopologySpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastSpeakerNameStr%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+[RinCast.I.WaveMicFeed]
+AddReg = RinCast.I.WaveMicFeed.AddReg
+[RinCast.I.WaveMicFeed.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastFeedNameStr%
+
+[RinCast.I.TopologyMicFeed]
+AddReg = RinCast.I.TopologyMicFeed.AddReg
+[RinCast.I.TopologyMicFeed.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastFeedNameStr%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+[RinCast.I.WaveMicArray1]
+AddReg = RinCast.I.WaveMicArray1.AddReg
+[RinCast.I.WaveMicArray1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastMicNameStr%
+
+[RinCast.I.TopologyMicArray1]
+AddReg = RinCast.I.TopologyMicArray1.AddReg
+[RinCast.I.TopologyMicArray1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RinCastMicNameStr%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+[RinCastAudio.NT.Services]
+AddService = RinCastAudio,0x00000002,RinCastAudio_Service_Inst
+
+[RinCastAudio_Service_Inst]
+DisplayName   = %RinCast.SvcDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %13%\rincastaudio.sys
+
+[RinCastAudio.NT.HW]
+AddReg = RinCastAudio.HW.AddReg
+
+[RinCastAudio.HW.AddReg]
+; FILE_DEVICE_SOUND
+HKR,,DeviceType,0x10001,0x0000001D
+; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+[RinCastAudio.NT.Wdf]
+KmdfService = RinCastAudio, RinCastAudio_WdfSect
+
+[RinCastAudio_WdfSect]
+KmdfLibraryVersion = 1.15
+
+[Strings]
+; Non-localizable
+KSNAME_WaveSpeaker        = "WaveSpeaker"
+KSNAME_TopologySpeaker    = "TopologySpeaker"
+KSNAME_WaveMicFeed        = "WaveMicFeed"
+KSNAME_TopologyMicFeed    = "TopologyMicFeed"
+KSNAME_WaveMicArray1      = "WaveMicArray1"
+KSNAME_TopologyMicArray1  = "TopologyMicArray1"
+
+Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO    = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER   = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE  = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSNODETYPE_ANY      = "{00000000-0000-0000-0000-000000000000}"
+
+PKEY_AudioEndpoint_Association               = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
+
+MediaCategories    = "SYSTEM\CurrentControlSet\Control\MediaCategories"
+RinCastSpeakerName = "{3C9A2F41-6B1E-4D7A-9E55-2B8F1C0A7D11}"
+RinCastMicName     = "{3C9A2F42-6B1E-4D7A-9E55-2B8F1C0A7D11}"
+RinCastFeedName    = "{3C9A2F43-6B1E-4D7A-9E55-2B8F1C0A7D11}"
+
+; Localizable
+ProviderName          = "RinCast"
+MfgName               = "RinCast"
+DiskName              = "RinCast Virtual Audio Installation Disk"
+RinCast.DeviceDesc    = "RinCast Virtual Audio"
+RinCast.SvcDesc       = "RinCast Virtual Audio Driver"
+RinCastSpeakerNameStr = "RinCast Speaker"
+RinCastMicNameStr     = "RinCast Microphone"
+RinCastFeedNameStr    = "RinCast Microphone Feed"

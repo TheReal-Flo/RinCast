@@ -1,0 +1,7 @@
+{
+  "driver_rincast": {
+    "enable": true,
+    "loadPriority": 1000,
+    "blocked_by_safe_mode": false
+  }
+}

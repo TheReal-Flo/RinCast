@@ -1,0 +1,40 @@
+# Build output
+build/
+dist/
+deps/
+headset/.gradle/
+headset/build/
+headset/app/build/
+headset/app/.cxx/
+headset/local.properties
+server/server.exe
+server/data/
+e2e-data/
+
+# Logs and leftovers
+*.log
+*.h264
+*.h265
+*.in-use-*
+
+# Editors
+.vs/
+.idea/
+.vscode/
+
+# Signing material must never be committed
+*.jks
+*.keystore
+*.pfx
+*.cer
+
+# RinCast XR is not part of the public release: it vendors Meta LibOVR and
+# Microsoft GameInput, which can't be redistributed here. See docs/BUILDING.md.
+pc/runtime-openxr/
+tools/xr-smoke/
+
+# Superseded by server/deploy/apache-reverse-proxy.conf
+server/deploy/keyhelp-apache-directives.conf
+
+# Converts a paid third-party asset pack; not part of the public source
+tools/build-sky-assets.mjs

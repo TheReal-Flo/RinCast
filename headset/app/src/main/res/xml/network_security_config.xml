@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Self-hosted account servers on a LAN are often plain http://192.168.x.y. Android can only
+  scope cleartext by exact host name or domain suffix: it has no IP ranges, so "private
+  addresses only" can't be expressed here and cleartext has to stay allowed as the base.
+  The default server uses HTTPS; only a server URL the user types in can be http.
+  Only the system's certificate authorities are trusted, not user-installed ones.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

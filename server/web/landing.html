@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>RinCast: your PC, in your headset</title>
+  <meta name="description" content="Stream every monitor and your PC VR games from a Windows PC to a Meta Quest 3. Free and open source.">
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/Inter-SemiBold.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/landing.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+
+  <header class="bar">
+    <a class="brand" href="/"><img src="/logo.svg" alt="" width="26" height="26"><span>RinCast</span></a>
+    <nav aria-label="Main">
+      <a href="#download">Download</a>
+      <a href="#faq">FAQ</a>
+      <a href="#" id="navSource" hidden>Source code</a>
+      <a href="/login" id="navAccount">Sign in</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <section class="hero">
+      <div class="sky" aria-hidden="true"></div>
+      <div class="hero-text">
+        <h1>Your PC, in your headset.</h1>
+        <p>Stream every monitor and your PC VR games to a Meta Quest 3, at home or from anywhere. Free and open source.</p>
+        <div class="cta">
+          <a class="btn primary" href="#download" data-download>Download for Windows</a>
+          <a class="btn" href="#open">Why it's free</a>
+        </div>
+      </div>
+
+      <!-- An illustration of the product: three monitors around you, the dock and the laser pointer. -->
+      <div class="stage" id="stage" role="img" aria-label="Illustration: three PC monitors curved around the viewer in a starry space, with a dock below them and a laser pointer from the controller.">
+        <div class="world" id="world" aria-hidden="true">
+          <div class="screen left">
+            <div class="titlebar"><i></i><i></i><i></i></div>
+            <div class="doc">
+              <b class="w60"></b><u class="w95"></u><u class="w90"></u><u class="w70"></u>
+              <b class="w40"></b><u class="w95"></u><u class="w85"></u><u class="w95"></u><u class="w50"></u>
+              <b class="w50"></b><u class="w90"></u><u class="w75"></u>
+            </div>
+          </div>
+          <div class="screen center">
+            <div class="titlebar"><i></i><i></i><i></i></div>
+            <div class="library">
+              <div class="side"><u class="w80"></u><u class="w60"></u><u class="w70"></u><u class="w50"></u><u class="w75"></u></div>
+              <div class="tiles">
+                <span class="tile a"></span><span class="tile b"></span><span class="tile c"></span><span class="tile d"></span>
+                <span class="tile c"></span><span class="tile a"></span><span class="tile d"></span><span class="tile b"></span>
+              </div>
+            </div>
+            <span class="cursor"></span>
+          </div>
+          <div class="screen right">
+            <div class="titlebar"><i></i><i></i><i></i></div>
+            <div class="chat">
+              <p class="them"></p><p class="them short"></p><p class="me"></p><p class="them"></p><p class="me short"></p><p class="them short"></p>
+              <div class="type"></div>
+            </div>
+          </div>
+          <div class="dock">
+            <div class="dock-pc"><strong>Studio PC</strong><small>Connected</small></div>
+            <span class="on"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>Screens</span>
+            <span><svg viewBox="0 0 24 24"><path d="M7 7h10a5 5 0 014.9 6l-.5 2.6A2.6 2.6 0 0116.9 17L15 15H9l-1.9 2a2.6 2.6 0 01-4.5-1.4L2.1 13A5 5 0 017 7z"/></svg>Games</span>
+            <span><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="11" rx="2"/><path d="M7 11h.5M11 11h.5M15 11h.5M8 14.500h8"/></svg>Keyboard</span>
+            <span><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3"/></svg>Recenter</span>
+          </div>
+          <div class="laser"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="row" id="desktop">
+      <div class="copy">
+        <h2>All your monitors, as big as you like.</h2>
+        <p>Each monitor is its own window in the air. Curve them, move them, make one as wide as a cinema screen. Point with the controller to use the mouse, and bring up a keyboard when you need one.</p>
+        <ul>
+          <li>Text stays sharp enough to work in</li>
+          <li>Wakes a sleeping display when you connect</li>
+          <li>Hands work too: pinch to click, pinch and move to scroll</li>
+        </ul>
+      </div>
+      <div class="art keyboard" aria-hidden="true">
+        <div class="kb-echo">Keys go to the window in focus on your PC</div>
+        <div class="kb-row"><i>q</i><i>w</i><i>e</i><i>r</i><i>t</i><i>y</i><i>u</i><i>i</i><i>o</i><i>p</i></div>
+        <div class="kb-row inset"><i>a</i><i>s</i><i>d</i><i>f</i><i>g</i><i>h</i><i>j</i><i>k</i><i>l</i></div>
+        <div class="kb-row inset2"><i class="wide">Shift</i><i>z</i><i>x</i><i>c</i><i>v</i><i>b</i><i>n</i><i>m</i></div>
+        <div class="kb-row"><i>Esc</i><i>Ctrl</i><i>Alt</i><i>Win</i><i class="space"></i><i>Tab</i></div>
+      </div>
+    </section>
+
+    <section class="row flip" id="games">
+      <div class="copy">
+        <h2>Pick a game. Jump straight in.</h2>
+        <p>Your installed VR games appear in the headset with their artwork. Choose one and RinCast starts SteamVR and the game on your PC, while hyperspace plays around you until the first frame arrives.</p>
+        <ul>
+          <li>H.264, HEVC and AV1 on NVIDIA, AMD and Intel graphics</li>
+          <li>72, 80, 90 and 120 Hz, as far as your Quest goes</li>
+          <li>PC sound in the headset, your voice in the game</li>
+        </ul>
+      </div>
+      <figure class="art warp">
+        <img src="/img/hyperspace.jpg" width="1000" height="800" loading="lazy" alt="Light streaks and a glowing ring rushing past in a starry space: the hyperspace effect RinCast plays while a game starts.">
+      </figure>
+    </section>
+
+    <section class="row" id="anywhere">
+      <div class="copy">
+        <h2>Away from home? Your PC comes along.</h2>
+        <p>Sign in on both devices and your PC appears in the headset wherever you are. The account server only introduces them. Then the video goes straight from your PC to your headset, encrypted, and never through anyone else's computer.</p>
+        <ul>
+          <li>Adapts to slow connections and recovers on its own</li>
+          <li>A PC only accepts headsets you've allowed on that PC</li>
+          <li>No account needed on your own network</li>
+        </ul>
+      </div>
+      <div class="art route" aria-hidden="true">
+        <div class="end pc">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>
+          <b>Your PC</b><small>At home</small>
+        </div>
+        <div class="link"><span class="pulse"></span><em>Video, directly and encrypted</em></div>
+        <div class="end hs">
+          <svg viewBox="0 0 24 24"><path d="M3 9a3 3 0 013-3h12a3 3 0 013 3v5a3 3 0 01-3 3h-3l-2-3h-2l-2 3H6a3 3 0 01-3-3z"/></svg>
+          <b>Your Quest</b><small>Anywhere</small>
+        </div>
+        <div class="intro"><span>The account server only says hello</span></div>
+      </div>
+    </section>
+
+    <section class="open" id="open">
+      <h2>If you don't like something, change it.</h2>
+      <p class="lede">RinCast is MIT licensed, with no subscription, no ads and nothing held back. The streamer, the headset app and the account server are all in one repository, and you can run your own server.</p>
+      <div class="split">
+        <div class="term" role="img" aria-label="Terminal showing the commands that build RinCast from source.">
+          <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i></div>
+<pre aria-hidden="true"><span class="p">&gt;</span> scripts\build-all.ps1
+<span class="d">  Builds the PC side, the headset app and the server</span>
+<span class="d">  Done. Output in dist\</span>
+<span class="p">&gt;</span> cd server
+<span class="p">&gt;</span> go run . -public-url https://your.server
+<span class="d">  Your own account server is running</span></pre>
+        </div>
+        <ul class="plain">
+          <li><b>Change the app.</b> Native C++ on both ends, with no engine in the way.</li>
+          <li><b>Run your own server.</b> One small Go program. It never carries your video.</li>
+          <li><b>Keep your data.</b> Download it or delete your account at any time.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="get" id="download">
+      <h2>Download</h2>
+      <p class="not-yet" id="notYet">The first public release is on its way. Everything below applies when it's out.</p>
+      <div class="get-grid">
+        <div>
+          <h3>On your PC</h3>
+          <p><a class="btn primary" href="#download" data-download>RinCast Streamer for Windows</a></p>
+          <ul>
+            <li>Windows 10 or 11, 64-bit</li>
+            <li>NVIDIA, AMD or Intel graphics that can encode video</li>
+            <li>Steam and SteamVR for VR games</li>
+            <li>Ethernet works best</li>
+          </ul>
+        </div>
+        <div>
+          <h3>On your Quest</h3>
+          <p><a class="btn" href="#download" data-download>RinCast for Quest</a></p>
+          <ul>
+            <li>Meta Quest 3</li>
+            <li>Developer mode on, to install the app with SideQuest or adb</li>
+            <li>5 GHz or 6 GHz Wi-Fi at home</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq">
+      <h2>Questions</h2>
+      <details>
+        <summary>Is it really free?</summary>
+        <p>Yes. There's no paid version, and the code is MIT licensed, so anyone can use, change and share it.</p>
+      </details>
+      <details>
+        <summary>Do I need an account?</summary>
+        <p>Not on your own network: open RinCast on the Quest and your PC shows up. You only need one to connect from other networks.</p>
+      </details>
+      <details>
+        <summary>Does my video go through your server?</summary>
+        <p>Never. The server introduces your headset and PC, and they then connect directly, using IPv6, hole punching or a router port mapping. If no direct path exists, the connection fails and tells you why. It doesn't fall back to a relay.</p>
+      </details>
+      <details>
+        <summary>Which games work?</summary>
+        <p>Anything that runs in SteamVR. Your installed Steam VR games are listed in the headset, and you can also start games from your PC.</p>
+      </details>
+      <details>
+        <summary>Which headsets work?</summary>
+        <p>Meta Quest 3 is the one RinCast is built and tested for.</p>
+      </details>
+      <details>
+        <summary>How do I get the microphone working in apps?</summary>
+        <p>RinCast uses Steam's streaming audio devices. Turn on Remote Play in Steam to add them, then choose Steam Streaming Microphone as the input in your app.</p>
+      </details>
+      <details>
+        <summary>My Quest can't find my PC. What now?</summary>
+        <p>Check that RinCast Streamer is running, that both are on the same network (guest Wi-Fi keeps them apart), and that Windows' firewall allows it on private networks. If your network blocks discovery, enter the PC's address in the headset.</p>
+      </details>
+      <details>
+        <summary>How does it compare with Virtual Desktop?</summary>
+        <p>Virtual Desktop is a polished paid app that supports more headsets and has features RinCast doesn't, such as frame generation and eye tracking forwarding. RinCast is free and open source, and it can use your own server. If you want the most complete option today, Virtual Desktop is worth a look.</p>
+      </details>
+    </section>
+
+    <section class="last">
+      <h2>Take your desk with you.</h2>
+      <a class="btn primary" href="#download" data-download>Download for Windows</a>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>RinCast is MIT licensed. Not affiliated with Meta, Valve, Microsoft or Virtual Desktop, Inc. Product names are used only to describe compatibility.</p>
+    <p class="foot-links" id="footLinks"><a href="/login">Sign in</a><a href="/register">Create account</a></p>
+  </footer>
+  <script src="/landing.js" type="module"></script>
+</body>
+</html>

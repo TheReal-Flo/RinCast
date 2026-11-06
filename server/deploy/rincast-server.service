@@ -1,0 +1,39 @@
+# systemd unit for the RinCast server behind a local reverse proxy (e.g. Apache, see apache-reverse-proxy.conf).
+#   install -m 755 rincast-server-linux-<arm64|amd64> /usr/local/bin/rincast-server   (match `uname -m`)
+#   cp rincast-server.service /etc/systemd/system/ && systemctl daemon-reload
+#   systemctl enable --now rincast-server
+[Unit]
+Description=RinCast server (accounts, rendezvous)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=rincast
+Environment=RINCAST_DATA=/var/lib/rincast
+# HTTP only on loopback: Apache terminates TLS and proxies to it.
+Environment=RINCAST_HTTP=127.0.0.1:38080
+Environment=RINCAST_UDP=:38720
+Environment=RINCAST_PUBLIC_URL=https://rincast.example.com
+Environment=RINCAST_RENDEZVOUS_HOST=rincast.example.com
+Environment=RINCAST_TRUST_PROXY=true
+Environment=RINCAST_ALLOW_SIGNUPS=true
+ExecStart=/usr/local/bin/rincast-server
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
