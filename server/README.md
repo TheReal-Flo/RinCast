@@ -36,6 +36,7 @@ the other is reachable over IPv6 as well.
 | `-trust-proxy` / `RINCAST_TRUST_PROXY` | `false` | Take the client IP from the last `X-Forwarded-For` entry |
 | `-privacy-url` / `RINCAST_PRIVACY_URL` | | Privacy policy link for the account site's footer |
 | `-imprint-url` / `RINCAST_IMPRINT_URL` | | Legal notice link for the account site's footer |
+| `-download-url` / `RINCAST_DOWNLOAD_URL` | | Where the website's download buttons go. A GitHub releases link (such as `https://github.com/TheReal-Flo/RinCast/releases/latest`) also adds links to the source code |
 | `-reset-password <email>` | | Set a new random password, print it and exit (see below) |
 | `-relay-max-mb` | | Deprecated and ignored (nothing is relayed); still accepted so old service files keep working |
 

@@ -153,6 +153,7 @@ h2 { font-size: clamp(32px, 4vw, 50px); line-height: 1.08; letter-spacing: -0.02
 /* ---- open source ---- */
 .open { text-align: center; }
 .lede { max-width: 38em; margin: 18px auto 0; color: var(--muted); }
+.source-link { margin: 22px 0 0; }
 .split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; margin-top: 40px; text-align: left; }
 .term { background: #0e0d15; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
 .term-bar { display: flex; gap: 7px; padding: 12px 14px; border-bottom: 1px solid var(--line); }

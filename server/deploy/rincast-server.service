@@ -18,6 +18,8 @@ Environment=RINCAST_PUBLIC_URL=https://rincast.example.com
 Environment=RINCAST_RENDEZVOUS_HOST=rincast.example.com
 Environment=RINCAST_TRUST_PROXY=true
 Environment=RINCAST_ALLOW_SIGNUPS=true
+# Where the website's download buttons go.
+Environment=RINCAST_DOWNLOAD_URL=https://github.com/TheReal-Flo/RinCast/releases/latest
 ExecStart=/usr/local/bin/rincast-server
 Restart=on-failure
 RestartSec=3

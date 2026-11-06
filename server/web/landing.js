@@ -22,10 +22,14 @@ fetch("/api/v1/info")
     if (info.downloadUrl) {
       document.getElementById("notYet").hidden = true;
       document.querySelectorAll("[data-download]").forEach((a) => (a.href = info.downloadUrl));
-      const source = document.getElementById("navSource");
       if (/github\.com/.test(info.downloadUrl)) {
-        source.href = info.downloadUrl.replace(/\/releases.*$/, "");
-        source.hidden = false;
+        const repo = info.downloadUrl.replace(/\/releases.*$/, "");
+        const nav = document.getElementById("navSource");
+        nav.href = repo;
+        nav.hidden = false;
+        const open = document.getElementById("openSource");
+        open.querySelector("a").href = repo;
+        open.hidden = false;
       }
     }
   })
