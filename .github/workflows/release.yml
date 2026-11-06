@@ -78,21 +78,25 @@ jobs:
           & "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" --install "ndk;27.3.13750724" "cmake;3.22.1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # The signing key and its passwords only exist in the two steps below that need them:
+      # never in $GITHUB_ENV, never echoed, never under dist\ (which is what gets uploaded).
+      # The key file sits in the runner's temp folder and is deleted at the end of the job,
+      # whatever happens. GitHub masks the secrets' values in the log as well.
       - name: Decode the signing key, if there is one
         env:
           KEYSTORE_BASE64: ${{ secrets.RINCAST_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.RINCAST_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.RINCAST_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.RINCAST_KEY_PASSWORD }}
+          HAVE_PASSWORDS: ${{ secrets.RINCAST_KEYSTORE_PASSWORD != '' && secrets.RINCAST_KEY_ALIAS != '' && secrets.RINCAST_KEY_PASSWORD != '' }}
           ALLOW_DEBUG_APK: ${{ inputs.allow_debug_apk }}
         run: |
-          if ($env:KEYSTORE_BASE64 -and $env:KEYSTORE_PASSWORD -and $env:KEY_ALIAS -and $env:KEY_PASSWORD) {
+          if ($env:KEYSTORE_BASE64 -and $env:HAVE_PASSWORDS -eq 'true') {
             $path = Join-Path $env:RUNNER_TEMP 'rincast-release.keystore'
-            [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+            # Line breaks or spaces from copying the text around aren't part of the key.
+            $b64 = $env:KEYSTORE_BASE64 -replace '\s', ''
+            try { $bytes = [Convert]::FromBase64String($b64) }
+            catch { throw 'RINCAST_KEYSTORE_BASE64 is not valid base64. Upload it again (see docs/BUILDING.md).' }
+            [IO.File]::WriteAllBytes($path, $bytes)
+            # Only the file's location, which isn't secret.
             Add-Content $env:GITHUB_ENV "RINCAST_KEYSTORE=$path"
-            Add-Content $env:GITHUB_ENV "RINCAST_KEYSTORE_PASSWORD=$env:KEYSTORE_PASSWORD"
-            Add-Content $env:GITHUB_ENV "RINCAST_KEY_ALIAS=$env:KEY_ALIAS"
-            Add-Content $env:GITHUB_ENV "RINCAST_KEY_PASSWORD=$env:KEY_PASSWORD"
             Add-Content $env:GITHUB_ENV 'APK_SIGNED=true'
           } elseif ($env:ALLOW_DEBUG_APK -eq 'true') {
             Write-Host 'No signing secrets; the APK will be debug-signed.'
@@ -102,10 +106,35 @@ jobs:
           }
 
       - name: Build and package
+        env:
+          RINCAST_KEYSTORE_PASSWORD: ${{ env.APK_SIGNED == 'true' && secrets.RINCAST_KEYSTORE_PASSWORD || '' }}
+          RINCAST_KEY_ALIAS: ${{ env.APK_SIGNED == 'true' && secrets.RINCAST_KEY_ALIAS || '' }}
+          RINCAST_KEY_PASSWORD: ${{ env.APK_SIGNED == 'true' && secrets.RINCAST_KEY_PASSWORD || '' }}
         run: |
           $extra = if ($env:APK_SIGNED -eq 'true') { @() } else { @('-DebugApk') }
           powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1 -Package -Skip audio @extra
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Delete the signing key
+        if: always()
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'rincast-release.keystore'
+          if (Test-Path $path) { Remove-Item $path -Force }
+
+      - name: Check what gets published
+        run: |
+          # Nothing secret may be among the uploads.
+          $leaks = Get-ChildItem dist -Recurse -File | Where-Object { $_.Extension -in '.keystore', '.jks', '.p12', '.pfx' }
+          if ($leaks) { throw "Signing material in dist: $($leaks.Name -join ', ')" }
+          # A signed release must really be signed with the release key, not Android's debug key.
+          if ($env:APK_SIGNED -eq 'true') {
+            $apk = Get-Item "dist\RinCast-$env:RC_VERSION.apk"
+            $apksigner = Get-ChildItem "$env:ANDROID_HOME\build-tools" -Directory | Sort-Object Name | Select-Object -Last 1
+            $certs = & (Join-Path $apksigner.FullName 'apksigner.bat') verify --print-certs $apk.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'The APK signature does not verify.' }
+            if ($certs -match 'Android Debug') { throw 'The APK is signed with the debug key.' }
+            $certs | Select-String 'certificate DN|SHA-256'
+          }
 
       - name: Tag the commit and create the release
         env:

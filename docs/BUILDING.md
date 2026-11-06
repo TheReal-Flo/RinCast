@@ -148,6 +148,10 @@ uninstall the app to get new versions.
 For the release workflow, add the repository secrets `RINCAST_KEYSTORE_BASE64`
 (from `[Convert]::ToBase64String([IO.File]::ReadAllBytes('rincast-release.keystore'))`),
 `RINCAST_KEYSTORE_PASSWORD`, `RINCAST_KEY_ALIAS` and `RINCAST_KEY_PASSWORD`.
+Paste them on GitHub, or set them with `gh secret set` from Git Bash
+(`base64 -w0 rincast-release.keystore | gh secret set RINCAST_KEYSTORE_BASE64`). Don't pipe
+them to `gh` from Windows PowerShell: it re-encodes the text on the way, and the secret no
+longer matches.
 
 ### Cleartext HTTP
 A self-hosted server on a LAN is often plain `http://192.168.x.y`. Android's
