@@ -1,26 +1,69 @@
 name: Release
 
-# Pushing a tag v<VERSION> creates a draft release to review and publish by hand.
-# Optional repository secrets for a signed APK: RINCAST_KEYSTORE_BASE64,
-# RINCAST_KEYSTORE_PASSWORD, RINCAST_KEY_ALIAS, RINCAST_KEY_PASSWORD. Without them the
-# draft gets a debug-signed APK, labelled as such.
+# Started by hand (Actions > Release > Run workflow), and only by the repository's owner.
+# It reads the version from VERSION, builds everything from the chosen commit on main, tags
+# that commit v<VERSION> and publishes the release with the matching CHANGELOG.md section as
+# its notes.
+#
+# Repository secrets for a signed APK: RINCAST_KEYSTORE_BASE64, RINCAST_KEYSTORE_PASSWORD,
+# RINCAST_KEY_ALIAS, RINCAST_KEY_PASSWORD (see docs/BUILDING.md). Without them the release
+# stops, unless "Allow a debug-signed APK" is ticked.
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create a draft to publish by hand instead of publishing right away'
+        type: boolean
+        default: false
+      allow_debug_apk:
+        description: 'Allow a debug-signed APK when the signing secrets are missing'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.actor == github.repository_owner
     runs-on: windows-2022
     steps:
+      - name: Check where it runs from
+        if: github.ref != 'refs/heads/main'
+        run: throw "Releases are made from main, not $env:GITHUB_REF."
+
       - uses: actions/checkout@v4
 
-      - name: Check the tag against VERSION
+      - name: Read the version and check the tag is new
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content VERSION -TotalCount 1).Trim()
-          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match VERSION $version" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION must be major.minor.patch, got '$version'" }
+          $tag = "v$version"
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "$tag already exists. Raise the version in VERSION first." }
+          $global:LASTEXITCODE = 0
+
+          # The notes are this version's section of CHANGELOG.md, without its heading.
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^## $([regex]::Escape($version))(\s|$)") { $start = $i; break }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md has no '## $version' section." }
+          if ($lines[$start] -match 'unreleased') { throw "CHANGELOG.md still says '$($lines[$start])'. Put the release date in." }
+          $end = $lines.Count
+          for ($i = $start + 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^## ') { $end = $i; break } }
+          $notes = ($lines[($start + 1)..($end - 1)] -join "`n").Trim()
+          Set-Content (Join-Path $env:RUNNER_TEMP 'notes.md') $notes -Encoding utf8
+
+          Add-Content $env:GITHUB_ENV "RC_VERSION=$version"
+          Add-Content $env:GITHUB_ENV "RC_TAG=$tag"
 
       - uses: actions/setup-go@v5
         with:
@@ -41,6 +84,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.RINCAST_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RINCAST_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RINCAST_KEY_PASSWORD }}
+          ALLOW_DEBUG_APK: ${{ inputs.allow_debug_apk }}
         run: |
           if ($env:KEYSTORE_BASE64 -and $env:KEYSTORE_PASSWORD -and $env:KEY_ALIAS -and $env:KEY_PASSWORD) {
             $path = Join-Path $env:RUNNER_TEMP 'rincast-release.keystore'
@@ -50,9 +94,11 @@ jobs:
             Add-Content $env:GITHUB_ENV "RINCAST_KEY_ALIAS=$env:KEY_ALIAS"
             Add-Content $env:GITHUB_ENV "RINCAST_KEY_PASSWORD=$env:KEY_PASSWORD"
             Add-Content $env:GITHUB_ENV 'APK_SIGNED=true'
-          } else {
+          } elseif ($env:ALLOW_DEBUG_APK -eq 'true') {
             Write-Host 'No signing secrets; the APK will be debug-signed.'
             Add-Content $env:GITHUB_ENV 'APK_SIGNED=false'
+          } else {
+            throw 'The signing secrets are missing. Add them, or run again with "Allow a debug-signed APK".'
           }
 
       - name: Build and package
@@ -61,18 +107,21 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1 -Package -Skip audio @extra
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Create the draft release
+      - name: Tag the commit and create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ inputs.draft }}
         run: |
-          $version = (Get-Content VERSION -TotalCount 1).Trim()
           $files = @(
-            Get-ChildItem "dist\RinCast-$version-*.zip", "dist\RinCast-$version-Setup.exe", "dist\RinCast-$version*.apk","dist\rincast-server-$version-*"
+            Get-ChildItem "dist\RinCast-$env:RC_VERSION-*.zip", "dist\RinCast-$env:RC_VERSION-Setup.exe", "dist\RinCast-$env:RC_VERSION*.apk", "dist\rincast-server-$env:RC_VERSION-*"
             Get-Item dist\SHA256SUMS.txt, dist\LICENSE, dist\THIRD_PARTY_NOTICES.md
           ) | ForEach-Object { $_.FullName }
-          $notes = "Draft for $env:GITHUB_REF_NAME. See CHANGELOG.md."
+          $notes = Join-Path $env:RUNNER_TEMP 'notes.md'
           if ($env:APK_SIGNED -ne 'true') {
-            $notes += "`n`nThe APK is debug-signed because no signing secrets were set. Replace it before publishing."
+            Add-Content $notes "`n`nThe APK in this release is debug-signed."
           }
-          gh release create $env:GITHUB_REF_NAME --draft --title "RinCast $version" --notes $notes @files
+          $flags = @('--target', $env:GITHUB_SHA, '--title', "RinCast $env:RC_VERSION", '--notes-file', $notes)
+          if ($env:DRAFT -eq 'true') { $flags += '--draft' }
+          # Creating the release creates the tag on the commit that was built.
+          gh release create $env:RC_TAG @flags @files
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

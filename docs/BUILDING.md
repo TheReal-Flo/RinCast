@@ -214,9 +214,17 @@ the folder contains the `.rincast-install` marker the installer leaves there.
 
 ## Making a release
 
-1. Set the new version in `VERSION` and update `CHANGELOG.md`.
-2. Tag the commit `v<version>` and push the tag. `.github/workflows/release.yml` builds everything and creates a draft GitHub release.
-3. Review the draft and publish it.
+1. Set the new version in `VERSION`, and add a `## <version> - <date>` section to `CHANGELOG.md`.
+   That section becomes the release notes. Push to `main`.
+2. On GitHub, open **Actions > Release > Run workflow** on `main`. Only the repository's owner
+   can run it. It builds everything, tags the commit `v<version>` and publishes the release.
+   Tick **draft** to check it on GitHub before publishing.
+
+The workflow stops before building if the tag already exists, if `CHANGELOG.md` has no section
+for the version or still says "unreleased", or if the APK signing secrets are missing (unless
+**Allow a debug-signed APK** is ticked). The Android version code comes from `VERSION` too.
+
+`.github/workflows/ci.yml` builds and tests every commit on every branch and every pull request.
 
 To build the same files locally, run `build-all.ps1 -Package`. It writes
 `RinCast-<version>-windows-x64.zip`, `RinCast-<version>.apk`, the versioned server
