@@ -27,6 +27,11 @@ using socklen_t = int;
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#ifndef IPV6_ADD_MEMBERSHIP
+#ifdef IPV6_JOIN_GROUP
+#define IPV6_ADD_MEMBERSHIP IPV6_JOIN_GROUP
+#endif
+#endif
 #endif
 #ifdef __ANDROID__
 #include <android/multinetwork.h>
