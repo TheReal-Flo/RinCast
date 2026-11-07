@@ -593,7 +593,9 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     }
     l.y += 14;
     Label(ui, l, Tr("vr.codecLabel"));
-    static const std::vector<std::string> codecs = {Tr("codec.auto"), "HEVC", "AV1", "H.264"};
+    // Not static: a static initializer would freeze the translated label in whatever
+    // language was active the first time this page opened.
+    const std::vector<std::string> codecs = {Tr("codec.auto"), "HEVC", "AV1", "H.264"};
     static const char* ck[] = {"auto", "hevc", "av1", "h264"};
     int ci = 0;
     for (int i = 0; i < 4; i++)
@@ -683,7 +685,7 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     Section(ui, c, Tr("desktop.qualitySection"));
     Label(ui, c, Tr("desktop.fpsLabel"));
     int fpsI = s.desktopFps == 0 ? 0 : s.desktopFps <= 30 ? 1 : s.desktopFps <= 60 ? 2 : 3;
-    static const std::vector<std::string> fps = {Tr("fps.auto"), "30", "60", "90"};
+    const std::vector<std::string> fps = {Tr("fps.auto"), "30", "60", "90"};
     if (RadioGrid(ui, c, "dfps", Tr("vr.fpsA11y"), fps, fpsI, 2)) {
         static const int v[] = {0, 30, 60, 90};
         s.desktopFps = v[fpsI];
