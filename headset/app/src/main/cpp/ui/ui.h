@@ -117,7 +117,10 @@ class Ui {
     void Divider(float x, float y, float w);
 
     // Scroll region: content drawn between Begin/End is offset by the scroll amount.
-    float BeginScroll(const char* id, const Rect& r, float contentHeight);
+    // With dragToScroll, pressing inside and moving turns into a scroll and cancels the
+    // press — right for big row lists, wrong for dense forms where a trigger pull alone
+    // moves the ray that far. Stick scrolling works either way.
+    float BeginScroll(const char* id, const Rect& r, float contentHeight, bool dragToScroll = true);
     void EndScroll();
 
     // Damped animation value keyed by id.

@@ -256,19 +256,21 @@ void Ui::Spinner(float cx, float cy, float radius, const Color& c) {
 
 void Ui::Divider(float x, float y, float w) { m_r.RectFill({x, y, w, 2.f}, theme::kLine); }
 
-float Ui::BeginScroll(const char* id, const Rect& r, float contentHeight) {
+float Ui::BeginScroll(const char* id, const Rect& r, float contentHeight, bool dragToScroll) {
     const uint64_t key = Id(id);
     float& offset = m_scroll[key];
     if (m_p.hovering && r.Contains(m_p.pos)) offset += m_p.scroll;
     // Drag to scroll. A press that turns into a drag no longer clicks what it started on.
-    if (m_p.pressed && m_p.hovering && r.Contains(m_p.pos)) {
+    if (dragToScroll && m_p.pressed && m_p.hovering && r.Contains(m_p.pos)) {
         m_scrollDrag = key;
         m_scrollDragY = m_p.pos.y;
         m_scrollDragDistance = 0;
         m_scrolling = false;
     }
     if (m_scrollDrag == key) {
-        if (m_p.down && m_p.hovering) {
+        if (!dragToScroll) {
+            m_scrollDrag = 0;
+        } else if (m_p.down && m_p.hovering) {
             const float delta = m_scrollDragY - m_p.pos.y;
             m_scrollDragY = m_p.pos.y;
             // How far the ray got from the press, not the path it shook along.

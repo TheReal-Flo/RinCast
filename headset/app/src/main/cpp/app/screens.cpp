@@ -746,9 +746,11 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     bool changed = false;
     const float gap = 44, w = (body.w - gap) / 2;
     // The page fit exactly until the language row arrived; a longer language scrolls now.
-    // The content height comes from the frame before: layout only moves when the language does.
+    // The content height comes from the frame before: layout only moves when the language
+    // does. No drag to scroll: the trigger pull alone moves the ray past the drag
+    // threshold, which would cancel every press on the page. Stick scrolling is enough.
     static float contentBottom = 0;
-    const float scroll = ui.BeginScroll("general", body, std::max(0.f, contentBottom - body.y));
+    const float scroll = ui.BeginScroll("general", body, std::max(0.f, contentBottom - body.y), false);
     Column l{body.x, body.y - scroll, w};
     Section(ui, l, Tr("general.audioSection"));
     changed |= CheckRow(ui, l, "audio", Tr("general.playSound"), s.streamAudio);
