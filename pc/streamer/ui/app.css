@@ -183,6 +183,11 @@ input[type="text"], input[type="url"], input[type="email"], input[type="password
 }
 input:hover:not([type="checkbox"]):not([type="radio"]) { background: var(--row-hover); }
 ::placeholder { color: var(--edge); opacity: 1; }
+select.select {
+  font: inherit; color: var(--text); background: #000; border: 1px solid var(--edge); border-radius: 3px; padding: 7px 10px; width: 100%; max-width: 340px; height: 40px; cursor: pointer;
+}
+select.select:hover { background: var(--row-hover); }
+select.select option { background: #000; color: var(--text); }
 
 .btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .spaced { margin-top: 16px; }
