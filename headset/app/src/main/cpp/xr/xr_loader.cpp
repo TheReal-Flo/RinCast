@@ -54,14 +54,17 @@ bool Get(XrInstance instance, const char* name, T& out) {
 [[maybe_unused]] bool UsePicoLoader() {
     // The headsets that shipped before PICO OS 5.9 brought the standard loader (as in ALVR).
     // PICO's own loader still works on them after updates, so these always get it; the PICO 4
-    // Ultra and anything newer use the standard one.
+    // Ultra and anything newer use the standard one. Chinese domestic units report codenames
+    // instead of marketing names: the PICO 4 is "Phoenix" (model A8110).
     const std::string manufacturer = Property("ro.product.manufacturer");
     if (strcasecmp(manufacturer.c_str(), "pico") != 0) return false;
     const std::string model = Property("ro.product.model");
     const std::string product = Property("ro.product.name");
     RC_LOGI("PICO headset: model '%s', product '%s'", model.c_str(), product.c_str());
     if (model == "Pico Neo 3" || model == "Pico Neo3 Link") return true;
-    return product == "PICO 4" || product == "PICO 4 Pro" || product == "PICO 4 Enterprise" || product == "PICO G3";
+    if (model == "A8110" || model == "A8110 Pro") return true;
+    return product == "PICO 4" || product == "PICO 4 Pro" || product == "PICO 4 Enterprise" || product == "PICO G3" ||
+           product == "Phoenix" || product == "Phoenix Pro";
 }
 
 // Meta's loader on the Quest 1, whose Horizon OS stopped before the standard loader worked there.
@@ -129,6 +132,8 @@ bool Load() {
 
 bool LoadInstance(XrInstance instance) {
     bool ok = true;
+#undef RV_XR_GET
+#define RV_XR_GET(name) ok = Get(instance, #name, name) && ok;
     RV_XR_INSTANCE_FUNCTIONS(RV_XR_GET)
 #undef RV_XR_GET
     return ok;
