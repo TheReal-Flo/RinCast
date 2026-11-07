@@ -7,24 +7,30 @@
 #include "rc/platform.h"
 
 @interface RinStreamOutputHandler : NSObject <SCStreamOutput, SCStreamDelegate>
-@property (nonatomic, assign) rcm::FrameCallback callback;
+@property (nonatomic, assign) rcm::FrameCallback frameCallback;
+@property (nonatomic, assign) rcm::AudioCallback audioCallback;
 @end
 
 @implementation RinStreamOutputHandler
 
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
-    if (type != SCStreamOutputTypeScreen) return;
     if (!CMSampleBufferIsValid(sampleBuffer)) return;
 
-    CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    if (!pixelBuffer) return;
+    if (type == SCStreamOutputTypeScreen) {
+        CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+        if (!pixelBuffer) return;
 
-    CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-    uint64_t timestampNs = static_cast<uint64_t>(CMTimeGetSeconds(pts) * 1e9);
-    if (timestampNs == 0) timestampNs = rc::NowNs();
+        CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+        uint64_t timestampNs = static_cast<uint64_t>(CMTimeGetSeconds(pts) * 1e9);
+        if (timestampNs == 0) timestampNs = rc::NowNs();
 
-    if (self.callback) {
-        self.callback(pixelBuffer, timestampNs);
+        if (self.frameCallback) {
+            self.frameCallback(pixelBuffer, timestampNs);
+        }
+    } else if (type == SCStreamOutputTypeAudio) {
+        if (self.audioCallback) {
+            self.audioCallback(sampleBuffer);
+        }
     }
 }
 
@@ -51,7 +57,8 @@ MacDesktopCapture::~MacDesktopCapture() {
     Stop();
 }
 
-bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, uint32_t outHeight, float fps, FrameCallback onFrame) {
+bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, uint32_t outHeight, float fps,
+                             FrameCallback onFrame, AudioCallback onAudio) {
     Stop();
 
     m_monitor = monitor;
@@ -97,8 +104,16 @@ bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, u
     config.showsCursor = YES;
     config.queueDepth = 3;
 
+    // Enable system audio capture if audio callback was provided
+    if (onAudio && [config respondsToSelector:@selector(setCapturesAudio:)]) {
+        config.capturesAudio = YES;
+        config.sampleRate = 48000;
+        config.channelCount = 2;
+    }
+
     m_impl->handler = [[RinStreamOutputHandler alloc] init];
-    m_impl->handler.callback = std::move(onFrame);
+    m_impl->handler.frameCallback = std::move(onFrame);
+    m_impl->handler.audioCallback = std::move(onAudio);
 
     m_impl->stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:m_impl->handler];
     if (!m_impl->stream) {
@@ -109,8 +124,17 @@ bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, u
     m_impl->queue = dispatch_queue_create("com.rincast.capture_queue", DISPATCH_QUEUE_SERIAL);
     NSError* addErr = nil;
     if (![m_impl->stream addStreamOutput:m_impl->handler type:SCStreamOutputTypeScreen sampleHandlerQueue:m_impl->queue error:&addErr]) {
-        RC_LOGE("Failed to add stream output: %s", addErr.localizedDescription.UTF8String);
+        RC_LOGE("Failed to add video stream output: %s", addErr.localizedDescription.UTF8String);
         return false;
+    }
+
+    if (m_impl->handler.audioCallback) {
+        NSError* audioErr = nil;
+        if (![m_impl->stream addStreamOutput:m_impl->handler type:SCStreamOutputTypeAudio sampleHandlerQueue:m_impl->queue error:&audioErr]) {
+            RC_LOGW("Failed to add audio stream output: %s", audioErr.localizedDescription.UTF8String);
+        } else {
+            RC_LOGI("ScreenCaptureKit audio output enabled");
+        }
     }
 
     RC_LOGI("MacDesktopCapture initialized for display %u (%s, %ux%u @ %.1f fps)",

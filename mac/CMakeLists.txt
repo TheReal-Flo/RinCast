@@ -19,6 +19,7 @@ set(MAC_STREAMER_SOURCES
     src/capture/mac_capture.mm
     src/encode/vt_encoder.mm
     src/input/mac_input.mm
+    src/audio/mac_audio_streamer.mm
     src/stream/mac_desktop_stream.mm
     src/session/mac_session.mm
     src/server/mac_stream_server.mm
@@ -46,6 +47,7 @@ target_link_libraries(rincast-streamer-mac PRIVATE
     "-framework VideoToolbox"
     "-framework CoreMedia"
     "-framework CoreVideo"
+    "-framework AVFoundation"
     "-framework ApplicationServices"
     "-framework Carbon"
 )

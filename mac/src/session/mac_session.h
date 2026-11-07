@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "../audio/mac_audio_streamer.h"
 #include "../capture/mac_monitors.h"
 #include "../stream/mac_desktop_stream.h"
 #include "nlohmann/json.hpp"
@@ -59,6 +60,7 @@ class MacClientSession : public std::enable_shared_from_this<MacClientSession> {
     std::mutex m_mutex;
     std::vector<MacMonitorInfo> m_monitors;
     std::map<uint8_t, std::unique_ptr<MacDesktopStream>> m_desktopStreams;
+    std::unique_ptr<MacAudioStreamer> m_audioStreamer;
     rc::VideoCodec m_codec = rc::VideoCodec::HEVC;
 };
 

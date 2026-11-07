@@ -5,6 +5,7 @@ Native macOS streamer implementation for RinCast, enabling multi-monitor desktop
 ## Features
 
 - **ScreenCaptureKit:** High-performance screen capture with zero-copy GPU pipeline and native cursor rendering.
+- **System Audio Streaming:** Real-time system audio capture via ScreenCaptureKit, encoded to stereo **Opus** at 48 kHz (low-delay, 10 ms frames) transmitted directly to the headset.
 - **VideoToolbox Hardware Encoding:** Real-time hardware-accelerated encoding in **HEVC (H.265)** and **H.264** with minimal latency (no B-frames / reordering).
 - **CoreGraphics Input Injection:** Full remote mouse control (cursor motion, left/right/middle buttons, smooth scroll) and keyboard text input from the headset to the Mac.
 - **RinCast Protocol:** End-to-end encryption (Monocypher), forward error correction (XOR FEC), adaptive bitrate, and automatic LAN discovery.

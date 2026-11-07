@@ -57,7 +57,7 @@ void MacClientSession::SendState() {
     SendControl({
         {"type", rc::msg::kServerInfo},
         {"pcName", "Mac RinCast"},
-        {"os", "macos"},
+        {"os", "macOS"},
         {"version", "1.1.0"},
         {"desktopInput", true},
         {"remote", false},
@@ -110,9 +110,18 @@ void MacClientSession::StartDesktop(const json& m) {
     }
     if (selected.empty()) return;
 
+    // Start audio streamer
+    auto audioStreamer = std::make_unique<MacAudioStreamer>(m_connection.get());
+    if (audioStreamer->Start()) {
+        m_audioStreamer = std::move(audioStreamer);
+    } else {
+        audioStreamer.reset();
+    }
+
     json streams = json::array();
     std::map<uint8_t, std::unique_ptr<MacDesktopStream>> created;
 
+    bool audioAssigned = false;
     for (const auto* mon : selected) {
         DesktopStreamConfig cfg;
         cfg.codec = m_codec;
@@ -123,8 +132,19 @@ void MacClientSession::StartDesktop(const json& m) {
         cfg.fecPercent = 5;
         cfg.pace = false;
 
+        AudioCallback audioCb = nullptr;
+        // Attach system audio capture to the primary monitor (or first monitor)
+        if (!audioAssigned && m_audioStreamer) {
+            audioCb = [this](CMSampleBufferRef sampleBuffer) {
+                if (m_audioStreamer) {
+                    m_audioStreamer->HandleAudioSampleBuffer(sampleBuffer);
+                }
+            };
+            audioAssigned = true;
+        }
+
         const uint8_t streamId = static_cast<uint8_t>(rc::kFirstMonitorStreamId + mon->index);
-        auto ds = std::make_unique<MacDesktopStream>(m_connection.get(), streamId, *mon, cfg);
+        auto ds = std::make_unique<MacDesktopStream>(m_connection.get(), streamId, *mon, cfg, std::move(audioCb));
         streams.push_back(ds->Describe());
         created[streamId] = std::move(ds);
     }
@@ -145,13 +165,18 @@ void MacClientSession::StartDesktop(const json& m) {
 }
 
 void MacClientSession::StopDesktop() {
-    std::map<uint8_t, std::unique_ptr<MacDesktopStream>> old;
+    std::map<uint8_t, std::unique_ptr<MacDesktopStream>> oldStreams;
+    std::unique_ptr<MacAudioStreamer> oldAudio;
     {
         std::lock_guard lock(m_mutex);
-        old.swap(m_desktopStreams);
+        oldStreams.swap(m_desktopStreams);
+        oldAudio.swap(m_audioStreamer);
     }
-    for (auto& [id, ds] : old) {
+    for (auto& [id, ds] : oldStreams) {
         ds->Stop();
+    }
+    if (oldAudio) {
+        oldAudio->Stop();
     }
 }
 

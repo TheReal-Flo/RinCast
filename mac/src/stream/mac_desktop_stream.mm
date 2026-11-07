@@ -5,10 +5,11 @@
 namespace rcm {
 
 MacDesktopStream::MacDesktopStream(rc::Connection* connection, uint8_t streamId, const MacMonitorInfo& monitor,
-                                   const DesktopStreamConfig& config)
+                                   const DesktopStreamConfig& config, AudioCallback onAudio)
     : m_streamId(streamId),
       m_monitor(monitor),
       m_config(config),
+      m_audioCallback(std::move(onAudio)),
       m_packetizer(connection) {
     m_packetizer.SetFecPercent(config.fecPercent);
     if (config.pace) {
@@ -46,7 +47,7 @@ bool MacDesktopStream::Start() {
         HandleFrame(pixelBuffer, timestampNs);
     };
 
-    if (!m_capture.Init(m_monitor, m_config.width, m_config.height, m_config.fps, onFrame)) {
+    if (!m_capture.Init(m_monitor, m_config.width, m_config.height, m_config.fps, onFrame, m_audioCallback)) {
         RC_LOGE("Failed to initialize MacDesktopCapture for monitor %s", m_monitor.name.c_str());
         m_encoder.Shutdown();
         return false;
@@ -60,8 +61,9 @@ bool MacDesktopStream::Start() {
 
     m_forceKeyframe = true;
     m_running = true;
-    RC_LOGI("MacDesktopStream started (stream %u, monitor %s, %ux%u @ %.1f fps)",
-            m_streamId, m_monitor.name.c_str(), m_config.width, m_config.height, m_config.fps);
+    RC_LOGI("MacDesktopStream started (stream %u, monitor %s, %ux%u @ %.1f fps%s)",
+            m_streamId, m_monitor.name.c_str(), m_config.width, m_config.height, m_config.fps,
+            m_audioCallback ? ", with audio" : "");
     return true;
 }
 

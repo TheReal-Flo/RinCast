@@ -30,7 +30,7 @@ struct DesktopStreamConfig {
 class MacDesktopStream {
    public:
     MacDesktopStream(rc::Connection* connection, uint8_t streamId, const MacMonitorInfo& monitor,
-                     const DesktopStreamConfig& config);
+                     const DesktopStreamConfig& config, AudioCallback onAudio = nullptr);
     ~MacDesktopStream();
 
     bool Start();
@@ -50,6 +50,7 @@ class MacDesktopStream {
     uint8_t m_streamId = 0;
     MacMonitorInfo m_monitor;
     DesktopStreamConfig m_config;
+    AudioCallback m_audioCallback;
 
     rc::VideoPacketizer m_packetizer;
     VideoToolboxEncoder m_encoder;
