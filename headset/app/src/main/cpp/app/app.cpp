@@ -1,9 +1,16 @@
 #include "app.h"
 
+#ifdef __ANDROID__
 #include <android/log.h>
 #include <android_native_app_glue.h>
-#include <media/NdkMediaCodec.h>
 #include <sys/system_properties.h>
+#else
+#include <unistd.h>
+
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -28,9 +35,10 @@ void ToggleMenu(App& app);
 
 static const char* kVersion = RINCAST_VERSION_STRING;
 
-App::App(android_app* androidApp) : m_android(androidApp), m_assets(androidApp->activity->assetManager) {}
-
 App::~App() { Shutdown(); }
+
+#ifdef __ANDROID__
+App::App(android_app* androidApp) : m_android(androidApp), m_assets(androidApp->activity->assetManager) {}
 
 static void OnAppCmd(android_app* app, int32_t cmd) {
     auto* self = static_cast<App*>(app->userData);
@@ -83,6 +91,42 @@ void App::Run() {
     m_android->activity->vm->DetachCurrentThread();
 }
 
+#else
+// Linux (the Steam Frame): a plain program that Steam starts. It ends when SteamVR ends the
+// session or on SIGINT / SIGTERM.
+namespace {
+std::atomic<bool> g_quit{false};
+void OnSignal(int) { g_quit = true; }
+}  // namespace
+
+App::App(android_app* androidApp) : m_android(androidApp) {}
+
+void App::HandleAndroidEvents() {
+    if (g_quit) m_exit = true;
+}
+
+void App::Run() {
+    std::signal(SIGINT, OnSignal);
+    std::signal(SIGTERM, OnSignal);
+    Init();
+    while (!m_exit) {
+        HandleAndroidEvents();
+        if (m_exit) break;
+        if (!m_xr.PollEvents()) {
+            m_exit = true;
+            break;
+        }
+        if (!m_xr.Running()) {
+            m_music.Update(false);
+            usleep(10'000);
+            continue;
+        }
+        Frame();
+    }
+    Shutdown();
+}
+#endif
+
 void App::Init() {
     Platform::Init(m_android);
     m_settingsPath = Platform::FilesDir() + "/settings.json";
@@ -104,6 +148,7 @@ void App::Init() {
         return;
     }
     RC_LOGI("Headset family: %s", m_headset->Family());
+    Platform::RequestPermissions(m_headset->StartupPermissions());
     m_input.Init(m_xr, m_headset->Controllers());
     m_sky.Init(m_assets);
     m_music.Load(m_assets);
@@ -150,6 +195,7 @@ void App::Shutdown() {
     m_mic.Stop();
     m_decoders.clear();
     for (auto& [id, sc] : m_monitorLayers) m_xr.DestroySwapchain(sc);
+    for (auto& [id, sc] : m_uiLayers) m_xr.DestroySwapchain(sc);
     m_xr.DestroySwapchain(m_vrSwapchain);
     m_xr.DestroySwapchain(m_statsLayer);
     m_xr.Shutdown();
@@ -162,6 +208,7 @@ void App::ApplyStreamSettings() {
     SaveSettings();
     m_xr.SetRefreshRate(m_settings.refreshRate);
     m_audio.SetVolume(m_settings.volume);
+    m_mic.SetGain(m_settings.micVolume);
     if (m_client.GetState() == StreamClient::State::Connected)
         m_client.SendControl({{"type", rc::msg::kUpdateSettings}, {"settings", m_settings.StreamSettingsJson()}});
     if (m_settings.micPassthrough && m_client.GetState() == StreamClient::State::Connected && !m_mic.Running())
@@ -172,13 +219,6 @@ void App::ApplyStreamSettings() {
 // ---------------------------------------------------------------------------
 // Connection management
 // ---------------------------------------------------------------------------
-
-static bool DecoderAvailable(const char* mime) {
-    AMediaCodec* c = AMediaCodec_createDecoderByType(mime);
-    if (!c) return false;
-    AMediaCodec_delete(c);
-    return true;
-}
 
 void App::SendHello() {
     // (The display description is also sent in client.info once connected.)
@@ -197,7 +237,7 @@ static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState*
     } else {
         fov = {{1.376, 0.839, 0.966, 1.191}, {0.839, 1.376, 0.966, 1.191}};
     }
-    static const bool av1 = DecoderAvailable("video/av01");
+    static const DecoderCaps dec = VideoDecoder::Capabilities();
     json rates = json::array();
     for (float r : xr.RefreshRates()) rates.push_back(r);
     return {{"deviceId", Platform::DeviceId()},
@@ -211,8 +251,8 @@ static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState*
               {"ipd", ipd},
               {"fov", fov}}},
             {"decoders",
-             {{"h264", true}, {"hevc", true}, {"hevc10", true}, {"av1", av1}, {"av110", av1},
-              {"maxWidth", 8192}, {"maxHeight", 4096}}},
+             {{"h264", dec.h264}, {"hevc", dec.hevc}, {"hevc10", dec.hevc10}, {"av1", dec.av1}, {"av110", dec.av110},
+              {"maxWidth", dec.maxWidth}, {"maxHeight", dec.maxHeight}}},
             {"settings", s.StreamSettingsJson()}};
 }
 
@@ -563,24 +603,36 @@ void App::EnterMode(Mode m) {
 //   adb shell setprop debug.rincast.ui home,keyboard       windows to show (others are hidden)
 //   adb shell setprop debug.rincast.tab 2                  page of the main panel
 //   adb shell setprop debug.rincast.pc 10.0.2.2            extra PC address to probe
+// On Linux the same come from the environment: DEBUG_RINCAST_PC, DEBUG_RINCAST_TAB, DEBUG_RINCAST_UI.
+static void DebugProperty(const char* name, char (&value)[92]) {
+#ifdef __ANDROID__
+    __system_property_get(name, value);
+#else
+    std::string env = name;
+    for (char& c : env) c = c == '.' ? '_' : char(std::toupper(static_cast<unsigned char>(c)));
+    const char* v = std::getenv(env.c_str());
+    std::snprintf(value, sizeof(value), "%s", v ? v : "");
+#endif
+}
+
 void App::PollDebugProperties() {
     if (m_time - m_lastDebugPoll < 1.f) return;
     m_lastDebugPoll = m_time;
-    char value[PROP_VALUE_MAX] = {};
-    __system_property_get("debug.rincast.pc", value);
+    char value[92] = {};  // PROP_VALUE_MAX
+    DebugProperty("debug.rincast.pc", value);
     if (value[0] && m_debugPc != value) {
         m_debugPc = value;
         rc::NetAddress a;
         if (rc::NetAddress::Parse(m_debugPc, rc::kDiscoveryPort, a)) m_discovery.AddProbeTarget(a);
     }
     value[0] = 0;
-    __system_property_get("debug.rincast.tab", value);
+    DebugProperty("debug.rincast.tab", value);
     if (value[0] && m_debugTab != value) {
         m_debugTab = value;
         screens::SetPage(std::atoi(value));
     }
     value[0] = 0;
-    __system_property_get("debug.rincast.ui", value);
+    DebugProperty("debug.rincast.ui", value);
     if (value[0] && m_debugUi != value) {
         m_debugUi = value;
         const std::string list = "," + m_debugUi + ",";
@@ -613,6 +665,7 @@ void App::UpdateMode(float dt) {
                 Platform::SetStreamingLocks(true);
                 if (m_settings.streamAudio) m_audio.Start();
                 m_audio.SetVolume(m_settings.volume);
+                m_mic.SetGain(m_settings.micVolume);
                 if (m_settings.micPassthrough)
                     m_mic.Start([this](const uint8_t* d, size_t n) { m_client.SendAudio(d, n); });
                 m_client.SendControl({{"type", rc::msg::kStartDesktop}});
@@ -869,8 +922,27 @@ void App::ConfigureVrStream(const json& s) {
     m_vrEyeWidth = eyeW;
     m_vrEyeHeight = eyeH;
     m_vrCodec = codec;
+    // Foveated: the frames come smaller, and are stretched back to eyeWidth x eyeHeight.
+    int codedW = eyeW, codedH = eyeH;
+    const json f = s.value("foveation", json());
+    m_vrFoveated = false;
+    if (f.is_object()) {
+        const int fw = f.value("eyeWidth", 0), fh = f.value("eyeHeight", 0);
+        const float size = f.value("size", 0.f);
+        if (fw > 0 && fh > 0 && fw <= eyeW && fh <= eyeH && size > 0.05f && size < 1.f) {
+            codedW = fw;
+            codedH = fh;
+            m_vrFoveated = true;
+            m_vrFoveation = {};
+            m_vrFoveation.size = size;
+            m_vrFoveation.density[0] = (float(fw) / eyeW - size) / (1 - size);
+            m_vrFoveation.density[1] = (float(fh) / eyeH - size) / (1 - size);
+            for (int eye = 0; eye < 2; eye++) m_vrFoveation.start[eye][0] = m_vrFoveation.start[eye][1] = (1 - size) / 2;
+            RC_LOGI("VR stream: foveated, %dx%d per eye shown at %dx%d", fw, fh, eyeW, eyeH);
+        }
+    }
     auto dec = std::make_unique<VideoDecoder>();
-    dec->Init(codec, eyeW * 2, eyeH, s.value("fps", 90.f));
+    dec->Init(codec, codedW * 2, codedH, s.value("fps", 90.f));
     {
         std::lock_guard lock(m_decoderMutex);
         m_decoders[rc::kVrStreamId] = std::move(dec);
@@ -989,6 +1061,7 @@ void App::Frame() {
     UpdateStatsLayer(stats, statsLayer, dt);
     const bool uiLayer = !(vrClear && (!statsShown || statsLayer));
     m_windows.RenderCanvases(dt, m_time);
+    UpdateUiLayers();
     if (frame.shouldRender && uiLayer) RenderEyes(frame, dt);
     // Late latch: frames decoded while we rendered still make it into this frame's
     // compositor layers (VR stream, monitor layers) instead of waiting a whole frame.
@@ -1263,11 +1336,31 @@ void App::UpdateTracking(const FrameState& frame) {
             }
         }
     }
-    m_client.SendTracking(t);
+    // Where the eyes look, for foveated encoding. Now rather than predicted: eyes jump, and the
+    // PC keeps every pixel of a square around it.
+    const bool foveate = m_settings.gazeFoveation && m_mode == Mode::Vr && GazeSupported();
+    rc::GazePayload gaze{};
+    if (!foveate) {
+        m_headset->StopGaze();
+    } else if (!m_gazePermissionAsked) {
+        m_gazePermissionAsked = true;
+        Platform::RequestPermissions(m_headset->GazePermissions());
+    }
+    m_client.SendTracking(t, foveate && ReadGaze(frame.predictedDisplayTime, gaze) ? &gaze : nullptr);
     m_trackingSent[t.targetDisplayTimeNs] = int64_t(t.sampleTimeNs);
     while (m_trackingSent.size() > 512) m_trackingSent.erase(m_trackingSent.begin());
     UpdateBody(frame);
     UpdateFace(frame);
+}
+
+bool App::ReadGaze(XrTime time, rc::GazePayload& out) {
+    if (m_headset->GazeSupported(m_xr)) return m_headset->ReadGaze(m_xr, time, out);
+    float d[3];
+    if (!m_input.LocateGaze(time, d)) return false;
+    // One gaze for both eyes: plenty to place the sharp square.
+    out.flags = rc::kGazeLeftValid | rc::kGazeRightValid;
+    for (int eye = 0; eye < 2; eye++) std::memcpy(out.gaze[eye], d, sizeof(d));
+    return true;
 }
 
 void App::UpdateBody(const FrameState& frame) {
@@ -1303,10 +1396,12 @@ void App::UpdateFace(const FrameState& frame) {
 
 void App::ReadMotion(const std::vector<uint8_t>& metadata) {
     m_motionMoves = false;
-    if (!m_settings.frameGeneration || metadata.size() < sizeof(rc::VrFrameMetadata) + sizeof(rc::MotionHeader)) return;
+    // After the frame's metadata, and its foveation's.
+    const size_t at = sizeof(rc::VrFrameMetadata) + (m_vrFoveated ? sizeof(rc::VrFoveationMetadata) : 0);
+    if (!m_settings.frameGeneration || metadata.size() < at + sizeof(rc::MotionHeader)) return;
     rc::MotionHeader h;
-    std::memcpy(&h, metadata.data() + sizeof(rc::VrFrameMetadata), sizeof(h));
-    const size_t head = sizeof(rc::VrFrameMetadata) + sizeof(h);
+    std::memcpy(&h, metadata.data() + at, sizeof(h));
+    const size_t head = at + sizeof(h);
     if (!h.gridWidth || !h.gridHeight || !h.blockSize || m_vrMeta.trackingTimestampNs <= h.previousTimestampNs) return;
     if (!rc::DecodeMotionRuns(metadata.data() + head, metadata.size() - head, size_t(h.gridWidth) * h.gridHeight, m_motionGrid)) return;
     m_motionWidth = h.gridWidth;
@@ -1356,18 +1451,25 @@ void App::LatchVideo(const FrameState& frame) {
         if (id == rc::kVrStreamId) {
             const bool haveMeta = info.metadata.size() >= sizeof(rc::VrFrameMetadata);
             if (haveMeta) std::memcpy(&m_vrMeta, info.metadata.data(), sizeof(m_vrMeta));
+            if (m_vrFoveated && info.metadata.size() >= sizeof(rc::VrFrameMetadata) + sizeof(rc::VrFoveationMetadata)) {
+                rc::VrFoveationMetadata fm;
+                std::memcpy(&fm, info.metadata.data() + sizeof(rc::VrFrameMetadata), sizeof(fm));
+                std::memcpy(m_vrFoveation.start, fm.foveaStart, sizeof(fm.foveaStart));
+            }
+            const VideoFoveation* foveation = m_vrFoveated ? &m_vrFoveation : nullptr;
             if (m_settings.upscaling != m_vrUpscaleSetting && m_vrSwapchain.handle) CreateVrSwapchain();
             if (m_vrSwapchain.handle) {
                 const GLuint fbo = m_xr.AcquireImage(m_vrSwapchain);
                 // Generating a frame needs the last picture afterwards, too.
                 const bool keep = m_settings.frameGeneration && m_scene.UpscalerReady();
                 if (m_vrUpscaled || keep) {
-                    m_scene.KeepVideo(dec->Texture(), dec->Crop(), m_vrEyeWidth * 2, m_vrEyeHeight);
+                    m_scene.KeepVideo(dec->Texture(), dec->Crop(), m_vrEyeWidth * 2, m_vrEyeHeight, foveation);
                     if (m_vrUpscaled) m_scene.DrawKeptUpscaled(fbo, m_vrSwapchain.width, m_vrSwapchain.height);
                     else m_scene.DrawKept(fbo, m_vrSwapchain.width, m_vrSwapchain.height);
                 } else {
                     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                    m_scene.BlitExternal(dec->Texture(), m_vrSwapchain.width, m_vrSwapchain.height, dec->Crop());
+                    m_scene.BlitExternal(dec->Texture(), m_vrSwapchain.width, m_vrSwapchain.height, dec->Crop(), 0, 0, 1, 1,
+                                         foveation);
                 }
                 m_xr.ReleaseImage(m_vrSwapchain);
             }
@@ -1616,15 +1718,55 @@ void App::UpdateStatsLayer(Window* stats, bool active, float dt) {
     m_statsLayerActive = true;
 }
 
+void App::UpdateUiLayers() {
+    // The headset composes up to 16 layers; the game, monitors, the overlay, passthrough and
+    // the eye images come first.
+    constexpr int kMaxUiLayers = 6;
+    int used = 0;
+    for (const auto& wp : m_windows.All()) {
+        Window& w = *wp;
+        if (w.kind != WindowKind::Ui) continue;
+        // While it fades in or out, it's drawn into the eye images as before.
+        const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.995f &&
+                           w.curveRadius == 0 && w.rt.fbo && used < kMaxUiLayers;
+        w.layerBacked = false;
+        if (!layer) continue;
+        XrSwapchainGl& sc = m_uiLayers[w.id];
+        const int width = w.rt.color.width, height = w.rt.color.height;
+        if (sc.handle && (sc.width != width || sc.height != height)) m_xr.DestroySwapchain(sc);
+        if (!sc.handle && !m_xr.CreateSwapchain(width, height, GL_SRGB8_ALPHA8, 1, false, sc)) continue;
+        // Pixel for pixel: the canvas was just drawn at this size.
+        const GLuint fbo = m_xr.AcquireImage(sc);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, w.rt.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        m_xr.ReleaseImage(sc);
+        w.layerBacked = true;
+        used++;
+    }
+    // Windows that are gone or hidden give their images back.
+    for (auto it = m_uiLayers.begin(); it != m_uiLayers.end();) {
+        const Window* w = m_windows.Find(it->first);
+        if (!w || w->removed || (!w->visible && w->appear < 0.01f)) {
+            m_xr.DestroySwapchain(it->second);
+            it = m_uiLayers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void App::BuildLayers(const FrameState& frame) {
     m_underlays.clear();
     m_overlays.clear();
     m_quadLayers.clear();
     m_cylinderLayers.clear();
     m_layerSettings.clear();
-    m_quadLayers.reserve(16);
-    m_cylinderLayers.reserve(16);
-    m_layerSettings.reserve(16);
+    // Room for every layer: m_underlays points into these.
+    m_quadLayers.reserve(32);
+    m_cylinderLayers.reserve(32);
+    m_layerSettings.reserve(32);
 
     // VR stream: the PC frame with the exact pose it was rendered for; the Quest
     // compositor reprojects it to the current head pose.
@@ -1682,11 +1824,35 @@ void App::BuildLayers(const FrameState& frame) {
         }
     }
 
-    // Monitors as compositor layers (sharp text): underneath the projection layer,
-    // which punches matching holes. Back to front like the windows, so where two overlap the
-    // nearer one is on top.
-    if (m_mode == Mode::Desktop) {
-        for (Window* w : m_windows.DrawOrder()) {
+    // Monitors and UI windows as compositor layers (sharp text): underneath the projection
+    // layer, which punches matching holes. Back to front like the windows, so where two overlap
+    // the nearer one is on top.
+    for (Window* w : m_windows.DrawOrder()) {
+        if (w->kind == WindowKind::Ui) {
+            const auto it = m_uiLayers.find(w->id);
+            if (!w->layerBacked || it == m_uiLayers.end() || !it->second.handle) continue;
+            const void* next = nullptr;
+            if (m_xr.LayerSettings()) {
+                XrCompositionLayerSettingsFB s{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+                s.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_NORMAL_SUPER_SAMPLING_BIT_FB;
+                m_layerSettings.push_back(s);
+                next = &m_layerSettings.back();
+            }
+            XrCompositionLayerQuad q{XR_TYPE_COMPOSITION_LAYER_QUAD};
+            q.next = next;
+            // Premultiplied, with see-through rounded corners (as the overlay above).
+            q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            q.space = m_xr.AppSpace();
+            q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            q.subImage.swapchain = it->second.handle;
+            q.subImage.imageRect.extent = {it->second.width, it->second.height};
+            q.pose = ToXr(w->pose);
+            q.size = {w->widthM, w->HeightM()};
+            m_quadLayers.push_back(q);
+            m_underlays.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_quadLayers.back()));
+            continue;
+        }
+        if (m_mode == Mode::Desktop) {
             if (w->id.rfind("monitor-", 0) != 0) continue;
             const auto it = m_monitorLayers.find(uint8_t(std::atoi(w->id.c_str() + 8)));
             if (it == m_monitorLayers.end()) continue;
@@ -1744,7 +1910,15 @@ void App::CreateWindows() {
 
 // ---------------------------------------------------------------------------
 
+#ifdef __ANDROID__
 void android_main(android_app* app) {
     rv::App rincast(app);
     rincast.Run();
 }
+#else
+int main() {
+    rv::App rincast(nullptr);
+    rincast.Run();
+    return 0;
+}
+#endif

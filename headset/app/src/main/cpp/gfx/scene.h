@@ -10,6 +10,13 @@ namespace rv {
 
 enum class PanelSource { Texture2D, External };
 
+// A foveated VR frame's layout (rc::VrFoveationMetadata), to stretch it back when it's drawn.
+struct VideoFoveation {
+    float start[2][2] = {};  // per eye, where the full-density square starts: x, y from the top
+    float size = 0;          // its side, as a part of the eye's picture
+    float density[2] = {};   // of the rest: x, y
+};
+
 struct PanelDraw {
     Pose pose;              // centre of the panel; faces +Z
     float width = 1, height = 1;   // meters (arc length when curved)
@@ -20,6 +27,7 @@ struct PanelDraw {
     float opacity = 1;
     float cornerRadius = 0; // in meters
     bool holePunch = false; // write (0,0,0,0) to reveal a compositor layer underneath
+    bool holeFromAlpha = false;  // ... only as far as the texture covers (a UI canvas's rounded card)
     float brightness = 1;
     float crop[4] = {0, 0, 1, 1};  // external video: visible part of the decoder buffer
 };
@@ -39,10 +47,10 @@ class SceneRenderer {
     // Copies an external (video) texture into the currently bound framebuffer.
     // crop: VideoDecoder::Crop() (null = whole texture).
     void BlitExternal(GLuint texture, int width, int height, const float* crop = nullptr, float u0 = 0, float v0 = 0,
-                      float u1 = 1, float v1 = 1);
+                      float u1 = 1, float v1 = 1, const VideoFoveation* foveation = nullptr);
     bool UpscalerReady() const { return m_upscalerReady; }
     // Keeps a width x height video frame as a normal texture, gamma-encoded, then draws it to dstFbo:
-    void KeepVideo(GLuint texture, const float* crop, int width, int height);
+    void KeepVideo(GLuint texture, const float* crop, int width, int height, const VideoFoveation* foveation = nullptr);
     void DrawKept(GLuint dstFbo, int dstW, int dstH);
     void DrawKeptUpscaled(GLuint dstFbo, int dstW, int dstH);  // through Snapdragon Game Super Resolution
     // With its contents moved along the motion field, for frame generation. scaleX, scaleY: a

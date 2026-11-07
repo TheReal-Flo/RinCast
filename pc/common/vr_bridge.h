@@ -21,7 +21,7 @@ inline constexpr wchar_t kSharedMemoryName[] = L"Local\\RinCastVRBridge.v1";
 inline constexpr wchar_t kFrameReadyEventName[] = L"Local\\RinCastVRFrameReady.v1";
 inline constexpr wchar_t kTrackingEventName[] = L"Local\\RinCastVRTracking.v1";
 inline constexpr uint32_t kMagic = 0x42564352;  // 'RCVB'
-inline constexpr uint32_t kVersion = 4;
+inline constexpr uint32_t kVersion = 5;
 inline constexpr int kFrameSlots = 3;
 inline constexpr int kHapticsRing = 32;
 inline constexpr int kBodyTrackers = 10;  // rc::kBodyTrackerCount
@@ -81,6 +81,10 @@ struct DisplayConfig {
     LUID adapterLuid;
     char headsetModel[64];
     char headsetSerial[64];
+    // What SteamVR is told to render per eye (its 100%), when that isn't eyeWidth x eyeHeight:
+    // matching SteamVR's resolution, the stream follows what it renders instead. 0 = eyeWidth.
+    uint32_t renderEyeWidth;
+    uint32_t renderEyeHeight;
 };
 
 struct FrameSlot {
@@ -137,6 +141,10 @@ struct Shared {
     BodySnapshot body;
     volatile LONG64 handSeqlock[2];        // odd while writing
     HandSnapshot hands[2];
+
+    // ---- written by the producer ----
+    volatile LONG renderedEyeWidth;        // what the app actually renders an eye at (SteamVR: with its
+    volatile LONG renderedEyeHeight;       // resolution setting applied), 0 = no frame yet
 };
 
 #pragma pack(pop)

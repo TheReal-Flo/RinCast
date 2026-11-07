@@ -83,6 +83,8 @@ class App {
     XrContext& Xr() { return m_xr; }
     Headset& Device() { return *m_headset; }
     XrInput& Input() { return m_input; }
+    // Foveated encoding can follow the eyes.
+    bool GazeSupported() { return m_headset->GazeSupported(m_xr) || m_input.GazeSupported(); }
 
     void ConnectLan(const DiscoveredPc& pc);
     void ConnectCloud(const CloudPc& pc);
@@ -180,6 +182,7 @@ class App {
     XrInput m_input;
     std::unique_ptr<Headset> m_headset;
     bool m_facePermissionAsked = false;
+    bool m_gazePermissionAsked = false;
     void UpdateFace(const FrameState& frame);
     bool m_bodyPermissionAsked = false;
     SkyRenderer m_sky;
@@ -240,11 +243,21 @@ class App {
     bool m_monitorsLaidOut = false;
     int m_vrEyeWidth = 0, m_vrEyeHeight = 0;
     rc::VideoCodec m_vrCodec = rc::VideoCodec::HEVC;
+    // Foveated encoding: the stream's frames are squeezed (see rc::VrFoveationMetadata);
+    // m_vrEyeWidth x m_vrEyeHeight is the size they're stretched back to.
+    bool m_vrFoveated = false;
+    VideoFoveation m_vrFoveation;
+    // Where the eyes look: the family's own eye tracking, or XR_EXT_eye_gaze_interaction.
+    bool ReadGaze(XrTime time, rc::GazePayload& out);
     XrSwapchainGl m_vrSwapchain;
     // The performance overlay in a game: a compositor layer of its own (see Frame).
     void UpdateStatsLayer(Window* stats, bool active, float dt);
     XrSwapchainGl m_statsLayer;
     bool m_statsLayerActive = false;
+    // Menus and other UI windows as compositor layers, like the monitors: drawn into the eye
+    // images they went through two resamplings and looked blurry next to them.
+    void UpdateUiLayers();
+    std::map<std::string, XrSwapchainGl> m_uiLayers;
     int64_t m_statsDrawnNs = 0;
     bool m_vrUpscaleSetting = false;  // the setting m_vrSwapchain was made for
     bool m_vrUpscaled = false;        // m_vrSwapchain is sized for the upscaler

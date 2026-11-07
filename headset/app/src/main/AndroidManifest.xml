@@ -3,7 +3,8 @@
     android:installLocation="auto">
 
     <!-- Immersive VR app: head tracking is mandatory, controllers/hands/passthrough optional.
-         One package for Meta Quest and PICO: each reads its own entries and ignores the other's. -->
+         One package for Meta Quest, PICO and Android XR (Samsung Galaxy XR): each reads its own
+         entries and ignores the others'. -->
     <uses-feature android:glEsVersion="0x00030001" android:required="true" />
     <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
     <uses-feature android:name="oculus.software.handtracking" android:required="false" />
@@ -11,6 +12,11 @@
     <uses-feature android:name="com.oculus.software.body_tracking" android:required="false" />
     <uses-feature android:name="oculus.software.face_tracking" android:required="false" />
     <uses-feature android:name="oculus.software.eye_tracking" android:required="false" />
+    <!-- Android XR. Optional here because the same package goes to other stores; Google Play's
+         Android XR track wants android.software.xr.api.openxr required. -->
+    <uses-feature android:name="android.software.xr.api.openxr" android:required="false" />
+    <uses-feature android:name="android.hardware.xr.input.controller" android:required="false" />
+    <uses-feature android:name="android.hardware.xr.input.hand_tracking" android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -27,6 +33,8 @@
     <uses-permission android:name="com.picovr.permission.HAND_TRACKING" />
     <uses-permission android:name="com.picovr.permission.FACE_TRACKING" />
     <uses-permission android:name="com.picovr.permission.EYE_TRACKING" />
+    <uses-permission android:name="android.permission.HAND_TRACKING" />
+    <uses-permission android:name="android.permission.EYE_TRACKING_FINE" />
     <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
     <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
 
@@ -45,10 +53,15 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
-        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s" />
+        <meta-data android:name="com.oculus.supportedDevices" android:value="${questDevices}" />
         <meta-data android:name="com.oculus.intent.category.VR" android:value="vr_only" />
         <meta-data android:name="com.oculus.handtracking.frequency" android:value="HIGH" />
         <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0" />
+
+        <!-- Android XR: an OpenXR app in Full Space, whose runtime the system library provides. -->
+        <property android:name="android.window.PROPERTY_XR_ACTIVITY_START_MODE"
+            android:value="XR_ACTIVITY_START_MODE_FULL_SPACE_UNMANAGED" />
+        <uses-native-library android:name="libopenxr.google.so" android:required="false" />
 
         <!-- PICO: a VR app on OpenXR, with hands, face and eyes, and Motion Trackers. -->
         <meta-data android:name="pvr.app.type" android:value="vr" />
@@ -70,6 +83,9 @@
             android:screenOrientation="landscape">
             <meta-data android:name="android.app.lib_name" android:value="rincast" />
             <meta-data android:name="com.oculus.vrshell.free_resizing_lock_aspect_ratio" android:value="true" />
+            <!-- Meta Horizon Store requirement (VRC.Quest.Input.4): the system menu can open over the
+                 app without closing it. Meanwhile OpenXR gives the app no controller input. -->
+            <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="com.oculus.intent.category.VR" />

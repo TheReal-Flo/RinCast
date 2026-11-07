@@ -128,10 +128,19 @@ appear, use **Default devices**: you still get PC audio, but no microphone.
 $env:JAVA_HOME = "$env:ProgramFiles\Android\Android Studio\jbr"
 cd headset
 .\gradlew assembleDebug        # or assembleRelease
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\standard\debug\app-standard-debug.apk
 ```
-The native code lives in `app/src/main/cpp` and pulls in `shared/`. The OpenXR
-loader comes from Maven (`org.khronos.openxr:openxr_loader_for_android`). The same APK runs on
+There are two builds of the app. `standard` is the one for the store and every headset but the
+Quest 1. `quest1` (`app\build\outputs\apk\quest1\...`) also carries Meta's own OpenXR loader, which the
+Quest 1's last Horizon OS needs, from Meta's OpenXR Mobile SDK 64 (downloaded into `deps/meta`,
+43 MB, on its first build), and lists the Quest 1 among its devices. Both have the same package
+name and version, so either installs over the other.
+
+The native code lives in `app/src/main/cpp` and pulls in `shared/`. The APK carries two
+OpenXR loaders, and the app opens one when it starts (`app/src/main/cpp/xr/xr_loader.cpp`):
+Khronos' standard loader, from Maven (`org.khronos.openxr:openxr_loader_for_android`), and
+PICO's own, which PICO headsets from before PICO OS 5.9 need. The first build downloads PICO's
+OpenXR SDK into `deps/pico` (7 MB, checked against a fixed SHA-256) for it. The same APK runs on
 Quest and PICO: the manifest carries both's entries, and the code for each is in
 `app/src/main/cpp/headsets` (see [ARCHITECTURE.md](ARCHITECTURE.md#headset-app-headsetappsrcmaincpp)).
 

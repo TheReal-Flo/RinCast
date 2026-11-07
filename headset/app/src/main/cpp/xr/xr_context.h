@@ -4,13 +4,11 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <time.h>
+#ifdef __ANDROID__
 #include <jni.h>
+#endif
 
-#define XR_USE_PLATFORM_ANDROID
-#define XR_USE_GRAPHICS_API_OPENGL_ES
-#define XR_USE_TIMESPEC
-#include <openxr/openxr.h>
-#include <openxr/openxr_platform.h>
+#include "xr_loader.h"  // OpenXR itself, from the loader picked at run time
 
 #include <string>
 #include <vector>
@@ -96,7 +94,7 @@ class XrContext {
     void SetRefreshRate(float hz);
 
     // Passthrough (XR_FB_passthrough)
-    bool PassthroughSupported() const { return m_passthrough != XR_NULL_HANDLE; }
+    bool PassthroughSupported() const { return m_passthrough != XR_NULL_HANDLE || m_alphaBlend; }
     void SetPassthrough(bool enable);
     // Sustained CPU and GPU clocks while streaming; decoding and networking can't catch up
     // after a clock drop without visible hitches.
@@ -149,6 +147,8 @@ class XrContext {
     std::vector<float> m_refreshRates;
     float m_requestedHz = 0;
     bool m_cylinder = false;
+    // Linux: the runtime takes the GL ES context under XR_KHR_opengl_enable (no ES extension).
+    bool m_glNotEs = false;
     bool m_layerSettings = false;
     bool m_handTracking = false;
     bool m_velocitiesFromPoses = false;
@@ -156,6 +156,9 @@ class XrContext {
     XrPassthroughFB m_passthrough = XR_NULL_HANDLE;
     XrPassthroughLayerFB m_passthroughLayer = XR_NULL_HANDLE;
     bool m_passthroughActive = false;
+    // Runtimes without XR_FB_passthrough (Android XR) show the cameras behind a frame submitted
+    // with the alpha-blend environment mode instead.
+    bool m_alphaBlend = false;
 
     PFN_xrConvertTimespecTimeToTimeKHR m_fromTimespec = nullptr;
     PFN_xrConvertTimeToTimespecTimeKHR m_toTimespec = nullptr;

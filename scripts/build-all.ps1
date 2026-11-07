@@ -8,13 +8,14 @@
   Outputs
     dist\RinCast\            PC package; run install.ps1 inside it
     dist\RinCast.apk         headset app (adb install -r dist\RinCast.apk)
+    dist\RinCast-quest1.apk  the same app for the Quest 1 (it runs on the other headsets too)
     dist\rincast-server.exe  account server (also see server\Dockerfile)
     dist\rincast-server-linux-amd64, -linux-arm64   static Linux builds (systemd unit in server\deploy)
     dist\LICENSE, dist\THIRD_PARTY_NOTICES.md       licence texts for the server binaries
 
   With -Package, also the files to publish, named after the VERSION file:
     dist\RinCast-<version>-windows-x64.zip
-    dist\RinCast-<version>.apk (or RinCast-<version>-debug.apk with -DebugApk)
+    dist\RinCast-<version>.apk and RinCast-<version>-quest1.apk (with -debug added for -DebugApk)
     dist\rincast-server-<version>-windows-amd64.exe, -linux-amd64, -linux-arm64
     dist\SHA256SUMS.txt
 
@@ -209,7 +210,8 @@ if ($Skip -notcontains 'headset') {
     $task = if ($flavor -eq 'release') { 'assembleRelease' } else { 'assembleDebug' }
     Push-Location "$root\headset"
     try { Run '.\gradlew.bat' @($task, '--console=plain') } finally { Pop-Location }
-    Copy-Item "$root\headset\app\build\outputs\apk\$flavor\app-$flavor.apk" "$dist\RinCast.apk" -Force
+    Copy-Item "$root\headset\app\build\outputs\apk\standard\$flavor\app-standard-$flavor.apk" "$dist\RinCast.apk" -Force
+    Copy-Item "$root\headset\app\build\outputs\apk\quest1\$flavor\app-quest1-$flavor.apk" "$dist\RinCast-quest1.apk" -Force
 }
 
 # ---- Server -------------------------------------------------------------------
@@ -270,9 +272,12 @@ if ($Package) {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw "Packing $setup failed." }
     $published += $setup
     if ($Skip -notcontains 'headset') {
-        $apkName = if ($flavor -eq 'release') { "RinCast-$version.apk" } else { "RinCast-$version-debug.apk" }
-        Copy-Item "$dist\RinCast.apk" (Join-Path $dist $apkName) -Force
-        $published += Join-Path $dist $apkName
+        $suffix = if ($flavor -eq 'release') { '' } else { '-debug' }
+        $apks = [ordered]@{ 'RinCast.apk' = "RinCast-$version$suffix.apk"; 'RinCast-quest1.apk' = "RinCast-$version-quest1$suffix.apk" }
+        foreach ($k in $apks.Keys) {
+            Copy-Item (Join-Path $dist $k) (Join-Path $dist $apks[$k]) -Force
+            $published += Join-Path $dist $apks[$k]
+        }
     }
     if ($Skip -notcontains 'server') {
         $servers = @{ 'rincast-server.exe' = "rincast-server-$version-windows-amd64.exe"

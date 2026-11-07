@@ -1,6 +1,7 @@
 #include "vr_bridge_host.h"
 
 #include <cstdio>
+#include <utility>
 
 #include "../settings.h"
 #include "rc/platform.h"
@@ -44,6 +45,8 @@ bool VrBridgeHost::Start() {
             for (int e = 0; e < 2 && e < int(fov.size()); e++)
                 for (int k = 0; k < 4; k++) c.fovTan[e][k] = fov[e][k].get<float>();
             strncpy_s(c.headsetModel, j.value("model", "Quest").c_str(), _TRUNCATE);
+            c.renderEyeWidth = j.value("renderEyeWidth", 0u);
+            c.renderEyeHeight = j.value("renderEyeHeight", 0u);
             if (c.eyeWidth && c.eyeHeight) Configure(c);
         } catch (...) {
         }
@@ -120,6 +123,11 @@ bool VrBridgeHost::Configure(const rcvr::DisplayConfig& config) {
     c.adapterLuid = m_gpu.luid;
     const auto& old = m_shared->config;
     const bool resolutionChanged = !m_hasConfig || old.eyeWidth != c.eyeWidth || old.eyeHeight != c.eyeHeight;
+    // What SteamVR renders at, which it only takes on when it starts.
+    const auto renderSize = [](const rcvr::DisplayConfig& d) {
+        return std::make_pair(d.renderEyeWidth ? d.renderEyeWidth : d.eyeWidth, d.renderEyeHeight ? d.renderEyeHeight : d.eyeHeight);
+    };
+    const bool renderSizeChanged = !m_hasConfig || renderSize(old) != renderSize(c);
     const bool displayChanged = resolutionChanged || old.refreshRate != c.refreshRate ||
                                 std::memcmp(old.fovTan, c.fovTan, sizeof(c.fovTan)) != 0;
     if (resolutionChanged && !CreateTextures(c.eyeWidth * 2, c.eyeHeight)) return false;
@@ -132,11 +140,19 @@ bool VrBridgeHost::Configure(const rcvr::DisplayConfig& config) {
     for (int e = 0; e < 2; e++) fov.push_back({c.fovTan[e][0], c.fovTan[e][1], c.fovTan[e][2], c.fovTan[e][3]});
     WriteFileAtomic(DataDir() / L"display.json",
                     json{{"eyeWidth", c.eyeWidth}, {"eyeHeight", c.eyeHeight}, {"refreshRate", c.refreshRate},
-                         {"ipd", c.ipd}, {"fov", fov}, {"model", c.headsetModel}}
+                         {"ipd", c.ipd}, {"fov", fov}, {"model", c.headsetModel},
+                         {"renderEyeWidth", c.renderEyeWidth}, {"renderEyeHeight", c.renderEyeHeight}}
                         .dump());
-    // A running SteamVR keeps the resolution it started with; refresh rate, field of view
-    // and IPD are applied live by our driver (it watches configGeneration).
-    return resolutionChanged && m_shared->producerKind == LONG(rcvr::ProducerKind::SteamVR);
+    // A running SteamVR keeps the resolution it started with; refresh rate, field of view,
+    // IPD and the stream's size are applied live by our driver (it watches configGeneration).
+    return renderSizeChanged && m_shared->producerKind == LONG(rcvr::ProducerKind::SteamVR);
+}
+
+bool VrBridgeHost::SteamVrEyeSize(uint32_t& width, uint32_t& height) const {
+    if (ActiveProducer() != rcvr::ProducerKind::SteamVR) return false;
+    width = uint32_t(m_shared->renderedEyeWidth);
+    height = uint32_t(m_shared->renderedEyeHeight);
+    return width >= 256 && height >= 256;
 }
 
 rcvr::DisplayConfig VrBridgeHost::LastConfig() const {
@@ -201,6 +217,7 @@ void VrBridgeHost::RecoverFromDeadProducer() {
     const uint32_t w = m_shared->textureWidth, h = m_shared->textureHeight;
     m_shared->producerPid = 0;
     m_shared->producerKind = LONG(rcvr::ProducerKind::None);
+    m_shared->renderedEyeWidth = m_shared->renderedEyeHeight = 0;
     if (w && h) CreateTextures(w, h);
     InterlockedIncrement(&m_shared->configGeneration);
 }

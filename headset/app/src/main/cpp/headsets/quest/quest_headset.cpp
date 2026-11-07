@@ -26,15 +26,36 @@ class QuestHeadset : public Headset {
     std::vector<std::string> BodyPermissions() const override { return {"com.oculus.permission.BODY_TRACKING"}; }
 
     bool FaceSupported(const XrContext& xr) const override { return QuestFace::Supported(xr); }
-    bool ReadFace(XrContext& xr, XrTime time, rc::FaceTrackingPayload& out) override { return m_face.Read(xr, time, out); }
-    void StopFace() override { m_face.Stop(); }
+    bool ReadFace(XrContext& xr, XrTime time, rc::FaceTrackingPayload& out) override {
+        m_faceOn = true;
+        return m_face.Read(xr, time, out);
+    }
+    void StopFace() override {
+        m_face.Stop();
+        m_faceOn = false;
+        if (!m_gazeOn) m_eyes.Stop();
+    }
     std::vector<std::string> FacePermissions() const override {
         return {"com.oculus.permission.FACE_TRACKING", "com.oculus.permission.EYE_TRACKING"};
     }
 
+    bool GazeSupported(const XrContext& xr) const override { return QuestEyes::Supported(xr); }
+    bool ReadGaze(XrContext& xr, XrTime time, rc::GazePayload& out) override {
+        m_gazeOn = true;
+        uint8_t confidence[2] = {};
+        return m_eyes.Read(xr, time, out.gaze, confidence, out.flags);
+    }
+    void StopGaze() override {
+        m_gazeOn = false;
+        if (!m_faceOn) m_eyes.Stop();
+    }
+    std::vector<std::string> GazePermissions() const override { return {"com.oculus.permission.EYE_TRACKING"}; }
+
    private:
     QuestBody m_body;
-    QuestFace m_face;
+    QuestEyes m_eyes;  // before m_face, which uses it
+    QuestFace m_face{m_eyes};
+    bool m_faceOn = false, m_gazeOn = false;
 };
 
 }  // namespace

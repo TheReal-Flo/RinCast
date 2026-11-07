@@ -2,7 +2,14 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 1.1.0 - 2026-11-07
+
+New in the headset app and the PC streamer: install both. A 1.1.0 headset still works with an
+older PC (it falls back to the resolution presets), but the PC's SteamVR driver and streamer
+must match, which the installer takes care of.
+
+Not tested on a headset yet: foveated encoding, matching SteamVR's resolution, the menus as
+compositor layers, and the Galaxy XR, Quest 1, older-PICO and Steam Frame support.
 
 ### Added
 
@@ -15,6 +22,43 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   carries the Chinese and Japanese characters the menus use, baked from Noto Sans SC
   (`tools/assetbaker` reads `assets/ui/charset.txt`), and wrapped text breaks within Chinese and
   Japanese runs.
+- The VR resolution is a slider now, from 50% to 130% of the headset's own in 5% steps, with
+  the pixels per eye next to it. It replaces the five presets; older PCs get the nearest preset.
+- "Match SteamVR's resolution" (VR quality): the stream takes the size SteamVR renders at, set
+  in SteamVR under Video, up to 130% of the headset's own. When SteamVR's setting changes, or
+  a game uses its own, the stream follows within a second or two. Turning it on or off asks
+  for a SteamVR restart.
+- Foveated encoding that follows the eyes (VR quality, on headsets that track them: Quest Pro,
+  and others through OpenXR's eye gaze, such as the Galaxy XR). The PC keeps every pixel of a
+  square around where you look, 45% of each eye's width and height, and half of them in each
+  direction elsewhere; the headset stretches the frame back. That's about 53% of the pixels to
+  encode, send and decode, on any GPU. The square only moves when the eyes look clearly
+  elsewhere, and sits in each lens's centre while the eyes aren't tracked. NVENC's fixed
+  foveation (fewer bits towards the lens edges) is off in that mode.
+- Microphone volume on the headset (General), from 0 to 200%.
+- Support for the Samsung Galaxy XR, the original Quest (its own APK, `-quest1`), and PICO
+  headsets on older firmware (PICO's own OpenXR loader).
+- An experimental native app for the Steam Frame (see `headset/linux`).
+
+### Fixed
+
+- Windows' volume did nothing for the headset: the sound is recorded before Windows applies
+  the speaker's volume, and the microphones' recording level wasn't applied either. RinCast now
+  applies both itself, for RinCast's and Steam's virtual devices, so the volume slider, the
+  volume keys and mute change the headset's sound, and turning the microphone down in Windows'
+  sound settings works.
+- SteamVR (and tools such as Space Calibrator) saw every headset as a Quest 3. It now sees the
+  Quest, Quest 2, Quest Pro, Quest 3 and 3S by the names Quest Link gives them, and other
+  headsets by their own; Quest 1 and 2 controllers get their own models. Takes effect after
+  restarting SteamVR.
+- Menus looked blurry next to the monitors: they were drawn into the eye images and so went
+  through two resamplings. With "Sharp text" on (Desktop), they're compositor layers like the
+  monitors.
+- On the keyboard, pressing a key with one controller while the other pointed at another key
+  didn't register.
+- AV1 isn't offered on headsets that only have a software AV1 decoder (Quest 1 and 2), and the
+  Quest 1 reports its decoder's real size limit.
+- The Meta Store's requirement for the focus-aware manifest entry.
 
 ## 1.0.3 - 2026-11-07
 

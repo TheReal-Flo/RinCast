@@ -63,6 +63,15 @@ class Headset {
     virtual bool ReadFace(XrContext&, XrTime, rc::FaceTrackingPayload&) { return false; }
     virtual void StopFace() {}
 
+    // Where the eyes look, for foveated encoding: the family's own eye tracking. Elsewhere the
+    // app asks XR_EXT_eye_gaze_interaction (XrInput), with GazePermissions() all the same.
+    virtual bool GazeSupported(const XrContext&) const { return false; }
+    virtual bool ReadGaze(XrContext&, XrTime, rc::GazePayload&) { return false; }
+    virtual void StopGaze() {}
+    virtual std::vector<std::string> GazePermissions() const { return {}; }
+
+    // Asked for when the app starts: what basic input needs (Android XR's hand tracking).
+    virtual std::vector<std::string> StartupPermissions() const { return {}; }
     // Asked for the first time the feature is turned on.
     virtual std::vector<std::string> BodyPermissions() const { return {}; }
     virtual std::vector<std::string> FacePermissions() const { return {}; }
@@ -70,5 +79,8 @@ class Headset {
 
 std::unique_ptr<Headset> CreateQuestHeadset();
 std::unique_ptr<Headset> CreatePicoHeadset(XrContext& xr);
+std::unique_ptr<Headset> CreateAndroidXrHeadset();
+// Enabled where the runtime has it, to recognize Android XR (Samsung Galaxy XR).
+inline constexpr const char* kAndroidXrMarkerExtension = "XR_ANDROID_unbounded_reference_space";
 
 }  // namespace rv

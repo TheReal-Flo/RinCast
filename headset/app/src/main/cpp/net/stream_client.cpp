@@ -4,7 +4,7 @@
 #include <climits>
 #include <cstring>
 #include <iterator>
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__linux__)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/resource.h>
@@ -276,9 +276,11 @@ void StreamClient::SendHandSkeleton(const rc::HandSkeletonPayload& h) {
     if (m_connection) m_connection->Send(rc::PacketType::HandSkeleton, &h, sizeof(h));
 }
 
-void StreamClient::SendTracking(const rc::TrackingPayload& t) {
+void StreamClient::SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze) {
     std::lock_guard lock(m_mutex);
-    if (m_connection) m_connection->Send(rc::PacketType::Tracking, &t, sizeof(t));
+    if (!m_connection) return;
+    if (gaze) m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), gaze, sizeof(*gaze));
+    else m_connection->Send(rc::PacketType::Tracking, &t, sizeof(t));
 }
 
 void StreamClient::SendPointer(const rc::PointerPayload& p) {

@@ -38,6 +38,7 @@ void SetPage(int page);
 }
 
 std::string g_assets;
+Assets::Assets() {}  // files come from g_assets
 bool Assets::Read(const char* path, std::vector<uint8_t>& out) const {
     std::ifstream f(g_assets + "/" + path, std::ios::binary);
     if (!f) return false;
@@ -69,7 +70,7 @@ const Texture& App::EnvironmentThumbnail(const std::string& key) {
     if (it != cache.end()) return it->second;
     Texture& t = cache[key];
     std::vector<uint8_t> bytes;
-    Assets assets(nullptr);
+    Assets assets;
     if (assets.Read(("ui/env-" + key + ".png").c_str(), bytes)) LoadImageTexture(bytes, 4, true, true, t);
     return t;
 }
@@ -157,6 +158,7 @@ const std::vector<Scene>& Scenes() {
         {"games-empty", "home", 1, [](App& a) { Live(a); }},
         {"streaming", "home", 2, [](App& a) { a.settings.vrBitrateMbps = 200; a.settings.upscaling = true; }},
         {"streaming-connected", "home", 2, [](App& a) { Live(a); a.settings.frameGeneration = true; a.settings.vrBitrateMbps = 0; }},
+        {"streaming-match", "home", 2, [](App& a) { Live(a); a.settings.matchSteamVr = true; }},
         {"streaming-pico", "home", 2, [](App& a) { a.device.pico = true; a.input.simultaneous = false; }},
         {"desktop", "home", 3, [](App&) {}},
         {"environment", "home", 4, [](App&) {}},
@@ -217,7 +219,7 @@ int main(int argc, char** argv) {
     EGLContext ctx = eglCreateContext(d, cfg, EGL_NO_CONTEXT, ctxAttr);
     if (!eglMakeCurrent(d, surf, surf, ctx)) return fprintf(stderr, "no EGL context\n"), 3;
 
-    Assets assets(nullptr);
+    Assets assets;
     UiRenderer renderer;
     if (!renderer.Init(assets)) return fprintf(stderr, "renderer init failed\n"), 4;
     const float kScale = 1.25f;

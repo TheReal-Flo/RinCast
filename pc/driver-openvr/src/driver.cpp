@@ -205,11 +205,34 @@ vr::VRBoneTransform_t BlendBones(const vr::VRBoneTransform_t& a, const vr::VRBon
 }
 
 // ---------------------------------------------------------------------------
+// Model names
+// ---------------------------------------------------------------------------
+// What SteamVR shows (its device list, Space Calibrator) and some games check: Meta's headsets
+// by the names Quest Link gives them, anything else by its own. (The headset sends Android's
+// model name: "Quest Pro", "Quest 3" ...)
+struct ModelNames {
+    std::string hmd;
+    const char* controllerLeft;   // render models
+    const char* controllerRight;
+};
+
+ModelNames NamesFor(const std::string& model) {
+    if (model == "Quest") return {"Oculus Quest", "oculus_quest_controller_left", "oculus_quest_controller_right"};
+    if (model == "Quest 2") return {"Oculus Quest2", "oculus_quest2_controller_left", "oculus_quest2_controller_right"};
+    if (model == "Quest Pro")
+        return {"Meta Quest Pro", "oculus_quest_plus_controller_left", "oculus_quest_plus_controller_right"};
+    if (model == "Quest 3S") return {"Oculus Quest3S", "oculus_quest_plus_controller_left", "oculus_quest_plus_controller_right"};
+    return {model.empty() || model == "Quest 3" ? "Oculus Quest3" : model, "oculus_quest_plus_controller_left",
+            "oculus_quest_plus_controller_right"};
+}
+
+// ---------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------
 class Controller : public vr::ITrackedDeviceServerDriver {
    public:
-    explicit Controller(int hand, std::string serial) : m_hand(hand), m_serial(std::move(serial)) {}
+    Controller(int hand, std::string serial, ModelNames names)
+        : m_hand(hand), m_serial(std::move(serial)), m_names(std::move(names)) {}
 
     vr::EVRInitError Activate(uint32_t id) override {
         m_id = id;
@@ -219,11 +242,10 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
         props->SetStringProperty(c, vr::Prop_ManufacturerName_String, "Oculus");
         props->SetStringProperty(c, vr::Prop_ModelNumber_String,
-                                 left ? "Oculus Quest3 (Left Controller)" : "Oculus Quest3 (Right Controller)");
+                                 (m_names.hmd + (left ? " (Left Controller)" : " (Right Controller)")).c_str());
         props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
         props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ("oculus/" + m_serial).c_str());
-        props->SetStringProperty(c, vr::Prop_RenderModelName_String,
-                                 left ? "oculus_quest_plus_controller_left" : "oculus_quest_plus_controller_right");
+        props->SetStringProperty(c, vr::Prop_RenderModelName_String, left ? m_names.controllerLeft : m_names.controllerRight);
         props->SetStringProperty(c, vr::Prop_ControllerType_String, "oculus_touch");
         props->SetStringProperty(c, vr::Prop_InputProfilePath_String, "{oculus}/input/touch_profile.json");
         props->SetInt32Property(c, vr::Prop_ControllerRoleHint_Int32,
@@ -387,6 +409,7 @@ class Controller : public vr::ITrackedDeviceServerDriver {
 
     int m_hand;
     std::string m_serial;
+    ModelNames m_names;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
     vr::DriverPose_t m_lastPose{};
     vr::VRInputComponentHandle_t m_system{}, m_systemTouch{}, m_btn1{}, m_btn1Touch{}, m_btn2{}, m_btn2Touch{},
@@ -430,7 +453,7 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         const auto c = props->TrackedDeviceToPropertyContainer(id);
         props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
         props->SetStringProperty(c, vr::Prop_ManufacturerName_String, "Oculus");
-        props->SetStringProperty(c, vr::Prop_ModelNumber_String, "Oculus Quest3");
+        props->SetStringProperty(c, vr::Prop_ModelNumber_String, NamesFor(m_cfg.headsetModel).hmd.c_str());
         props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
         props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ("oculus/" + m_serial).c_str());
         props->SetStringProperty(c, vr::Prop_RenderModelName_String, "generic_hmd");
@@ -479,23 +502,27 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     vr::DriverPose_t GetPose() override { return m_lastPose; }
 
     // ---- IVRDisplayComponent ----
+    // What SteamVR renders an eye at before its own resolution setting. Usually the stream's
+    // size; matching SteamVR's resolution, the headset's own and the stream follows SteamVR.
+    uint32_t RenderWidth() const { return m_cfg.renderEyeWidth ? m_cfg.renderEyeWidth : m_cfg.eyeWidth; }
+    uint32_t RenderHeight() const { return m_cfg.renderEyeHeight ? m_cfg.renderEyeHeight : m_cfg.eyeHeight; }
     void GetWindowBounds(int32_t* x, int32_t* y, uint32_t* w, uint32_t* h) override {
         *x = 0;
         *y = 0;
-        *w = m_cfg.eyeWidth * 2;
-        *h = m_cfg.eyeHeight;
+        *w = RenderWidth() * 2;
+        *h = RenderHeight();
     }
     bool IsDisplayOnDesktop() override { return false; }
     bool IsDisplayRealDisplay() override { return false; }
     void GetRecommendedRenderTargetSize(uint32_t* w, uint32_t* h) override {
-        *w = m_cfg.eyeWidth;
-        *h = m_cfg.eyeHeight;
+        *w = RenderWidth();
+        *h = RenderHeight();
     }
     void GetEyeOutputViewport(vr::EVREye eye, uint32_t* x, uint32_t* y, uint32_t* w, uint32_t* h) override {
-        *x = eye == vr::Eye_Left ? 0 : m_cfg.eyeWidth;
+        *x = eye == vr::Eye_Left ? 0 : RenderWidth();
         *y = 0;
-        *w = m_cfg.eyeWidth;
-        *h = m_cfg.eyeHeight;
+        *w = RenderWidth();
+        *h = RenderHeight();
     }
     void GetProjectionRaw(vr::EVREye eye, float* left, float* right, float* top, float* bottom) override {
         // SteamVR's vertical convention is flipped: "top" takes the (negated) DOWN
@@ -677,6 +704,14 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         m_ctx->Flush();
         if (syncMutex) syncMutex->ReleaseSync(0);
 
+        // The size the game's eye images come in, for streaming at SteamVR's resolution.
+        if (textures[0][0]) {
+            D3D11_TEXTURE2D_DESC sd;
+            textures[0][0]->GetDesc(&sd);
+            const vr::VRTextureBounds_t& b = layers[0][0].bounds;
+            s->renderedEyeWidth = LONG(sd.Width * std::fabs(b.uMax - b.uMin) + 0.5f);
+            s->renderedEyeHeight = LONG(sd.Height * std::fabs(b.vMax - b.vMin) + 0.5f);
+        }
         const rcvr::TrackingSnapshot t = RenderedWith(layers[0][0].mHmdPose);
         rcvr::FrameSlot& fs = s->slots[slot];
         fs.frameIndex = ++m_frameIndex;
@@ -1091,13 +1126,15 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         m_hmd = std::make_unique<Hmd>(s->config);
         vr::VRServerDriverHost()->TrackedDeviceAdded(m_hmd->Serial().c_str(), vr::TrackedDeviceClass_HMD, m_hmd.get());
         for (int i = 0; i < 2; i++) {
-            m_controllers[i] = std::make_unique<Controller>(i, m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right"));
+            m_controllers[i] = std::make_unique<Controller>(i, m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right"),
+                                                            NamesFor(s->config.headsetModel));
             vr::VRServerDriverHost()->TrackedDeviceAdded(
                 (m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right")).c_str(),
                 vr::TrackedDeviceClass_Controller, m_controllers[i].get());
         }
         strncpy_s(s->applicationName, "SteamVR", _TRUNCATE);
-        Log("Added HMD %ux%u per eye @ %.0f Hz", s->config.eyeWidth, s->config.eyeHeight, s->config.refreshRate);
+        Log("Added HMD %s, rendering %ux%u per eye @ %.0f Hz", NamesFor(s->config.headsetModel).hmd.c_str(),
+            m_hmd->RenderWidth(), m_hmd->RenderHeight(), s->config.refreshRate);
     }
 
     void AddBodyTrackers() {

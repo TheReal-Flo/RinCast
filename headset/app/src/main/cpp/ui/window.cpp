@@ -224,11 +224,22 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
 
     // ---- pointer routing to UI windows ----
     m_pointers.clear();
+    // A press is a click when it's let go, so the hand that pressed keeps the pointer until then,
+    // wherever the other hand points. Otherwise, on the frame one hand lets go, the other one
+    // could take over, and the press was lost (typing with one hand while the other pointed at
+    // another key).
+    const auto onUi = [&](int h) {
+        return hits[h].window && hits[h].zone == HitZone::Content && hits[h].window->kind == WindowKind::Ui;
+    };
+    if (m_pressHand >= 0 && !hands[m_pressHand].triggerDown && !hands[m_pressHand].triggerReleased) m_pressHand = -1;
     int primary = -1;
-    for (int h = 1; h >= 0; h--) {  // right hand wins ties
-        if (hits[h].window && hits[h].zone == HitZone::Content && hits[h].window->kind == WindowKind::Ui) {
-            if (primary < 0 || hands[h].triggerDown || hands[h].triggerPressed) primary = h;
+    if (m_pressHand >= 0) {
+        if (onUi(m_pressHand)) primary = m_pressHand;  // off every window: the release below still reaches it
+    } else {
+        for (int h = 1; h >= 0; h--) {  // right hand wins ties
+            if (onUi(h) && (primary < 0 || hands[h].triggerDown || hands[h].triggerPressed)) primary = h;
         }
+        if (primary >= 0 && hands[primary].triggerPressed) m_pressHand = primary;
     }
     if (primary >= 0 && !m_drag.window) {
         const WindowHit& hit = hits[primary];
@@ -245,7 +256,7 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
     }
     // Releases must reach the window that captured the press even if the ray left it.
     for (int h = 0; h < 2; h++) {
-        if (hands[h].triggerReleased && primary != h) {
+        if (hands[h].triggerReleased && primary != h && (m_pressHand < 0 || m_pressHand == h)) {
             for (auto& w : m_windows)
                 if (w->kind == WindowKind::Ui && !m_pointers.count(w->id)) {
                     PointerState p;
@@ -375,6 +386,8 @@ void WindowManager::Draw(SceneRenderer& scene) {
         if (w->kind == WindowKind::Ui) {
             p.texture = w->rt.color.id;
             p.cornerRadius = 0;  // the canvas draws its own rounded background
+            // Shown by a compositor layer (App::UpdateUiLayers): make room for it.
+            p.holePunch = p.holeFromAlpha = w->layerBacked;
             scene.Panel(p);
         } else {
             p.cornerRadius = 0.012f * w->widthM / 1.2f + 0.004f;

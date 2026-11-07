@@ -38,7 +38,10 @@ struct ClientStreamSettings {
     std::string codec = "auto";
     bool tenBit = false;
     bool frameGeneration = false;
-    std::string vrQuality = "high";   // low | medium | high | ultra | godlike
+    std::string vrQuality = "high";   // low | medium | high | ultra | godlike (headsets before 1.1.0)
+    float vrScale = 0;                // pixels per eye against the headset's own; 0 = from vrQuality
+    bool matchSteamVr = false;        // stream at the size SteamVR renders at
+    bool gazeFoveation = false;       // foveated encoding around where the eyes look
     float refreshRate = 90;
     int vrBitrateMbps = 0;            // 0 = PC default
     int desktopBitrateMbps = 0;
@@ -131,6 +134,11 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     std::string m_vrProducer;
     std::string m_vrApp;
     int64_t m_steamVrLaunchNs = 0;
+    // Matching SteamVR's resolution: the size the VR stream was started for, and a new one
+    // SteamVR has rendered at since (it has to hold for a second before the stream follows).
+    uint32_t m_vrMatchedWidth = 0, m_vrMatchedHeight = 0;
+    uint32_t m_vrSeenWidth = 0, m_vrSeenHeight = 0;
+    void FollowSteamVrResolution();
     int64_t m_connectedAtNs = 0;
     json m_clientStats;
     uint32_t m_lastMouseMonitor = 0;

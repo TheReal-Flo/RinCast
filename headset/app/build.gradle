@@ -52,6 +52,21 @@ android {
         }
     }
 
+    // Two builds of the same app. The Quest 1 one also carries Meta's own OpenXR loader, which the
+    // Quest 1's last Horizon OS needs, and lists the Quest 1: the store no longer takes apps that do.
+    flavorDimensions = ["headsets"]
+    productFlavors {
+        standard {
+            dimension "headsets"
+            manifestPlaceholders = [questDevices: "quest2|questpro|quest3|quest3s"]
+        }
+        quest1 {
+            dimension "headsets"
+            manifestPlaceholders = [questDevices: "quest|quest2|questpro|quest3|quest3s"]
+            externalNativeBuild { cmake { arguments "-DRINCAST_QUEST1=ON" } }
+        }
+    }
+
     sourceSets {
         main.assets.srcDir layout.buildDirectory.dir("generated/notices")
     }

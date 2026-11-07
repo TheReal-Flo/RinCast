@@ -11,6 +11,7 @@
 #include "../input/input_injector.h"
 #include "../settings.h"
 #include "../stream/desktop_stream.h"
+#include "../stream/foveator.h"
 #include "../stream/vr_stream.h"
 #include "../vr/steamvr.h"
 #include "../vr/vr_bridge_host.h"
@@ -29,6 +30,10 @@ float QualityScale(const std::string& q) {
 }
 
 uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a); }
+
+// The most the stream takes of SteamVR's resolution, against the headset's own: the headset's
+// decoder couldn't keep up with more (and the slider on the headset stops there too).
+constexpr double kMaxVrScale = 1.3;
 
 }  // namespace
 
@@ -204,6 +209,13 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
                 std::memcpy(d.pose.angularVelocity, c.angularVelocity, sizeof(float) * 3);
             }
             App::Get().Bridge().PublishTracking(s);
+            // Where the eyes look comes after the poses, from headsets doing foveated encoding.
+            if (size >= sizeof(t) + sizeof(rc::GazePayload)) {
+                rc::GazePayload g;
+                std::memcpy(&g, payload + sizeof(t), sizeof(g));
+                std::lock_guard lock(m_mutex);
+                if (m_vr) m_vr->SetGaze(g);
+            }
             break;
         }
         case rc::PacketType::BodyTracking: {
@@ -314,6 +326,7 @@ void ClientSession::HandleMessage(const json& m) {
             m_steamVrLaunchNs = 0;
             NotifyVrState("error", "steamvr", "", "SteamVR did not start. Check SteamVR on your PC.");
         }
+        FollowSteamVrResolution();
         // Server statistics for the headset's performance overlay.
         json stats{{"type", rc::msg::kServerStats}};
         {
@@ -350,7 +363,9 @@ void ClientSession::HandleMessage(const json& m) {
         ApplyClientInfo(json{{"settings", m.value("settings", json::object())}});
         ClientStreamSettings after = StreamSettings();
         const bool videoChanged = before.codec != after.codec || before.tenBit != after.tenBit ||
-                                  before.vrQuality != after.vrQuality || before.frameGeneration != after.frameGeneration || before.refreshRate != after.refreshRate ||
+                                  before.vrQuality != after.vrQuality || before.vrScale != after.vrScale ||
+                                  before.matchSteamVr != after.matchSteamVr || before.gazeFoveation != after.gazeFoveation ||
+                                  before.frameGeneration != after.frameGeneration || before.refreshRate != after.refreshRate ||
                                   before.vrBitrateMbps != after.vrBitrateMbps ||
                                   before.adaptiveBitrate != after.adaptiveBitrate;
         if (videoChanged) {
@@ -465,6 +480,9 @@ void ClientSession::ApplyClientInfo(const json& m) {
         m_settings.codec = s.value("codec", m_settings.codec);
         m_settings.tenBit = s.value("tenBit", m_settings.tenBit);
         m_settings.vrQuality = s.value("vrQuality", m_settings.vrQuality);
+        m_settings.vrScale = s.value("vrScale", m_settings.vrScale);
+        m_settings.matchSteamVr = s.value("matchSteamVr", m_settings.matchSteamVr);
+        m_settings.gazeFoveation = s.value("gazeFoveation", m_settings.gazeFoveation);
         m_settings.frameGeneration = s.value("frameGeneration", m_settings.frameGeneration);
         m_settings.refreshRate = s.value("refreshRate", m_settings.refreshRate);
         m_settings.vrBitrateMbps = s.value("vrBitrateMbps", m_settings.vrBitrateMbps);
@@ -658,11 +676,36 @@ void ClientSession::StartVr() {
         st = m_settings;
         codec = ChooseCodec(true);
     }
-    // Per-eye resolution from the quality preset, limited by codec/decoder.
-    // Internet uploads rarely carry the higher presets: their pixels would only add blur.
-    const float scale = m_slowPath ? std::min(QualityScale(st.vrQuality), QualityScale("medium")) : QualityScale(st.vrQuality);
+    // Per-eye resolution from the headset's setting, limited by codec/decoder.
+    // Internet uploads rarely carry the higher ones: their pixels would only add blur.
+    const float picked = st.vrScale > 0 ? std::clamp(st.vrScale, 0.3f, float(kMaxVrScale)) : QualityScale(st.vrQuality);
+    const float scale = m_slowPath ? std::min(picked, QualityScale("medium")) : picked;
     double eyeW = caps.recommendedEyeWidth * scale;
     double eyeH = caps.recommendedEyeHeight * scale;
+    // Matching SteamVR's resolution: SteamVR is told the headset's own size, applies its
+    // resolution setting to it, and the stream takes whatever it then renders at.
+    auto& bridge = App::Get().Bridge();
+    const bool match = st.matchSteamVr && !m_slowPath;
+    uint32_t renderW = 0, renderH = 0, seenW = 0, seenH = 0;
+    if (match) {
+        renderW = Align(caps.recommendedEyeWidth, 32);
+        renderH = Align(caps.recommendedEyeHeight, 32);
+        if (bridge.SteamVrEyeSize(seenW, seenH)) {
+            eyeW = seenW;
+            eyeH = seenH;
+        } else {
+            eyeW = renderW;  // until SteamVR's first frame
+            eyeH = renderH;
+        }
+        const double most = std::min(kMaxVrScale * caps.recommendedEyeWidth / eyeW, kMaxVrScale * caps.recommendedEyeHeight / eyeH);
+        if (most < 1.0) {
+            eyeW *= most;
+            eyeH *= most;
+        }
+    }
+    m_vrMatchedWidth = seenW;
+    m_vrMatchedHeight = seenH;
+    m_vrSeenWidth = m_vrSeenHeight = 0;
     const double maxTotalW = std::min<double>(caps.maxDecodeWidth, codec == rc::VideoCodec::H264 ? 4096 : 8192);
     const double maxH = std::min<double>(caps.maxDecodeHeight, codec == rc::VideoCodec::H264 ? 4096 : 8192);
     const double limit = std::min(maxTotalW / (eyeW * 2), maxH / eyeH);
@@ -684,8 +727,12 @@ void ClientSession::StartVr() {
     std::memcpy(dc.fovTan, caps.fovTan, sizeof(dc.fovTan));
     strncpy_s(dc.headsetModel, m_hello.model.empty() ? "Quest" : m_hello.model.c_str(), _TRUNCATE);
     strncpy_s(dc.headsetSerial, m_hello.deviceId.c_str(), _TRUNCATE);
+    dc.renderEyeWidth = renderW;
+    dc.renderEyeHeight = renderH;
+    RC_LOGI("VR stream: %ux%u per eye%s", dc.eyeWidth, dc.eyeHeight,
+            !match ? "" : seenW ? (", SteamVR renders " + std::to_string(seenW) + "x" + std::to_string(seenH)).c_str()
+                                : ", following SteamVR's resolution once it renders");
 
-    auto& bridge = App::Get().Bridge();
     const bool needsRestart = bridge.Configure(dc);
     bridge.SetHeadsetConnected(true);
 
@@ -705,6 +752,11 @@ void ClientSession::StartVr() {
     cfg.adaptiveQuant = pc.adaptiveQuantization;
     cfg.twoPass = pc.twoPassEncoding;
     cfg.motionField = st.frameGeneration;
+    if (st.gazeFoveation) {
+        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth);
+        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight);
+        RC_LOGI("VR stream: foveated, encoding %ux%u per eye", cfg.foveatedEyeWidth, cfg.foveatedEyeHeight);
+    }
     RC_LOGI("VR stream: %s bitrate, up to %u kbps%s", cfg.adaptive ? "adaptive" : "fixed", cfg.bitrateKbps,
             cfg.startBitrateKbps ? (", starting at " + std::to_string(cfg.startBitrateKbps) + " kbps").c_str() : "");
 
@@ -714,15 +766,16 @@ void ClientSession::StartVr() {
                                                 const std::string& app) {
                                              if (auto self = weak.lock()) self->NotifyVrState(state, producer, app);
                                          });
-    SendControl({{"type", rc::msg::kStreamConfig},
-                 {"kind", "vr"},
-                 {"streams",
-                  json::array({{{"streamId", rc::kVrStreamId},
-                                {"eyeWidth", cfg.eyeWidth},
-                                {"eyeHeight", cfg.eyeHeight},
-                                {"fps", cfg.fps},
-                                {"codec", int(cfg.codec)},
-                                {"tenBit", cfg.tenBit}}})}});
+    json vrStream = {{"streamId", rc::kVrStreamId},
+                     {"eyeWidth", cfg.eyeWidth},
+                     {"eyeHeight", cfg.eyeHeight},
+                     {"fps", cfg.fps},
+                     {"codec", int(cfg.codec)},
+                     {"tenBit", cfg.tenBit}};
+    // See rc::VrFoveationMetadata.
+    if (cfg.foveatedEyeWidth)
+        vrStream["foveation"] = {{"eyeWidth", cfg.foveatedEyeWidth}, {"eyeHeight", cfg.foveatedEyeHeight}, {"size", Foveator::kFoveaSize}};
+    SendControl({{"type", rc::msg::kStreamConfig}, {"kind", "vr"}, {"streams", json::array({vrStream})}});
     vr->Start();
     {
         std::lock_guard lock(m_mutex);
@@ -734,6 +787,31 @@ void ClientSession::StartVr() {
                      {"action", "vr.restartSteamVR"},
                      {"text", "Restart SteamVR to use the new resolution."}});
     }
+}
+
+// Matching SteamVR's resolution: once SteamVR renders at another size (its resolution setting
+// changed, or a game has its own) and stays there for a second, the stream restarts at it.
+void ClientSession::FollowSteamVrResolution() {
+    bool match;
+    {
+        std::lock_guard lock(m_mutex);
+        match = m_settings.matchSteamVr && !m_slowPath && m_vr;
+    }
+    uint32_t w = 0, h = 0;
+    if (!match || !App::Get().Bridge().SteamVrEyeSize(w, h)) return;
+    const auto similar = [](uint32_t a, uint32_t b) { return a > b ? a - b <= 16 : b - a <= 16; };
+    if (similar(w, m_vrMatchedWidth) && similar(h, m_vrMatchedHeight)) {
+        m_vrSeenWidth = m_vrSeenHeight = 0;
+        return;
+    }
+    if (!similar(w, m_vrSeenWidth) || !similar(h, m_vrSeenHeight)) {
+        m_vrSeenWidth = w;
+        m_vrSeenHeight = h;
+        return;
+    }
+    RC_LOGI("SteamVR now renders %ux%u per eye; restarting the VR stream at that size", w, h);
+    StopVr();
+    StartVr();
 }
 
 void ClientSession::StopVr() {

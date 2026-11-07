@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -15,6 +17,9 @@ json HeadsetSettings::ToJson() const {
             {"skyBrightness", skyBrightness},
             {"language", language},
             {"vrQuality", vrQuality},
+            {"vrScale", vrScale},
+            {"matchSteamVr", matchSteamVr},
+            {"gazeFoveation", gazeFoveation},
             {"autoConnect", autoConnect},
             {"usbCable", usbCable},
             {"refreshRate", refreshRate},
@@ -35,6 +40,7 @@ json HeadsetSettings::ToJson() const {
             {"streamAudio", streamAudio},
             {"micPassthrough", micPassthrough},
             {"volume", volume},
+            {"micVolume", micVolume},
             {"haptics", haptics},
             {"scrollSpeed", scrollSpeed},
             {"showStats", showStats},
@@ -66,6 +72,17 @@ void HeadsetSettings::FromJson(const json& j) {
     get("skyBrightness", skyBrightness);
     get("language", language);
     get("vrQuality", vrQuality);
+    // Settings from before the resolution slider: the preset's scale.
+    if (!j.contains("vrScale")) {
+        static const char* presets[] = {"low", "medium", "high", "ultra", "godlike"};
+        static const float scales[] = {0.6f, 0.75f, 0.9f, 1.f, 1.2f};
+        for (int i = 0; i < 5; i++)
+            if (vrQuality == presets[i]) vrScale = scales[i];
+    }
+    get("vrScale", vrScale);
+    SetVrScale(vrScale);
+    get("matchSteamVr", matchSteamVr);
+    get("gazeFoveation", gazeFoveation);
     get("autoConnect", autoConnect);
     get("usbCable", usbCable);
     get("refreshRate", refreshRate);
@@ -86,6 +103,8 @@ void HeadsetSettings::FromJson(const json& j) {
     get("streamAudio", streamAudio);
     get("micPassthrough", micPassthrough);
     get("volume", volume);
+    get("micVolume", micVolume);
+    micVolume = std::clamp(micVolume, 0.f, 2.f);
     get("haptics", haptics);
     get("scrollSpeed", scrollSpeed);
     get("showStats", showStats);
@@ -108,6 +127,9 @@ json HeadsetSettings::StreamSettingsJson() const {
     return {{"codec", codec},
             {"tenBit", tenBit},
             {"vrQuality", vrQuality},
+            {"vrScale", vrScale},
+            {"matchSteamVr", matchSteamVr},
+            {"gazeFoveation", gazeFoveation},
             {"autoConnect", autoConnect},
             {"frameGeneration", frameGeneration},
             {"refreshRate", refreshRate},

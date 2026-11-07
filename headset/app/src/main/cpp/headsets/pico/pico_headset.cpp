@@ -55,6 +55,8 @@ class PicoHeadset : public Headset {
     bool FaceSupported(const XrContext&) const override { return m_face.Supported(); }
     bool ReadFace(XrContext& xr, XrTime time, rc::FaceTrackingPayload& out) override { return m_face.Read(xr, time, out); }
     void StopFace() override { m_face.Stop(); }
+    // Eye tracking (PICO 4 Pro and Enterprise) through XR_EXT_eye_gaze_interaction.
+    std::vector<std::string> GazePermissions() const override { return {"com.picovr.permission.EYE_TRACKING"}; }
     std::vector<std::string> FacePermissions() const override {
         // The microphone too: PICO's face tracking listens to it.
         return {"com.picovr.permission.FACE_TRACKING", "com.picovr.permission.EYE_TRACKING", "android.permission.RECORD_AUDIO"};

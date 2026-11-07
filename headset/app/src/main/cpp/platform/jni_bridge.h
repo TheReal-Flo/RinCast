@@ -1,7 +1,11 @@
-// Calls into app.rincast.vr.MainActivity for services that have no NDK API.
+// Services the system provides: on Android, calls into app.rincast.vr.MainActivity for those that
+// have no NDK API (jni_bridge.cpp); on Linux (the Steam Frame), platform_linux.cpp.
 #pragma once
 
+#ifdef __ANDROID__
 #include <jni.h>
+#endif
+#include <cstdint>
 
 #include <string>
 #include <vector>
@@ -17,9 +21,11 @@ struct HttpResult {
 
 class Platform {
    public:
-    static void Init(android_app* app);
+    static void Init(android_app* app);  // null on Linux
+#ifdef __ANDROID__
     static JavaVM* Vm();
     static jobject Activity();
+#endif
 
     static std::string DeviceId();
     static std::string DeviceModel();
@@ -47,6 +53,7 @@ class Platform {
                            const std::string& bearer, int timeoutMs);
 };
 
+#ifdef __ANDROID__
 // Attaches the calling native thread to the JVM for the scope's lifetime.
 class JniScope {
    public:
@@ -58,5 +65,6 @@ class JniScope {
     JNIEnv* m_env = nullptr;
     bool m_attached = false;
 };
+#endif
 
 }  // namespace rv

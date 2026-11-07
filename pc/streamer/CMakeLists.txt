@@ -18,6 +18,7 @@ add_executable(rincast-streamer WIN32
   src/stream/video_sender.cpp
   src/stream/desktop_stream.cpp
   src/stream/vr_stream.cpp
+  src/stream/foveator.cpp
   src/stream/motion_estimator.cpp
   src/net/stream_server.cpp
   src/net/port_mapper.cpp

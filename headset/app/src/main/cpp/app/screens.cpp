@@ -559,20 +559,20 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     const float gap = 44, w = (body.w - gap) / 2;
     Column l{body.x, body.y, w};
     Section(ui, l, Tr("vr.imageSection"));
-    Label(ui, l, Tr("vr.qualityLabel"));
-    static const char* qn[] = {"quality.low", "quality.medium", "quality.high", "quality.ultra", "quality.max"};
-    static const char* qk[] = {"low", "medium", "high", "ultra", "godlike"};
-    static const float qs[] = {0.6f, 0.75f, 0.9f, 1.f, 1.2f};
-    for (int i = 0; i < 5; i++) {
-        const std::string id = std::string("quality#") + qk[i];
-        const std::string res = PixelSize(int(app.Xr().RecommendedWidth() * qs[i]), int(app.Xr().RecommendedHeight() * qs[i]));
-        ui.NextLabel(Tr("vr.qualityA11y"));
-        if (ui.Radio(id.c_str(), {l.x - 8, l.y, l.w + 8, 44}, Tr(qn[i]), s.vrQuality == qk[i], res)) {
-            s.vrQuality = qk[i];
-            changed = true;
-        }
-        l.y += 45;
+    // Pixels per eye, against the headset's own. Each change restarts the stream (and may ask
+    // for a SteamVR restart), so it's applied when the handle is let go.
+    static float dragScale = -1;
+    float scale = dragScale >= 0 ? dragScale : s.vrScale;
+    const std::string pixels = PixelSize(int(app.Xr().RecommendedWidth() * scale), int(app.Xr().RecommendedHeight() * scale));
+    if (BarRow(ui, l, "resolution", Tr("vr.resolution"), scale, kMinVrScale, kMaxVrScale, 0.05f,
+               s.matchSteamVr ? std::string(Tr("vr.sameAsSteamVr")) : Percent(scale) + ", " + pixels, !s.matchSteamVr, 1.f))
+        dragScale = scale;
+    if (dragScale >= 0 && !ui.IsHeld("resolution")) {
+        s.SetVrScale(dragScale);
+        dragScale = -1;
+        changed = true;
     }
+    changed |= CheckRow(ui, l, "match-steamvr", Tr("vr.matchSteamVr"), s.matchSteamVr, Tr("vr.matchSteamVrHint"));
     l.y += 14;
     Label(ui, l, Tr("vr.fpsLabel"));
     std::vector<std::string> rates;
@@ -603,6 +603,9 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         changed = true;
     }
     changed |= CheckRow(ui, l, "10bit", Tr("vr.tenBit"), s.tenBit, ci == 3 ? Tr("vr.needsHevcAv1") : "", ci != 3);
+    Section(ui, l, Tr("vr.enhancements"));
+    changed |= CheckRow(ui, l, "upscaling", Tr("vr.upscaling"), s.upscaling, Tr("vr.upscalingHint"));
+    changed |= CheckRow(ui, l, "framegen", Tr("vr.frameGen"), s.frameGeneration, Tr("vr.frameGenHint"));
 
     Column c{body.x + w + gap, body.y, w};
     Section(ui, c, Tr("vr.bitrateSection"));
@@ -621,9 +624,6 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         changed = true;
     }
     changed |= CheckRow(ui, c, "adaptive", Tr("vr.adaptive"), s.adaptiveBitrate);
-    Section(ui, c, Tr("vr.enhancements"));
-    changed |= CheckRow(ui, c, "upscaling", Tr("vr.upscaling"), s.upscaling, Tr("vr.upscalingHint"));
-    changed |= CheckRow(ui, c, "framegen", Tr("vr.frameGen"), s.frameGeneration, Tr("vr.frameGenHint"));
     Section(ui, c, Tr("vr.tracking"));
     // The Quest can't run body and finger tracking together, so there each turns the other off.
     Headset& device = app.Device();
@@ -649,6 +649,8 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     changed |= CheckRow(ui, c, "handsgames", Tr("vr.handsInGames"), s.handsInGames, Tr("vr.handsHint"));
     if (device.FaceSupported(app.Xr()))
         changed |= CheckRow(ui, c, "face", Tr("vr.faceTracking"), s.faceTracking, device.FaceHint());
+    if (app.GazeSupported())
+        changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation, Tr("vr.foveatedHint"));
     return changed;
 }
 
@@ -773,6 +775,12 @@ bool PageGeneral(Ui& ui, const Rect& body) {
                             : Trf("general.micPermission", {{"where", std::string(app.Device().SettingsName())}}),
                  micAllowed)) {
         s.micPassthrough = mic;
+        changed = true;
+    }
+    l.y += 8;
+    float mv = s.micVolume;
+    if (BarRow(ui, l, "micvolume", Tr("general.micVolume"), mv, 0, 2, 0.05f, Percent(s.micVolume), mic, 1.f)) {
+        s.micVolume = mv;
         changed = true;
     }
     Section(ui, l, Tr("general.controllersSection"));

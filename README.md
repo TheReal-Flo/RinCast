@@ -14,10 +14,15 @@ through SteamVR. There's no subscription and no store purchase.
 
 - Windows 10 or 11, 64-bit, with an NVIDIA, AMD or Intel GPU that can encode video.
 - [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (already included with Windows 11 and most Windows 10 PCs).
-- Meta Quest 3, with [developer mode](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) on to install the app.
+- Meta Quest 3, Quest 3S, Quest Pro or Quest 2, with [developer mode](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) on to install the app.
   PICO 4 and PICO 4 Ultra work with the same app (not tested on a PICO yet): turn on USB debugging
   under **Settings > General > About** (tap **Software Version** seven times), then
   **Developer > USB Debug**.
+  The Quest 1 needs its own build, `RinCast-<version>-quest1.apk` (not tested on a Quest 1 yet).
+  The Samsung Galaxy XR runs the standard build (not tested on one yet): turn on developer options
+  and USB debugging, and allow hand tracking when RinCast asks.
+  The Steam Frame has an experimental native app, built from source for now: see
+  [headset/linux](headset/linux/README.md).
 - For VR games: Steam and SteamVR.
 - A good network: the PC on Ethernet and the headset on 5 GHz or 6 GHz Wi-Fi works best.
 
@@ -113,8 +118,10 @@ Compared with [Virtual Desktop](https://www.vrdesktop.net/), these are still mis
 - Body tracking as SteamVR trackers, and PICO Motion Trackers
 - Hand and finger tracking in PC games
 - Face and eye tracking for VRCFaceTracking
+- Foveated encoding that follows the eyes
+- Matching SteamVR's resolution
 - The USB cable connection
-- Everything on PICO headsets
+- Everything on PICO headsets, the Quest 1, the Galaxy XR and the Steam Frame
 
 **Picture and smoothness**
 
@@ -125,7 +132,6 @@ Compared with [Virtual Desktop](https://www.vrdesktop.net/), these are still mis
 
 **Tracking**
 
-- Foveated streaming with eye tracking
 - A stage tracking option for mixed setups with real trackers
 
 **Games**
@@ -149,7 +155,8 @@ Compared with [Virtual Desktop](https://www.vrdesktop.net/), these are still mis
 
 **Platforms**
 
-- Headsets other than Quest 3 and PICO 4
+- Headsets other than Meta Quest, PICO, the Samsung Galaxy XR and the Steam Frame
+- A ready-made Steam Frame download (it's built from source for now)
 - Streaming from Linux. Desktop streaming is planned first; PC VR on Linux would go through
   a Monado-based runtime, the way WiVRn does it, because SteamVR on Linux can't hand frames to
   a driver.
