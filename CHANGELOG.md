@@ -7,10 +7,10 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 ### Added
 
 - A language for the Streamer UI, under General > Language. It follows Windows' language out of
-  the box, and English, 简体中文, Deutsch, Español, Français and 日本語 can be picked directly.
+  the box, and English, 简体中文, 繁體中文, Deutsch, Español, Français and 日本語 can be picked directly.
   The choice is remembered across restarts. New languages only need a dictionary in
   `pc/streamer/ui/i18n.js`.
-- A language for the headset's menus, under General > Interface > Language, with the same six
+- A language for the headset's menus, under General > Interface > Language, with the same seven
   choices. It follows the headset's system language out of the box. The text atlas now also
   carries the Chinese and Japanese characters the menus use, baked from Noto Sans SC
   (`tools/assetbaker` reads `assets/ui/charset.txt`), and wrapped text breaks within Chinese and
