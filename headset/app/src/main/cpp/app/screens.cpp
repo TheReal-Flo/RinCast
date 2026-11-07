@@ -745,7 +745,11 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     HeadsetSettings& s = app.Settings();
     bool changed = false;
     const float gap = 44, w = (body.w - gap) / 2;
-    Column l{body.x, body.y, w};
+    // The page fit exactly until the language row arrived; a longer language scrolls now.
+    // The content height comes from the frame before: layout only moves when the language does.
+    static float contentBottom = 0;
+    const float scroll = ui.BeginScroll("general", body, std::max(0.f, contentBottom - body.y));
+    Column l{body.x, body.y - scroll, w};
     Section(ui, l, Tr("general.audioSection"));
     changed |= CheckRow(ui, l, "audio", Tr("general.playSound"), s.streamAudio);
     l.y += 8;
@@ -780,7 +784,7 @@ bool PageGeneral(Ui& ui, const Rect& body) {
         changed = true;
     }
 
-    Column c{body.x + w + gap, body.y, w};
+    Column c{body.x + w + gap, body.y - scroll, w};
     Section(ui, c, Tr("general.connectingSection"));
     changed |= CheckRow(ui, c, "autoconnect", Tr("general.autoConnect"), s.autoConnect, Tr("general.autoConnectHint"));
     {
@@ -818,7 +822,9 @@ bool PageGeneral(Ui& ui, const Rect& body) {
         changed = true;
     }
     c.y += 4;
-    // The language, named in its own words so it's findable in any UI.
+    // The language, named in its own words so it's findable in any UI. What's selected is
+    // the stored choice: with "auto", the radio stays on "auto" even though the resolved
+    // language is a concrete one.
     Label(ui, c, Tr("general.language"));
     size_t langCount = 0;
     const auto* langs = LanguageChoices(langCount);
@@ -826,20 +832,20 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     int langI = 0;
     for (size_t i = 0; i < langCount; i++) {
         langNames.push_back(langs[i].name);
-        if (Language() == langs[i].code) langI = int(i) + 1;
+        if (s.language == langs[i].code) langI = int(i) + 1;
     }
     // Index 0 is "auto", which follows the headset's system language.
     langNames.insert(langNames.begin(), Tr("language.auto"));
     if (RadioLine(ui, c, "language", Tr("general.language"), langNames, langI)) {
-        if (langI == 0) {
-            s.language = "auto";
-        } else {
-            s.language = langs[size_t(langI) - 1].code;
-        }
+        s.language = langI == 0 ? "auto" : langs[size_t(langI) - 1].code;
         SetLanguage(s.language, Platform::SystemLocale());
         app.SaveSettings();
         changed = true;
     }
+    // Hand the measured content height to the next frame, for the scroll range.
+    // The columns start scrolled, so their end positions come back up by the offset.
+    contentBottom = std::max(l.y, c.y) + scroll;
+    ui.EndScroll();
     return changed;
 }
 

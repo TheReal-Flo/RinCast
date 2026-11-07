@@ -8,6 +8,7 @@
 
 #include "app/latency.h"
 #include "app/settings.h"
+#include "app/strings.h"
 #include "platform/jni_bridge.h"
 #include "gfx/sky.h"
 #include "gfx/ui_renderer.h"
@@ -98,15 +99,15 @@ class XrContext {
 class Headset {
    public:
     bool pico = false;
-    const char* SettingsName() const { return pico ? "PICO's settings" : "Quest settings"; }
+    const char* SettingsName() const { return pico ? Tr("device.pico.settings") : Tr("device.quest.settings"); }
     bool BodySupported(const XrContext&) const { return true; }
-    const char* BodyHint() const { return pico ? "With PICO Motion Trackers" : nullptr; }
-    std::string BodyStatus() const { return pico ? "3 Motion Trackers. Turn it on standing up" : ""; }
+    const char* BodyHint() const { return pico ? Tr("device.pico.bodyHint") : nullptr; }
+    std::string BodyStatus() const { return pico ? Trf("device.pico.trackerMany", {{"n", "3"}}) : ""; }
     bool BodyExcludesFingers() const { return !pico; }
-    const char* BodyAction() const { return pico ? "Calibrate" : nullptr; }
+    const char* BodyAction() const { return pico ? Tr("btn.restart") : nullptr; }
     void RunBodyAction(XrContext&) {}
     bool FaceSupported(const XrContext&) const { return true; }
-    const char* FaceHint() const { return "For avatars, through VRCFaceTracking on the PC"; }
+    const char* FaceHint() const { return Tr("device.faceHint"); }
 };
 
 class XrInput {
