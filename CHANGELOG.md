@@ -2,6 +2,14 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- Native macOS desktop streamer (`mac/`), capturing displays via ScreenCaptureKit,
+  encoding video with VideoToolbox hardware acceleration (HEVC / H.264), streaming system
+  audio via Opus, and supporting remote mouse and keyboard input.
+
 ## 1.1.2 - 2026-11-07
 
 Only the Quest 1 APK (`-quest1`) changed; everything else is 1.1.1 with a new version number.
