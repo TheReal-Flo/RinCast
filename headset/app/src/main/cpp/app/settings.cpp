@@ -34,6 +34,7 @@ json HeadsetSettings::ToJson() const {
             {"frameGeneration", frameGeneration},
             {"bodyTracking", bodyTracking},
             {"faceTracking", faceTracking},
+            {"fixedPlaySpace", fixedPlaySpace},
             {"handsInGames", handsInGames},
             {"fingersWithControllers", fingersWithControllers},
             {"screenDistance", screenDistance},
@@ -97,6 +98,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("frameGeneration", frameGeneration);
     get("bodyTracking", bodyTracking);
     get("faceTracking", faceTracking);
+    get("fixedPlaySpace", fixedPlaySpace);
     get("handsInGames", handsInGames);
     get("fingersWithControllers", fingersWithControllers);
     get("screenDistance", screenDistance);

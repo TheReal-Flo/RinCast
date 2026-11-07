@@ -47,7 +47,8 @@ struct Route {
 Route ResolveRoute(const std::string& preference);
 
 // Makes the route's endpoints the Windows defaults (remembering the previous
-// ones) and restores them later.
+// ones, also on disk) and restores them later. RestoreDefaults at start-up puts
+// back what a killed streamer couldn't.
 void SwitchDefaults(const Route& route, bool speaker, bool microphone);
 void RestoreDefaults();
 

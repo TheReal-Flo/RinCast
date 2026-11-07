@@ -1169,6 +1169,8 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     void TrackingLoop() {
         int64_t lastPushed = 0;
         LONG configGeneration = -1;
+        rcvr::TrackingSnapshot previous{};
+        int jumpLogs = 0;
         int64_t lastFrameReportNs = rcvr::QpcNowNs();
         while (m_running) {
             if (!m_hmd || !g_shared->bridge.shared()) {
@@ -1194,6 +1196,20 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             const bool connected = s->headsetConnected != 0 && g_shared->bridge.StreamerAlive();
             if (have && t.sequence != uint64_t(lastPushed)) {
                 lastPushed = int64_t(t.sequence);
+                // Headset positions that jump: no head moves 10 cm between two samples a few ms
+                // apart, so the headset's space moved (a recenter, or its tracking catching up).
+                // Lighthouse trackers calibrated against the headset slide out of place then.
+                if ((t.flags & 1) && (previous.flags & 1) && t.receivedPcNs - previous.receivedPcNs < 100'000'000) {
+                    const double dx = t.hmd.position[0] - previous.hmd.position[0], dy = t.hmd.position[1] - previous.hmd.position[1],
+                                 dz = t.hmd.position[2] - previous.hmd.position[2];
+                    const double moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (moved > 0.10 && jumpLogs < 50) {
+                        jumpLogs++;
+                        Log("Headset position jumped %.0f cm between two samples %.0f ms apart", moved * 100,
+                            double(t.receivedPcNs - previous.receivedPcNs) / 1e6);
+                    }
+                }
+                previous = t;
                 // Controllers carry velocities (games need them, e.g. for throwing), so SteamVR
                 // extrapolates them from the time poseTimeOffset says they are for to the
                 // time it predicts for when a game asks. The headset already predicted them

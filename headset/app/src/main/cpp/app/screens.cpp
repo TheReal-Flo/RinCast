@@ -793,6 +793,12 @@ bool PageGeneral(Ui& ui, const Rect& body) {
         s.scrollSpeed = sp;
         changed = true;
     }
+    // SteamVR's play space; on the VR quality page there's no room. (PICO always uses the
+    // stage, where its trackers are.)
+    if (!app.Device().PreferStageSpace()) {
+        Section(ui, l, Tr("vr.tracking"));
+        changed |= CheckRow(ui, l, "fixed-space", Tr("vr.fixedSpace"), s.fixedPlaySpace, Tr("vr.fixedSpaceHint"));
+    }
 
     Column c{body.x + w + gap, body.y - scroll, w};
     Section(ui, c, Tr("general.connectingSection"));
@@ -1380,12 +1386,21 @@ void BuildVrOverlay(Ui& ui, const Rect& r) {
     Background(ui, r);
     const float pad = 24;
     R.TextIn(app.VrStateText(), {r.x + pad, r.y + 14, r.w - 400, 54}, 30, kText, Face::SemiBold);
+    // The same menu opens on the desktop while SteamVR runs (double-press the menu button),
+    // with the way back to VR in place of the way out of it.
+    const bool inVr = app.CurrentMode() == Mode::Vr;
+    const std::string close = inVr ? Tr("btn.resume") : Tr("btn.hideMenu");
+    const float cw = std::max(120.f, ButtonWidth(ui, close));
     const auto s = app.CurrentStats();
-    if (s.latencyMs > 0) R.TextIn(Trf("dock.latency", {{"ms", FormatMs(s.latencyMs)}}), {r.Right() - 390, r.y + 14, 230, 54}, 21, kMuted, Face::Medium, Align::Right);
-    if (ui.Button("close", {r.Right() - pad - 120, r.y + 14, 120, 54}, Tr("btn.resume"), nullptr, ButtonStyle::Primary)) app.ToggleWindow("vr-overlay", false);
+    if (s.latencyMs > 0) R.TextIn(Trf("dock.latency", {{"ms", FormatMs(s.latencyMs)}}), {r.Right() - pad - cw - 246, r.y + 14, 230, 54}, 21, kMuted, Face::Medium, Align::Right);
+    if (ui.Button("close", {r.Right() - pad - cw, r.y + 14, cw, 54}, close, nullptr, ButtonStyle::Primary))
+        app.ToggleWindow("vr-overlay", false);
     // Left-aligned with the title, in the order you're likely to need them.
     ButtonRow b{r.x + pad, r.y + 88};
-    if (b.Add(ui, "desktop", Tr("btn.backToDesktop"))) app.ExitVr();
+    if (inVr ? b.Add(ui, "desktop", Tr("btn.backToDesktop")) : b.Add(ui, "back-to-vr", app.VrRunning() ? Tr("btn.backToVr") : Tr("btn.startSteamvr"))) {
+        if (inVr) app.ExitVr();
+        else app.LaunchSteamVr();
+    }
     if (b.Add(ui, "recenter", Tr("btn.recenter"))) app.Recenter();
     if (b.Add(ui, "stats", app.Settings().showStats ? Tr("vrOverlay.hidePerf") : Tr("vrOverlay.showPerf"))) {
         app.Settings().showStats = !app.Settings().showStats;

@@ -140,6 +140,8 @@ const Entry kEn[] = {
     {"vr.handsInGames", "Hands in games"},
     {"vr.handsHint", "Pinch for the trigger, fist to grab"},
     {"vr.faceTracking", "Face tracking"},
+    {"vr.fixedSpace", "Fixed play space"},
+    {"vr.fixedSpaceHint", "For Space Calibrator: recentering won't move it"},
     {"vr.foveated", "Foveated encoding"},
     {"vr.foveatedHint", "Full detail only where you look: half the data"},
 
@@ -406,6 +408,8 @@ const Entry kZhCN[] = {
     {"vr.handsInGames", "游戏中使用双手"},
     {"vr.handsHint", "捏合=扳机,握拳=抓取"},
     {"vr.faceTracking", "面部追踪"},
+    {"vr.fixedSpace", "固定游玩空间"},
+    {"vr.fixedSpaceHint", "用于 Space Calibrator:重新居中不会移动它"},
     {"vr.foveated", "注视点编码"},
     {"vr.foveatedHint", "只有注视的地方保留全部细节,数据量减半"},
 
@@ -672,6 +676,8 @@ const Entry kZhTW[] = {
     {"vr.handsInGames", "遊戲中使用雙手"},
     {"vr.handsHint", "捏合=扳機，握拳=抓取"},
     {"vr.faceTracking", "臉部追蹤"},
+    {"vr.fixedSpace", "固定遊玩空間"},
+    {"vr.fixedSpaceHint", "用於 Space Calibrator：重新置中不會移動它"},
     {"vr.foveated", "注視點編碼"},
     {"vr.foveatedHint", "只有注視的地方保留完整細節，資料量減半"},
 
@@ -938,6 +944,8 @@ const Entry kDe[] = {
     {"vr.handsInGames", "Hände in Spielen"},
     {"vr.handsHint", "Ziehen für Trigger, Faust zum Greifen"},
     {"vr.faceTracking", "Face-Tracking"},
+    {"vr.fixedSpace", "Fester Spielbereich"},
+    {"vr.fixedSpaceHint", "Für Space Calibrator: Neuzentrieren verschiebt ihn nicht"},
     {"vr.foveated", "Foveated Encoding"},
     {"vr.foveatedHint", "Volle Details nur, wo du hinsiehst: halbe Datenmenge"},
 
@@ -1204,6 +1212,8 @@ const Entry kEs[] = {
     {"vr.handsInGames", "Manos en juegos"},
     {"vr.handsHint", "Pellizca para el gatillo, puño para agarrar"},
     {"vr.faceTracking", "Seguimiento facial"},
+    {"vr.fixedSpace", "Espacio de juego fijo"},
+    {"vr.fixedSpaceHint", "Para Space Calibrator: recentrar no lo mueve"},
     {"vr.foveated", "Codificación foveada"},
     {"vr.foveatedHint", "Todo el detalle solo donde miras: la mitad de datos"},
 
@@ -1470,6 +1480,8 @@ const Entry kFr[] = {
     {"vr.handsInGames", "Mains dans les jeux"},
     {"vr.handsHint", "Pincez pour la gâchette, poing pour saisir"},
     {"vr.faceTracking", "Suivi du visage"},
+    {"vr.fixedSpace", "Espace de jeu fixe"},
+    {"vr.fixedSpaceHint", "Pour Space Calibrator : recentrer ne le déplace pas"},
     {"vr.foveated", "Encodage fovéal"},
     {"vr.foveatedHint", "Tous les détails seulement là où vous regardez : deux fois moins de données"},
 
@@ -1736,6 +1748,8 @@ const Entry kJa[] = {
     {"vr.handsInGames", "ゲーム内で手を使用"},
     {"vr.handsHint", "トリガーはピンチ、つかむのは握りこみ"},
     {"vr.faceTracking", "フェイストラッキング"},
+    {"vr.fixedSpace", "プレイエリアを固定"},
+    {"vr.fixedSpaceHint", "Space Calibrator 用:中央に戻しても動きません"},
     {"vr.foveated", "中心窩エンコード"},
     {"vr.foveatedHint", "見ている所だけ高精細。データ量は約半分"},
 

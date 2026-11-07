@@ -5,6 +5,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
@@ -231,25 +232,9 @@ bool XrContext::CreateSession(bool preferStage) {
     sci.systemId = m_system;
     XR_CHECK(xrCreateSession(m_instance, &sci, &m_session));
 
-    // Prefer a floor-level space so SteamVR games get correct heights.
-    uint32_t n = 0;
-    xrEnumerateReferenceSpaces(m_session, 0, &n, nullptr);
-    std::vector<XrReferenceSpaceType> spaces(n);
-    xrEnumerateReferenceSpaces(m_session, n, &n, spaces.data());
-    auto has = [&](XrReferenceSpaceType t) { return std::find(spaces.begin(), spaces.end(), t) != spaces.end(); };
+    m_preferStage = preferStage;
+    if (!CreateAppSpace()) return false;
     XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
-    rs.poseInReferenceSpace.orientation.w = 1;
-    if (preferStage && has(XR_REFERENCE_SPACE_TYPE_STAGE))
-        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
-    else if (has(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT))
-        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT;
-    else if (has(XR_REFERENCE_SPACE_TYPE_STAGE))
-        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
-    else {
-        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
-        rs.poseInReferenceSpace.position.y = -1.6f;  // approximate floor
-    }
-    XR_CHECK(xrCreateReferenceSpace(m_session, &rs, &m_appSpace));
     rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     rs.poseInReferenceSpace = {};
     rs.poseInReferenceSpace.orientation.w = 1;
@@ -316,6 +301,47 @@ bool XrContext::Init(android_app* app, const std::vector<const char*>& extension
     return InitEgl() && CreateInstance(app, extensions);
 }
 
+// Prefer a floor-level space so SteamVR games get correct heights. The local floor follows
+// the user: recentering (or the runtime doing it) moves it, and with it everything SteamVR
+// sees. The stage stays with the play area, which other tracking systems calibrated against
+// the headset (Lighthouse trackers through Space Calibrator) need.
+bool XrContext::CreateAppSpace() {
+    uint32_t n = 0;
+    xrEnumerateReferenceSpaces(m_session, 0, &n, nullptr);
+    std::vector<XrReferenceSpaceType> spaces(n);
+    xrEnumerateReferenceSpaces(m_session, n, &n, spaces.data());
+    auto has = [&](XrReferenceSpaceType t) { return std::find(spaces.begin(), spaces.end(), t) != spaces.end(); };
+    XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    rs.poseInReferenceSpace.orientation.w = 1;
+    if (m_preferStage && has(XR_REFERENCE_SPACE_TYPE_STAGE))
+        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+    else if (has(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT))
+        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT;
+    else if (has(XR_REFERENCE_SPACE_TYPE_STAGE))
+        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+    else {
+        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        rs.poseInReferenceSpace.position.y = -1.6f;  // approximate floor
+    }
+    if (m_appSpace && rs.referenceSpaceType == m_appSpaceType) return true;
+    XrSpace space = XR_NULL_HANDLE;
+    XR_CHECK(xrCreateReferenceSpace(m_session, &rs, &space));
+    if (m_appSpace) {
+        xrDestroySpace(m_appSpace);
+        m_spaceGeneration++;  // like a recenter: windows are placed again
+    }
+    m_appSpace = space;
+    m_appSpaceType = rs.referenceSpaceType;
+    RC_LOGI("App space: %s", m_appSpaceType == XR_REFERENCE_SPACE_TYPE_STAGE ? "stage" : m_appSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT ? "local floor" : "local");
+    return true;
+}
+
+void XrContext::SetPreferStage(bool stage) {
+    if (!m_session || stage == m_preferStage) return;
+    m_preferStage = stage;
+    CreateAppSpace();
+}
+
 bool XrContext::StartSession(bool preferStage, bool velocitiesFromPoses) {
     m_velocitiesFromPoses = velocitiesFromPoses;
     return CreateSession(preferStage);
@@ -368,9 +394,14 @@ bool XrContext::PollEvents() {
                 if (e->state == XR_SESSION_STATE_EXITING || e->state == XR_SESSION_STATE_LOSS_PENDING) return false;
                 break;
             }
-            case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
+            case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
+                const auto* e = reinterpret_cast<XrEventDataReferenceSpaceChangePending*>(&ev);
+                const XrVector3f& p = e->poseInPreviousSpace.position;
+                RC_LOGI("Reference space %d moved by %.2f m (recentered)%s", int(e->referenceSpaceType),
+                        std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z), e->referenceSpaceType == m_appSpaceType ? ", SteamVR's too" : "");
                 m_spaceGeneration++;
                 break;
+            }
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
                 return false;
             default:

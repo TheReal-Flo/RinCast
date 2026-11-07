@@ -91,6 +91,22 @@ void Platform::Init(android_app*) {
 std::string Platform::DeviceId() { return g_deviceId; }
 std::string Platform::DeviceModel() { return g_model; }
 std::string Platform::FilesDir() { return g_filesDir; }
+// The language from the environment as a BCP 47 tag, like Android gives it: de_DE.UTF-8 -> de-DE,
+// zh_TW -> zh-TW. Empty (and so English) for C and POSIX.
+std::string Platform::SystemLocale() {
+    const char* vars[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
+    for (const char* v : vars) {
+        const char* value = std::getenv(v);
+        if (!value || !*value) continue;
+        std::string tag(value);
+        tag = tag.substr(0, tag.find_first_of(".@"));
+        if (tag == "C" || tag == "POSIX") return "";
+        for (char& c : tag)
+            if (c == '_') c = '-';
+        return tag;
+    }
+    return "";
+}
 bool Platform::HasMicPermission() { return true; }  // no runtime permissions on SteamOS
 void Platform::SetStreamingLocks(bool) {}
 void Platform::PlaySound(Sound) {}

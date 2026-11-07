@@ -100,6 +100,7 @@ class Headset {
    public:
     bool pico = false;
     const char* SettingsName() const { return pico ? Tr("device.pico.settings") : Tr("device.quest.settings"); }
+    bool PreferStageSpace() const { return pico; }
     bool BodySupported(const XrContext&) const { return true; }
     const char* BodyHint() const { return pico ? Tr("device.pico.bodyHint") : nullptr; }
     std::string BodyStatus() const { return pico ? Trf("device.pico.trackerMany", {{"n", "3"}}) : ""; }
@@ -193,7 +194,8 @@ class App {
     void RequestGames() {}
     void RequestGameImage(GameInfo&) {}
     std::string VrStateText() const { return vrState; }
-    bool VrRunning() const { return false; }
+    bool vrRunning = false;
+    bool VrRunning() const { return vrRunning; }
     Platform::UsbNetwork usb;
     const Platform::UsbNetwork& UsbNetwork() const { return usb; }
     void SetUsbCable(bool on) { settings.usbCable = on; }

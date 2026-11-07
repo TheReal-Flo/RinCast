@@ -142,7 +142,7 @@ void App::Init() {
         m_client.SetIdentity(seed);
     }
     if (!m_xr.Init(m_android, Headset::Extensions()) || !(m_headset = Headset::Create(m_xr)) ||
-        !m_xr.StartSession(m_headset->PreferStageSpace(), m_headset->VelocitiesFromPoses())) {
+        !m_xr.StartSession(m_headset->PreferStageSpace() || m_settings.fixedPlaySpace, m_headset->VelocitiesFromPoses())) {
         RC_LOGE("OpenXR initialization failed");
         m_exit = true;
         return;
@@ -371,7 +371,6 @@ void App::LaunchGame(const std::string& id) {
 
 void App::ExitVr() {
     m_client.SendControl({{"type", rc::msg::kStopVr}});
-    m_vrOverlay = false;
     EnterMode(Mode::Desktop);
 }
 
@@ -525,6 +524,8 @@ void App::ToggleWindow(const std::string& id, bool show) {
         }
     }
     w->visible = show;
+    // In VR the controllers go to RinCast instead of the game while it's open, however it closes.
+    if (id == "vr-overlay") m_vrOverlay = show && m_mode == Mode::Vr;
 }
 
 void App::ShowMonitors(bool show) {
@@ -556,6 +557,7 @@ void App::EnterMode(Mode m) {
         case Mode::Desktop:
             ToggleWindow("home", false);
             ToggleWindow("launch", false);
+            ToggleWindow("vr-overlay", false);
             ToggleWindow("dock", true);
             if (m_settings.showStats) ToggleWindow("stats", true);
             m_arrival = 0;
@@ -1007,6 +1009,9 @@ void App::Frame() {
     m_time += dt;
 
     FrameState frame;
+    // Lighthouse trackers calibrated against the headset (Space Calibrator) need a space that
+    // stays put; the local floor moves whenever the headset recenters.
+    m_xr.SetPreferStage(m_headset->PreferStageSpace() || m_settings.fixedPlaySpace);
     if (!m_xr.BeginFrame(frame)) return;
     g_lastFrame = frame;
     g_haveFrame = true;
@@ -1104,16 +1109,22 @@ void App::UpdateInput(const FrameState& frame, float dt) {
         r.scroll = std::fabs(in.thumbstick.y) > 0.15f ? in.thumbstick.y * m_settings.scrollSpeed : 0.f;
         r.push = in.thumbstick.y;
 
-        // Left menu: toggle the dock (desktop) / double-press opens the VR overlay.
+        // Left menu: toggle the dock (desktop) / double-press opens the VR overlay. On the
+        // desktop while SteamVR runs, a double-press opens the same small menu, with "Back to
+        // VR" where it has "Back to desktop" in VR: one gesture and one menu both ways.
         if (in.menu && !m_handState[h].menu) {
-            const int64_t now = rc::NowNs();
+            int64_t now = rc::NowNs();
+            const bool twice = now - m_lastMenuPressNs < 450'000'000LL;
             if (m_mode == Mode::Vr) {
-                if (now - m_lastMenuPressNs < 450'000'000LL) {
-                    m_vrOverlay = !m_vrOverlay;
-                    ToggleWindow("vr-overlay", m_vrOverlay);
-                }
+                if (twice) ToggleWindow("vr-overlay", !m_vrOverlay);
             } else if (m_mode == Mode::Desktop) {
-                ToggleWindow("dock");
+                if (twice && VrRunning()) {
+                    ToggleWindow("dock");  // undo the first press
+                    ToggleWindow("vr-overlay", !IsVisible("vr-overlay"));
+                    now = 0;  // a third press starts over
+                } else {
+                    ToggleWindow("dock");
+                }
             } else {
                 screens::ToggleMenu(*this);
             }
@@ -1129,8 +1140,7 @@ void App::UpdateInput(const FrameState& frame, float dt) {
         m_abHeld = held ? m_abHeld + dt : 0.f;
         if (before < 0.6f && m_abHeld >= 0.6f) {
             if (m_mode == Mode::Vr) {
-                m_vrOverlay = !m_vrOverlay;
-                ToggleWindow("vr-overlay", m_vrOverlay);
+                ToggleWindow("vr-overlay", !m_vrOverlay);
             } else if (m_mode == Mode::Desktop) {
                 ToggleWindow("dock");
             } else {

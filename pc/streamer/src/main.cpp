@@ -10,6 +10,7 @@
 
 #include "WebView2.h"
 #include "app.h"
+#include "audio/audio.h"
 #include "rc/platform.h"
 #include "resource.h"
 #include "settings.h"
@@ -275,6 +276,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
     g_instance = instance;
+    // The uninstaller: put back the default audio devices a killed streamer had switched.
+    if (cmdLine && wcsstr(cmdLine, L"--restore-audio-defaults")) {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        audio::RestoreDefaults();
+        return 0;
+    }
     HANDLE singleton = CreateMutexW(nullptr, TRUE, L"Local\\RinCast.Streamer.Singleton");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) PostMessageW(existing, WM_APP_SHOW, 0, 0);

@@ -104,6 +104,8 @@ class XrContext {
     XrInstance Instance() const { return m_instance; }
     XrSession Session() const { return m_session; }
     XrSpace AppSpace() const { return m_appSpace; }
+    // The stage rather than the local floor, when the runtime has one. Between frames only.
+    void SetPreferStage(bool stage);
     XrSpace ViewSpace() const { return m_viewSpace; }
     XrSystemId System() const { return m_system; }
     int EyeWidth() const { return m_eyes[0].width; }
@@ -124,6 +126,7 @@ class XrContext {
     bool InitEgl();
     bool CreateInstance(android_app* app, const std::vector<const char*>& extra);
     bool CreateSession(bool preferStage);
+    bool CreateAppSpace();
     void HandleStateChange(XrSessionState state);
 
     EGLDisplay m_display = EGL_NO_DISPLAY;
@@ -135,6 +138,8 @@ class XrContext {
     XrSystemId m_system = XR_NULL_SYSTEM_ID;
     XrSession m_session = XR_NULL_HANDLE;
     XrSpace m_appSpace = XR_NULL_HANDLE;
+    XrReferenceSpaceType m_appSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    bool m_preferStage = false;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
     XrSessionState m_state = XR_SESSION_STATE_UNKNOWN;
     bool m_running = false;

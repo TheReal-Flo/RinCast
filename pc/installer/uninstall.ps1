@@ -47,6 +47,12 @@ if ($running) {
     # Windows keeps the exe locked until the process has really gone.
     $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 }
+# Windows' default audio devices, if the streamer had switched them to the headset's when it
+# was closed. It keeps them in the desktop user's profile, so only when that's this account.
+$streamer = Join-Path $installDir 'RinCast Streamer.exe'
+if ($userSid -eq $id.User.Value -and (Test-Path $streamer)) {
+    Start-Process $streamer -ArgumentList '--restore-audio-defaults' -Wait -ErrorAction SilentlyContinue
+}
 
 # Audio driver
 $setup = Join-Path $installDir 'rincast-audio-setup.exe'

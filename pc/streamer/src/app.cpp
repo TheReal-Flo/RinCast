@@ -75,6 +75,8 @@ bool App::Init() {
     SettingsStore::Get().Load();
     const Settings settings = SettingsStore::Get().Snapshot();
     SetStartWithWindows(settings.startWithWindows);
+    // Default devices a killed streamer left switched to the headset's.
+    RunAsync([] { audio::RestoreDefaults(); });
 
     // GPU & encoder capabilities (the VR bridge device lives on the same adapter).
     if (!m_bridge.Start()) RC_LOGE("VR bridge failed to start");

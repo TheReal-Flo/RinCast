@@ -36,6 +36,15 @@ compositor layers, and the Galaxy XR, Quest 1, older-PICO and Steam Frame suppor
   elsewhere, and sits in each lens's centre while the eyes aren't tracked. NVENC's fixed
   foveation (fewer bits towards the lens edges) is off in that mode.
 - Microphone volume on the headset (General), from 0 to 200%.
+- A fixed play space, on by default (General > Tracking > "Fixed play space"): SteamVR's space
+  sits on the headset's play area (the stage) instead of the floor where you last recentered,
+  so recentering, by hand or by the headset, no longer moves it. Lighthouse trackers calibrated
+  against the headset with Space Calibrator stay aligned. PICO headsets always worked this way.
+  Turn it off to have SteamVR follow the headset's recentering again. The SteamVR driver also logs
+  (in vrserver.txt) when the headset's position jumps, and the headset when its space recenters.
+- The small in-game menu (double-press the left menu button, or hold A and B) also opens on the
+  desktop while SteamVR runs, with "Back to VR" where it has "Back to desktop" in VR: switching
+  either way is the same gesture and the same button.
 - Support for the Samsung Galaxy XR, the original Quest (its own APK, `-quest1`), and PICO
   headsets on older firmware (PICO's own OpenXR loader).
 - An experimental native app for the Steam Frame (see `headset/linux`).
@@ -47,6 +56,12 @@ compositor layers, and the Galaxy XR, Quest 1, older-PICO and Steam Frame suppor
   applies both itself, for RinCast's and Steam's virtual devices, so the volume slider, the
   volume keys and mute change the headset's sound, and turning the microphone down in Windows'
   sound settings works.
+- Windows' default speaker and microphone could stay on Steam's streaming devices after RinCast.
+  The streamer switches them while a headset is connected and only remembered the previous
+  ones in memory, so when it was killed (by the installer during an update, a crash, Task
+  Manager) they were never put back, and apps such as VRChat kept recording a microphone
+  nothing was playing into. It now keeps them in a file and puts them back on the next start
+  and when RinCast is uninstalled, and only where its device is still the default.
 - SteamVR (and tools such as Space Calibrator) saw every headset as a Quest 3. It now sees the
   Quest, Quest 2, Quest Pro, Quest 3 and 3S by the names Quest Link gives them, and other
   headsets by their own; Quest 1 and 2 controllers get their own models. Takes effect after
@@ -54,6 +69,10 @@ compositor layers, and the Galaxy XR, Quest 1, older-PICO and Steam Frame suppor
 - Menus looked blurry next to the monitors: they were drawn into the eye images and so went
   through two resamplings. With "Sharp text" on (Desktop), they're compositor layers like the
   monitors.
+- After closing the in-game menu with Resume, the game got no controller input until the menu
+  was opened and closed again.
+- The Steam Frame app didn't build since the language setting; it now follows the system's
+  language (LANG) too.
 - On the keyboard, pressing a key with one controller while the other pointed at another key
   didn't register.
 - AV1 isn't offered on headsets that only have a software AV1 decoder (Quest 1 and 2), and the

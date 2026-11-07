@@ -20,6 +20,7 @@ add_executable(rincast-frame
   ${RC_APP}/app/app.cpp
   ${RC_APP}/app/screens.cpp
   ${RC_APP}/app/settings.cpp
+  ${RC_APP}/app/strings.cpp
   ${RC_APP}/gfx/gl.cpp
   ${RC_APP}/gfx/scene.cpp
   ${RC_APP}/gfx/sky.cpp

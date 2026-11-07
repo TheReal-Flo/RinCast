@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <sstream>
 #include <vector>
 
 #include "../util.h"
@@ -130,17 +131,62 @@ class EndpointVolume {
     float m_target = 1.f, m_gain = 1.f;
 };
 
+// The Windows defaults RinCast replaced, per direction and role, and the device it put in
+// their place. They're also kept in a file: when the streamer is killed (by the installer
+// during an update, a crash, Task Manager), the next start still puts them back. Before,
+// they lived only in memory, and a killed streamer left Steam's devices as the defaults
+// for good, so other apps such as Virtual Desktop and VRChat recorded the wrong microphone.
+struct Replaced {
+    std::wstring previous[ERole_enum_count];  // empty: that role already was ours
+    std::wstring ours;
+};
 std::mutex g_defaultsMutex;
-std::wstring g_prevRender, g_prevCapture;
+Replaced g_replaced[2];  // eRender, eCapture
+bool g_loaded = false;
 
-void SetDefault(const std::wstring& id) {
+std::filesystem::path DefaultsFile() { return DataDir() / "replaced-audio-defaults.txt"; }
+
+// Lines: "<flow> ours <id>" and "<flow> <role> <id>"; endpoint IDs are ASCII.
+void SaveReplaced() {
+    std::string out;
+    for (int flow = 0; flow < 2; flow++) {
+        const Replaced& r = g_replaced[flow];
+        if (r.ours.empty()) continue;
+        out += std::to_string(flow) + " ours " + Narrow(r.ours) + "\n";
+        for (int role = 0; role < ERole_enum_count; role++)
+            if (!r.previous[role].empty()) out += std::to_string(flow) + " " + std::to_string(role) + " " + Narrow(r.previous[role]) + "\n";
+    }
+    std::error_code ec;
+    if (out.empty()) std::filesystem::remove(DefaultsFile(), ec);
+    else WriteFileAtomic(DefaultsFile(), out);
+}
+
+void LoadReplaced() {
+    if (g_loaded) return;
+    g_loaded = true;
+    std::vector<uint8_t> bytes;
+    if (!ReadFileBytes(DefaultsFile(), bytes)) return;
+    std::istringstream in(std::string(bytes.begin(), bytes.end()));
+    std::string flow, key, id;
+    while (in >> flow >> key >> id) {
+        const int f = std::atoi(flow.c_str());
+        if (f < 0 || f > 1) continue;
+        if (key == "ours") g_replaced[f].ours = Widen(id);
+        else if (const int role = std::atoi(key.c_str()); role >= 0 && role < ERole_enum_count)
+            g_replaced[f].previous[role] = Widen(id);
+    }
+}
+
+ComPtr<IPolicyConfig> PolicyConfig() {
     ComPtr<IPolicyConfig> policy;
-    if (FAILED(CoCreateInstance(CLSID_PolicyConfigClient, nullptr, CLSCTX_ALL, __uuidof(IPolicyConfig),
-                                reinterpret_cast<void**>(policy.GetAddressOf()))))
-        return;
-    policy->SetDefaultEndpoint(id.c_str(), eConsole);
-    policy->SetDefaultEndpoint(id.c_str(), eMultimedia);
-    policy->SetDefaultEndpoint(id.c_str(), eCommunications);
+    CoCreateInstance(CLSID_PolicyConfigClient, nullptr, CLSCTX_ALL, __uuidof(IPolicyConfig),
+                     reinterpret_cast<void**>(policy.GetAddressOf()));
+    return policy;
+}
+
+std::wstring DefaultId(IMMDeviceEnumerator* e, EDataFlow flow, ERole role) {
+    ComPtr<IMMDevice> d;
+    return SUCCEEDED(e->GetDefaultAudioEndpoint(flow, role, &d)) ? DeviceId(d.Get()) : std::wstring();
 }
 
 // Converts any WASAPI mix format frame to stereo float.
@@ -287,37 +333,50 @@ Route ResolveRoute(const std::string& preference) {
 void SwitchDefaults(const Route& route, bool speaker, bool microphone) {
     ScopedCoInit com;
     std::lock_guard lock(g_defaultsMutex);
+    LoadReplaced();
     auto e = Enumerator();
-    if (!e) return;
-    if (speaker && route.speaker) {
-        if (auto rc = FindEndpoint(eRender, route.speaker)) {
-            ComPtr<IMMDevice> current;
-            if (SUCCEEDED(e->GetDefaultAudioEndpoint(eRender, eConsole, &current))) {
-                const auto id = DeviceId(current.Get());
-                if (id != DeviceId(rc.Get()) && g_prevRender.empty()) g_prevRender = id;
+    auto policy = PolicyConfig();
+    if (!e || !policy) return;
+    auto take = [&](EDataFlow flow, const wchar_t* name) {
+        auto device = FindEndpoint(flow, name);
+        if (!device) return;
+        const std::wstring id = DeviceId(device.Get());
+        Replaced& r = g_replaced[flow];
+        // The first switch remembers what was there; later ones (a new session, other
+        // settings) keep that, so "previous" is never one of our own devices.
+        if (r.ours.empty()) {
+            for (int role = 0; role < ERole_enum_count; role++) {
+                const std::wstring current = DefaultId(e.Get(), flow, ERole(role));
+                r.previous[role] = current != id ? current : std::wstring();
             }
-            SetDefault(DeviceId(rc.Get()));
         }
-    }
-    if (microphone && route.mic) {
-        if (auto rc = FindEndpoint(eCapture, route.mic)) {
-            ComPtr<IMMDevice> current;
-            if (SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture, eConsole, &current))) {
-                const auto id = DeviceId(current.Get());
-                if (id != DeviceId(rc.Get()) && g_prevCapture.empty()) g_prevCapture = id;
-            }
-            SetDefault(DeviceId(rc.Get()));
-        }
-    }
+        r.ours = id;
+        SaveReplaced();  // before changing anything, so a kill in between still restores
+        for (int role = 0; role < ERole_enum_count; role++) policy->SetDefaultEndpoint(id.c_str(), ERole(role));
+    };
+    if (speaker && route.speaker) take(eRender, route.speaker);
+    if (microphone && route.mic) take(eCapture, route.mic);
 }
 
 void RestoreDefaults() {
     ScopedCoInit com;
     std::lock_guard lock(g_defaultsMutex);
-    if (!g_prevRender.empty()) SetDefault(g_prevRender);
-    if (!g_prevCapture.empty()) SetDefault(g_prevCapture);
-    g_prevRender.clear();
-    g_prevCapture.clear();
+    LoadReplaced();
+    if (g_replaced[0].ours.empty() && g_replaced[1].ours.empty()) return;
+    auto e = Enumerator();
+    auto policy = PolicyConfig();
+    for (int flow = 0; flow < 2 && e && policy; flow++) {
+        Replaced& r = g_replaced[flow];
+        for (int role = 0; role < ERole_enum_count; role++) {
+            // Only where our device is still the default: one the user picked meanwhile stays.
+            if (r.previous[role].empty() || DefaultId(e.Get(), EDataFlow(flow), ERole(role)) != r.ours) continue;
+            const HRESULT hr = policy->SetDefaultEndpoint(r.previous[role].c_str(), ERole(role));
+            if (FAILED(hr)) RC_LOGW("Audio: couldn't restore the previous default device (0x%08lx)", unsigned long(hr));
+        }
+    }
+    RC_LOGI("Audio: restored the Windows default devices");
+    g_replaced[0] = g_replaced[1] = {};
+    SaveReplaced();
 }
 
 }  // namespace audio

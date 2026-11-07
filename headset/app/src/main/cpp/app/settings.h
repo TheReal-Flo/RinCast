@@ -34,6 +34,7 @@ struct HeadsetSettings {
     bool frameGeneration = false;       // make a frame from motion when the next is late
     bool bodyTracking = false;          // send the body to SteamVR as trackers
     bool faceTracking = false;          // send the face (and eyes) to the PC, for VRCFaceTracking
+    bool fixedPlaySpace = true;         // SteamVR's space on the stage, which recentering doesn't move
     bool handsInGames = false;          // play PC games with tracked hands
     bool fingersWithControllers = false;  // real fingers while holding controllers; not with bodyTracking
 
