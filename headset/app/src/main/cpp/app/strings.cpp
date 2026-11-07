@@ -554,6 +554,7 @@ const Entry kDe[] = {
     {"nav.pcs", "PCs"},
     {"nav.games", "Spiele"},
     {"nav.vrQuality", "VR-Qualität"},
+    {"nav.desktop", "Desktop"},
     {"nav.environment", "Umgebung"},
     {"nav.general", "Allgemein"},
     {"nav.account", "Konto"},
@@ -571,6 +572,7 @@ const Entry kDe[] = {
     {"stat.latency", "Latenz"},
     {"stat.fps", "Framerate"},
     {"stat.bitrate", "Bitrate"},
+    {"stat.network", "Netzwerk"},
     {"stat.connectedTo", "Verbunden mit"},
     {"unit.roundTrip", "{ms} ms Hin und zurück"},
     {"dock.latency", "Latenz {ms} ms"},
@@ -611,6 +613,7 @@ const Entry kDe[] = {
     {"computers.approvalHint", "Wähle am PC „Einmal erlauben“ oder „Immer erlauben“."},
     {"computers.reconnectingText", "Die Verbindung wurde getrennt. Neuer Versuch."},
     {"computers.couldntConnect", "Verbindung fehlgeschlagen"},
+    {"computers.usbCable", "USB-Kabel"},
     {"computers.enterAddressTitle", "Gib die Adresse deines PCs ein"},
     {"computers.enterAddressText", "Sie steht auf der Startseite von RinCast Streamer. Auch eine Adresse aus einem VPN wie Tailscale funktioniert."},
     {"computers.badAddress", "Das ist keine vollständige Adresse. Sie braucht vier Zahlen."},
@@ -804,6 +807,7 @@ const Entry kDe[] = {
 
     {"vrState.startingGame", "Spiel startet…"},
     {"vrState.startingSteamvr", "SteamVR startet…"},
+    {"vrState.running", "Läuft"},
     {"vrState.error", "VR konnte nicht starten"},
     {"vrState.ready", "Bereit"},
 
@@ -816,6 +820,8 @@ const Entry kEs[] = {
     {"nav.pcs", "PCs"},
     {"nav.games", "Juegos"},
     {"nav.vrQuality", "Calidad VR"},
+    {"nav.desktop", "Escritorio"},
+    {"nav.general", "General"},
     {"nav.environment", "Entorno"},
     {"nav.account", "Cuenta"},
     {"nav.help", "Ayuda"},
@@ -832,6 +838,7 @@ const Entry kEs[] = {
     {"stat.latency", "Latencia"},
     {"stat.fps", "Fotogramas"},
     {"stat.bitrate", "Tasa de bits"},
+    {"stat.network", "Red"},
     {"stat.connectedTo", "Conectado a"},
     {"unit.roundTrip", "{ms} ms de ida y vuelta"},
     {"dock.latency", "Latencia {ms} ms"},
@@ -872,6 +879,7 @@ const Entry kEs[] = {
     {"computers.approvalHint", "En el PC, elige Permitir una vez o Permitir siempre."},
     {"computers.reconnectingText", "Se perdió la conexión. Reintentando."},
     {"computers.couldntConnect", "No se pudo conectar"},
+    {"computers.usbCable", "Cable USB"},
     {"computers.enterAddressTitle", "Introduce la dirección de tu PC"},
     {"computers.enterAddressText", "Está en la página de inicio de RinCast Streamer. También sirve una dirección de una VPN como Tailscale."},
     {"computers.badAddress", "Esa no es una dirección completa. Necesita cuatro números."},
@@ -1065,6 +1073,7 @@ const Entry kEs[] = {
 
     {"vrState.startingGame", "Iniciando juego…"},
     {"vrState.startingSteamvr", "Iniciando SteamVR…"},
+    {"vrState.running", "En ejecución"},
     {"vrState.error", "No se pudo iniciar VR"},
     {"vrState.ready", "Listo"},
 
@@ -1077,6 +1086,8 @@ const Entry kFr[] = {
     {"nav.pcs", "PC"},
     {"nav.games", "Jeux"},
     {"nav.vrQuality", "Qualité VR"},
+    {"nav.desktop", "Bureau"},
+    {"nav.general", "Général"},
     {"nav.environment", "Environnement"},
     {"nav.account", "Compte"},
     {"nav.help", "Aide"},
@@ -1093,6 +1104,7 @@ const Entry kFr[] = {
     {"stat.latency", "Latence"},
     {"stat.fps", "Fréquence d'images"},
     {"stat.bitrate", "Débit"},
+    {"stat.network", "Réseau"},
     {"stat.connectedTo", "Connecté à"},
     {"unit.roundTrip", "{ms} ms aller-retour"},
     {"dock.latency", "Latence {ms} ms"},
@@ -1133,6 +1145,7 @@ const Entry kFr[] = {
     {"computers.approvalHint", "Sur le PC, choisissez Autoriser une fois ou Toujours autoriser."},
     {"computers.reconnectingText", "La connexion a été perdue. Nouvel essai."},
     {"computers.couldntConnect", "Connexion impossible"},
+    {"computers.usbCable", "Câble USB"},
     {"computers.enterAddressTitle", "Saisissez l'adresse de votre PC"},
     {"computers.enterAddressText", "Elle se trouve sur la page d'accueil de RinCast Streamer. Une adresse d'un VPN comme Tailscale fonctionne aussi."},
     {"computers.badAddress", "Ce n'est pas une adresse complète. Il faut quatre nombres."},
@@ -1326,6 +1339,7 @@ const Entry kFr[] = {
 
     {"vrState.startingGame", "Lancement du jeu…"},
     {"vrState.startingSteamvr", "Lancement de SteamVR…"},
+    {"vrState.running", "En cours"},
     {"vrState.error", "Impossible de démarrer la VR"},
     {"vrState.ready", "Prêt"},
 
@@ -1338,6 +1352,7 @@ const Entry kJa[] = {
     {"nav.pcs", "PC"},
     {"nav.games", "ゲーム"},
     {"nav.vrQuality", "VR 画質"},
+    {"nav.desktop", "デスクトップ"},
     {"nav.environment", "環境"},
     {"nav.general", "一般"},
     {"nav.account", "アカウント"},
@@ -1590,6 +1605,7 @@ const Entry kJa[] = {
 
     {"vrState.startingGame", "ゲームを起動中…"},
     {"vrState.startingSteamvr", "SteamVR を起動中…"},
+    {"vrState.running", "実行中"},
     {"vrState.error", "VR を開始できませんでした"},
     {"vrState.ready", "準備完了"},
 
