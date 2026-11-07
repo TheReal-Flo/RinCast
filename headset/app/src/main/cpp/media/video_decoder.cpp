@@ -83,11 +83,12 @@ void VideoDecoder::Warn(const char* what) {
     count = 0;
 }
 
-bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height) {
+bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height, float fps) {
     LoadEglProcs();
     m_codec = codec;
     m_width = width;
     m_height = height;
+    m_fps = fps > 1 ? fps : 90;
     const media_status_t st = AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
                                                         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 5, &m_reader);
     if (st != AMEDIA_OK) {
@@ -150,7 +151,12 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
     // Latency over everything else.
     AMediaFormat_setInt32(fmt, "low-latency", 1);
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_PRIORITY, 0);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_OPERATING_RATE, 32767);
+    // Twice the stream's frame rate, so each frame decodes in half a frame's time. Not the
+    // maximum (32767): the Quest 2's video driver books a stream asking for that at the most it
+    // could ever decode (960 fps for 1080p), its whole budget, and then refuses every other
+    // stream ("H/W is overloaded ... MBPS limit exceeded"): a second monitor, or the game.
+    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, int32_t(m_fps + 0.5f));
+    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_OPERATING_RATE, int32_t(m_fps * 2 + 0.5f));
     AMediaFormat_setInt32(fmt, "vendor.qti-ext-dec-low-latency.enable", 1);
     AMediaFormat_setInt32(fmt, "vendor.qti-ext-dec-picture-order.enable", 1);
 

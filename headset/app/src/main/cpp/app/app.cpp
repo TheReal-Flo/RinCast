@@ -824,13 +824,14 @@ void App::ConfigureDesktopStreams(const json& streams) {
         d.width = s.value("width", 1920);
         d.height = s.value("height", 1080);
         d.codec = rc::VideoCodec(s.value("codec", 1));
+        d.fps = s.value("fps", 60.f);
         next[d.streamId] = d;
     }
     // A new stream counts its frames from the start and can't continue the old one's picture,
     // so even with the same size the decoder and frame tracking have to start over too.
     for (auto& [id, d] : next) {
         auto dec = std::make_unique<VideoDecoder>();
-        dec->Init(d.codec, d.width, d.height);
+        dec->Init(d.codec, d.width, d.height, d.fps);
         {
             std::lock_guard lock(m_decoderMutex);
             m_decoders[id] = std::move(dec);
@@ -868,7 +869,7 @@ void App::ConfigureVrStream(const json& s) {
     m_vrEyeHeight = eyeH;
     m_vrCodec = codec;
     auto dec = std::make_unique<VideoDecoder>();
-    dec->Init(codec, eyeW * 2, eyeH);
+    dec->Init(codec, eyeW * 2, eyeH, s.value("fps", 90.f));
     {
         std::lock_guard lock(m_decoderMutex);
         m_decoders[rc::kVrStreamId] = std::move(dec);

@@ -2,6 +2,22 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.0.3 - 2026-11-07
+
+### Fixed
+
+- The USB cable connection: the PC turned the headset away with "Connections from outside your
+  local network require signing in to a RinCast account", even when signed in. Over the cable
+  the headset only has an IPv6 link-local address, and the PC only recognized local IPv4
+  addresses. IPv6 link-local and private (unique local) addresses now count as local too.
+  Public IPv6 addresses still count as the internet, and a new headset still has to be allowed
+  on the PC.
+- A second video stream on a Quest 2: a second monitor, or the game when VR starts. The headset
+  asked its video decoders to run as fast as possible, and the Quest 2 then booked a single
+  1080p stream at 960 frames per second, its entire decoding capacity, and refused every other
+  stream ("MBPS limit exceeded"). Each decoder now asks for twice its stream's frame rate. Not
+  yet tested on a Quest 2.
+
 ## 1.0.2 - 2026-11-07
 
 ### Fixed

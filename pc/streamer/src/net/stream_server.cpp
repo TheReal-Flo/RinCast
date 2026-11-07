@@ -16,7 +16,14 @@ namespace rcs {
 namespace {
 
 // Local (non-cloud) sessions are only accepted from private address space.
-bool IsPrivateAddress(uint32_t ip) {
+bool IsPrivateAddress(const rc::NetAddress& from) {
+    if (from.v6) {
+        // Link-local (fe80::/10), which is all a headset on a USB cable has, unique local
+        // (fc00::/7) and loopback. Global IPv6 addresses count as the internet.
+        static const uint8_t kLoopback[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+        return from.IsLinkLocalV6() || (from.ip6[0] & 0xFE) == 0xFC || std::memcmp(from.ip6, kLoopback, 16) == 0;
+    }
+    const uint32_t ip = from.ip;
     const uint8_t a = uint8_t(ip >> 24), b = uint8_t(ip >> 16);
     if (a == 10 || a == 127) return true;
     if (a == 172 && b >= 16 && b <= 31) return true;
@@ -176,7 +183,7 @@ void StreamServer::HandleHello(const uint8_t* data, size_t size, const rc::NetAd
         }
         connectSecret = it->second.connectSecret;
     } else {
-        if (!IsPrivateAddress(from.ip)) {
+        if (!IsPrivateAddress(from)) {
             lock.unlock();
             SendReject(from, "remote_requires_account",
                        "Connections from outside your local network require signing in to a RinCast account.");

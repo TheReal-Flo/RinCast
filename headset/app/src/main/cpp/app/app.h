@@ -47,6 +47,7 @@ struct DesktopStreamInfo {
     std::string name;
     int width = 0, height = 0;
     rc::VideoCodec codec = rc::VideoCodec::HEVC;
+    float fps = 60;
 };
 
 struct GameInfo {

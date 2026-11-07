@@ -31,7 +31,8 @@ class VideoDecoder {
    public:
     ~VideoDecoder();
 
-    bool Init(rc::VideoCodec codec, int width, int height);
+    // fps: the stream's frame rate, which the decoder books its share of the hardware for.
+    bool Init(rc::VideoCodec codec, int width, int height, float fps);
     void Shutdown();
 
     // Network thread. Frames before the first keyframe are dropped. `recovery`: the PC
@@ -69,6 +70,7 @@ class VideoDecoder {
 
     rc::VideoCodec m_codec = rc::VideoCodec::HEVC;
     int m_width = 0, m_height = 0;
+    float m_fps = 90;
     AMediaCodec* m_codecHandle = nullptr;
     AImageReader* m_reader = nullptr;
     ANativeWindow* m_window = nullptr;
