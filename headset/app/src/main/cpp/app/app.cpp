@@ -532,6 +532,15 @@ void App::EnterMode(Mode m) {
             // Wait for a new picture, not the one from when VR was left.
             m_vrHasFrame = false;
             m_motionMoves = false;
+            m_vrNoPicture = 0;
+            // The desktop isn't shown in VR: stop its streams and free their decoders before the
+            // VR decoder starts. A Quest 2 doesn't have the decoding hardware for both at once, and
+            // the bandwidth is the game's. Leaving VR starts the desktop again.
+            m_client.SendControl({{"type", rc::msg::kStopDesktop}});
+            {
+                std::lock_guard lock(m_decoderMutex);
+                for (const auto& [id, d] : m_desktopStreams) m_decoders.erase(id);
+            }
             m_client.SendControl({{"type", rc::msg::kStartVr}});
             ToggleWindow("launch", true);
             break;
@@ -643,7 +652,24 @@ void App::UpdateMode(float dt) {
         m_warp = Damp(m_warp, 1.f, 3.5f, dt);
         m_warpSpeed = std::min(1.f, m_warpSpeed + dt * 0.45f);  // accelerate into the jump
         if (m_vrState == "running" && m_vrHasFrame) EnterMode(Mode::Vr);
-        if (m_vrState == "error" || m_modeTime > 100.f) {
+        // The PC sends the game, but no picture comes out of the decoder: say so, instead of
+        // blaming SteamVR when the wait runs out.
+        if (m_vrState == "running" && !m_vrHasFrame) m_vrNoPicture += dt;
+        std::shared_ptr<VideoDecoder> vrDecoder;
+        {
+            std::lock_guard lock(m_decoderMutex);
+            if (auto it = m_decoders.find(rc::kVrStreamId); it != m_decoders.end()) vrDecoder = it->second;
+        }
+        if (m_mode == Mode::LaunchingVr && m_vrNoPicture > 0 && (m_vrNoPicture > 15.f || (m_vrNoPicture > 3.f && vrDecoder && vrDecoder->Failed()))) {
+            RC_LOGW("VR: the PC has been sending for %.0f s, but no picture could be shown. Decoder: %s, started %d, "
+                    "failed %d, %u frames decoded, %dx%d",
+                    m_vrNoPicture, vrDecoder ? "present" : "missing", vrDecoder && vrDecoder->Started(),
+                    vrDecoder && vrDecoder->Failed(), vrDecoder ? vrDecoder->DecodedFrames() : 0u, m_vrEyeWidth * 2,
+                    m_vrEyeHeight);
+            PostNotice("Your PC is sending the game, but this headset can't show it. Try H.264 or a lower VR quality in Settings.",
+                       "error", "vr.retry");
+            EnterMode(Mode::Desktop);
+        } else if (m_mode == Mode::LaunchingVr && (m_vrState == "error" || m_modeTime > 100.f)) {
             PostNotice(m_vrState == "error" ? "VR couldn't start on your PC. Check that SteamVR opens there." : "SteamVR took too long to start. Check that it opens on your PC.", "error", "vr.retry");
             EnterMode(Mode::Desktop);
         }

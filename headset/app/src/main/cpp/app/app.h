@@ -248,6 +248,7 @@ class App {
     bool m_vrUpscaleSetting = false;  // the setting m_vrSwapchain was made for
     bool m_vrUpscaled = false;        // m_vrSwapchain is sized for the upscaler
     bool m_vrHasFrame = false;
+    float m_vrNoPicture = 0;  // seconds the PC has said "running" without a picture we could show
     rc::VrFrameMetadata m_vrMeta{};
     std::vector<int8_t> m_motionGrid;
     int m_motionWidth = 0, m_motionHeight = 0, m_motionBlock = 0;

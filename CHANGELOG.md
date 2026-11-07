@@ -2,6 +2,22 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.0.2 - 2026-11-07
+
+### Fixed
+
+- PC VR on a Quest 2: the PC sent the game, but the headset never showed it and gave up after
+  100 seconds. While VR started, the desktop stream kept running, and its decoder stayed open
+  even in VR. A Quest 2 doesn't have the video decoding hardware for both at once. Starting VR
+  now stops the desktop stream and frees its decoders first; leaving VR starts the desktop again.
+  This also gives the game the desktop's share of the bandwidth while it starts. Not yet tested
+  on a Quest 2.
+- When the PC sends the game but the headset can't show it, the headset now says so after
+  15 seconds and suggests H.264 or a lower VR quality. Before, it waited 100 seconds and blamed
+  SteamVR.
+- The headset's log says why a picture is missing: whether the video decoder started, why it
+  couldn't, when it decoded its first frame, and why it dropped frames.
+
 ## 1.0.1 - 2026-11-07
 
 ### New

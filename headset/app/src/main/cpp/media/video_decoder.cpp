@@ -5,6 +5,7 @@
 #include <media/NdkMediaFormat.h>
 
 #include <cstring>
+#include <string>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -65,6 +66,23 @@ int NalType(const std::vector<uint8_t>& d, size_t start, rc::VideoCodec codec) {
 
 VideoDecoder::~VideoDecoder() { Shutdown(); }
 
+// What can go wrong on every frame is logged at most once every 5 seconds per decoder and
+// reason, with how often it happened since, so a missing picture shows up in the log without
+// flooding it.
+void VideoDecoder::Warn(const char* what) {
+    static std::mutex mutex;
+    static std::map<std::string, std::pair<int64_t, uint32_t>> seen;  // last logged, count since
+    const std::string key = std::to_string(uintptr_t(this)) + what;
+    std::lock_guard lock(mutex);
+    auto& [last, count] = seen[key];
+    count++;
+    const int64_t now = rc::NowNs();
+    if (last && now - last < 5'000'000'000LL) return;
+    RC_LOGW("Decoder %s %dx%d: %s (%u times)", Mime(m_codec), m_width, m_height, what, count);
+    last = now;
+    count = 0;
+}
+
 bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height) {
     LoadEglProcs();
     m_codec = codec;
@@ -73,7 +91,8 @@ bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height) {
     const media_status_t st = AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
                                                         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 5, &m_reader);
     if (st != AMEDIA_OK) {
-        RC_LOGE("AImageReader_newWithUsage failed (%d)", st);
+        RC_LOGE("Decoder %s %dx%d: AImageReader_newWithUsage failed (%d)", Mime(codec), width, height, st);
+        m_failed = true;
         return false;
     }
     AImageReader_getWindow(m_reader, &m_window);
@@ -152,14 +171,19 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
     }
     media_status_t st = AMediaCodec_configure(m_codecHandle, fmt, m_window, nullptr, 0);
     AMediaFormat_delete(fmt);
-    if (st != AMEDIA_OK || AMediaCodec_start(m_codecHandle) != AMEDIA_OK) {
-        RC_LOGE("Decoder configure/start failed (%d)", st);
+    const media_status_t started = st == AMEDIA_OK ? AMediaCodec_start(m_codecHandle) : st;
+    if (st != AMEDIA_OK || started != AMEDIA_OK) {
+        // A headset has only so much decoding hardware; another stream still being decoded
+        // can be what's in the way (an "insufficient resource" error, -10000 and below).
+        RC_LOGE("Decoder %s %dx%d: %s failed (%d)", Mime(m_codec), m_width, m_height,
+                st != AMEDIA_OK ? "configure" : "start", st != AMEDIA_OK ? st : started);
         AMediaCodec_delete(m_codecHandle);
         m_codecHandle = nullptr;
         m_failed = true;
         return false;
     }
     m_configured = true;
+    m_failed = false;  // a later keyframe got it going after all
     m_outputThread = std::thread([this] { OutputLoop(); });
     RC_LOGI("Decoder %s %dx%d started", Mime(m_codec), m_width, m_height);
     return true;
@@ -185,6 +209,7 @@ void VideoDecoder::Submit(uint32_t frameIndex, bool keyframe, bool recovery, std
         m_seenKeyframe = false;
     }
     if (!m_seenKeyframe) {
+        Warn("frame skipped while waiting for a keyframe");
         m_needKeyframe = true;
         return;
     }
@@ -229,6 +254,7 @@ void VideoDecoder::InputLoop() {
         for (int attempt = 0; attempt < 50 && m_running && index < 0; attempt++)
             index = AMediaCodec_dequeueInputBuffer(m_codecHandle, 2000);
         if (index < 0) {
+            Warn("no free input buffer for 100 ms, the decoder is falling behind");
             // This frame never reaches the decoder, so the chain breaks here.
             std::lock_guard lock(m_mutex);
             m_queue.clear();
@@ -246,7 +272,8 @@ void VideoDecoder::InputLoop() {
             m_inputTimes[int64_t(p.frameIndex)] = rc::NowNs();
             while (m_inputTimes.size() > 64) m_inputTimes.erase(m_inputTimes.begin());
         }
-        AMediaCodec_queueInputBuffer(m_codecHandle, size_t(index), 0, n, uint64_t(p.frameIndex), 0);
+        if (AMediaCodec_queueInputBuffer(m_codecHandle, size_t(index), 0, n, uint64_t(p.frameIndex), 0) != AMEDIA_OK)
+            Warn("queueInputBuffer failed");
         m_lastQueued = p.frameIndex;
     }
 }
@@ -278,10 +305,13 @@ void VideoDecoder::OutputLoop() {
                 if (it != m_infos.end()) it->second.decodedNs = now;
             }
             AMediaCodec_releaseOutputBuffer(m_codecHandle, size_t(index), info.size != 0);
+            if (!m_decoded++) RC_LOGI("Decoder %s %dx%d: first frame decoded", Mime(m_codec), m_width, m_height);
         } else if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
             AMediaFormat* f = AMediaCodec_getOutputFormat(m_codecHandle);
             RC_LOGI("Decoder output format: %s", AMediaFormat_toString(f));
             AMediaFormat_delete(f);
+        } else if (index != AMEDIACODEC_INFO_TRY_AGAIN_LATER && index != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
+            Warn("dequeueOutputBuffer returned an error");
         }
     }
 }
@@ -298,6 +328,7 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
     AHardwareBuffer* hb = nullptr;
     AImage_getHardwareBuffer(image, &hb);
     if (!hb || !pCreateImage) {
+        Warn("a decoded picture has no hardware buffer to show");
         AImage_delete(image);
         return false;
     }
@@ -305,6 +336,7 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
     EGLImageKHR egl = pCreateImage(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
                                    pGetNativeClientBuffer(hb), attribs);
     if (egl == EGL_NO_IMAGE_KHR) {
+        Warn("couldn't turn a decoded picture into a texture");
         AImage_delete(image);
         return false;
     }

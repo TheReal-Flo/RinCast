@@ -57,6 +57,9 @@ class VideoDecoder {
     double AverageDecodeMs();
     bool NeedsKeyframe() { return m_needKeyframe.exchange(false); }
     bool Failed() const { return m_failed; }
+    // For explaining a missing picture: did the decoder start, and has it produced anything.
+    bool Started() const { return m_configured; }
+    uint32_t DecodedFrames() const { return m_decoded; }
 
    private:
     bool Configure(const std::vector<uint8_t>& keyframe);
@@ -73,6 +76,8 @@ class VideoDecoder {
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_failed{false};
     std::atomic<bool> m_needKeyframe{false};
+    std::atomic<uint32_t> m_decoded{0};
+    void Warn(const char* what);  // at most every 5 s per reason
 
     struct Pending {
         uint32_t frameIndex;
