@@ -42,6 +42,11 @@ add_library(rincast SHARED
   headsets/pico/pico_face.cpp
   stb_impl.cpp
 )
+# VERSION is the single source of the version, as for the PC side.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RC_ROOT}/VERSION")
+file(READ "${RC_ROOT}/VERSION" RINCAST_VERSION)
+string(STRIP "${RINCAST_VERSION}" RINCAST_VERSION)
+target_compile_definitions(rincast PRIVATE RINCAST_VERSION_STRING="${RINCAST_VERSION}")
 target_compile_options(rincast PRIVATE -Wall -Wno-unused-parameter -Wno-missing-field-initializers -fno-strict-aliasing)
 target_include_directories(rincast PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${RC_ROOT}/third_party)
 # The glue's entry point must not be stripped.

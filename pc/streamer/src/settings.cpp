@@ -19,6 +19,7 @@ json Settings::ToJson(bool forUi) const {
         {"startMinimized", startMinimized},
         {"preventSleep", preventSleep},
         {"requireApproval", requireApproval},
+        {"desktopInput", desktopInput},
         {"trustedDevices", devices},
         {"codec", codec},
         {"tenBit", tenBit},
@@ -62,6 +63,7 @@ void Settings::FromJson(const json& j) {
     get("startMinimized", startMinimized);
     get("preventSleep", preventSleep);
     get("requireApproval", requireApproval);
+    get("desktopInput", desktopInput);
     get("codec", codec);
     get("tenBit", tenBit);
     get("vrBitrateMbps", vrBitrateMbps);

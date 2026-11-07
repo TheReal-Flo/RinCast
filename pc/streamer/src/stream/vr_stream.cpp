@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <vector>
 
 #include "motion_estimator.h"
@@ -50,6 +51,21 @@ void AppendMotion(const MotionEstimator& motion, const std::vector<float>& field
     const auto* bytes = reinterpret_cast<const uint8_t*>(&h);
     out.insert(out.end(), bytes, bytes + sizeof(h));
     rc::EncodeMotionRuns(grid.data(), field.size() / 2, out);
+}
+
+// For what can go wrong on every frame: each reason at most once every 5 seconds, with how
+// often it happened since it was last logged.
+void WarnEvery5s(const char* reason) {
+    static std::mutex mutex;
+    static std::map<const char*, std::pair<int64_t, uint32_t>> seen;  // last logged, count since
+    std::lock_guard lock(mutex);
+    auto& [last, count] = seen[reason];
+    count++;
+    const int64_t now = rc::NowNs();
+    if (last && now - last < 5'000'000'000LL) return;
+    RC_LOGW("%s (%u times)", reason, count);
+    last = now;
+    count = 0;
 }
 
 }  // namespace
@@ -119,9 +135,22 @@ void VrStream::Run() {
     std::vector<uint8_t> frameMeta;
 
     m_onState("waiting", "", "");
+    bool firstFrameLogged = false;
+    int64_t lastWaitReportNs = rc::NowNs();
     while (m_running) {
         WaitForSingleObject(m_bridge->FrameEvent(), 50);
         const int64_t now = rc::NowNs();
+        // No picture: say every 10 s what the bridge looks like, so a log shows whether the
+        // driver never sent a frame or frames arrive and get dropped here.
+        if (!streaming && now - lastWaitReportNs > 10'000'000'000LL) {
+            lastWaitReportNs = now;
+            RC_LOGW("VR: no frame sent for 10 s. Producer %s (pid %ld), latest slot %lld, slots %ld/%ld/%ld, "
+                    "heartbeat %.1f s ago, encoder %s",
+                    ProducerName(m_bridge->ActiveProducer()), long(shared->producerPid), (long long)shared->latestReadySlot,
+                    long(shared->slots[0].state), long(shared->slots[1].state), long(shared->slots[2].state),
+                    shared->producerHeartbeatNs ? double(rcvr::QpcNowNs() - shared->producerHeartbeatNs) / 1e9 : -1.0,
+                    encoder ? "ready" : "not created");
+        }
 
         const rcvr::ProducerKind producer = m_bridge->ActiveProducer();
         const std::string app = m_bridge->ApplicationName();
@@ -129,6 +158,7 @@ void VrStream::Run() {
         if (streaming && !fresh) {
             streaming = false;
             m_streaming = false;
+            lastWaitReportNs = now;
             m_onState("waiting", ProducerName(producer), app);
         }
         if (producer != lastProducer || app != lastApp) {
@@ -161,15 +191,22 @@ void VrStream::Run() {
         ComPtr<ID3D11Texture2D> texRef = m_bridge->SlotTexture(slot);
         ID3D11Texture2D* tex = texRef.Get();
         if (!tex) {
+            WarnEvery5s("VR frame dropped: the frame's texture isn't available");
             InterlockedExchange(&fs.state, rcvr::kSlotFree);
             continue;
         }
         D3D11_TEXTURE2D_DESC desc;
         tex->GetDesc(&desc);
+        if (!firstFrameLogged) {
+            firstFrameLogged = true;
+            RC_LOGI("VR: first frame from %s (%ux%u, format %u)", ProducerName(producer), desc.Width, desc.Height,
+                    unsigned(desc.Format));
+        }
         if (!encoder || encWidth != desc.Width || encHeight != desc.Height) {
             encWidth = desc.Width & ~1u;
             encHeight = desc.Height & ~1u;
             if (!converter.Init(device, encWidth, encHeight, m_config.tenBit)) {
+                WarnEvery5s("VR frame dropped: the colour converter didn't start");
                 InterlockedExchange(&fs.state, rcvr::kSlotFree);
                 continue;
             }
@@ -191,6 +228,7 @@ void VrStream::Run() {
             appliedKbps = ec.bitrateKbps;
             m_sender.RequestKeyframe();
             if (!encoder) {
+                WarnEvery5s("VR frame dropped: the encoder didn't start");
                 InterlockedExchange(&fs.state, rcvr::kSlotFree);
                 rc::SleepMs(500);
                 continue;
@@ -199,6 +237,7 @@ void VrStream::Run() {
         ComPtr<IDXGIKeyedMutex> mutex;
         tex->QueryInterface(IID_PPV_ARGS(&mutex));
         if (mutex && !rcvr::AcquireKeyed(mutex.Get(), 100)) {
+            WarnEvery5s("VR frame dropped: the driver kept the frame locked for over 100 ms");
             InterlockedExchange(&fs.state, rcvr::kSlotFree);
             continue;
         }
@@ -237,7 +276,10 @@ void VrStream::Run() {
 
         const rcvr::FrameSlot slotCopy = fs;
         InterlockedExchange(&fs.state, rcvr::kSlotFree);
-        if (!converted) continue;
+        if (!converted) {
+            WarnEvery5s("VR frame dropped: colour conversion failed");
+            continue;
+        }
 
         // The encoder budgets bitrate / fps per frame, so half the frames need twice the rate.
         const uint32_t encoderKbps = halfRate ? target * 2 : target;
@@ -249,6 +291,7 @@ void VrStream::Run() {
         const bool keyframe = m_sender.BeginFrame(*encoder);
         const int64_t encStart = rc::NowNs();
         if (!encoder->Encode(converter.Output(), keyframe, out)) {
+            WarnEvery5s("VR frame dropped: encoding failed; restarting the encoder");
             encoder.reset();
             continue;
         }
@@ -278,6 +321,7 @@ void VrStream::Run() {
             streaming = true;
             m_streaming = true;
             m_onState("running", ProducerName(m_bridge->ActiveProducer()), m_bridge->ApplicationName());
+            RC_LOGI("VR: frames are reaching the headset");
         }
     }
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);

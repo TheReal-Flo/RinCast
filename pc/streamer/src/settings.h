@@ -28,6 +28,7 @@ struct Settings {
     bool startMinimized = true;
     bool preventSleep = true;
     bool requireApproval = true;   // ask before a new headset may connect locally
+    bool desktopInput = true;      // headsets may use the mouse and keyboard on the desktop
     std::vector<TrustedDevice> trustedDevices;
 
     // Video

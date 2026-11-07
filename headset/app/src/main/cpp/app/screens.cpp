@@ -21,7 +21,7 @@ namespace {
 
 App* g_app = nullptr;
 
-constexpr const char* kVersion = "1.0.0";
+constexpr const char* kVersion = RINCAST_VERSION_STRING;
 
 // ---- shared drawing helpers -------------------------------------------------
 

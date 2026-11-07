@@ -46,6 +46,21 @@ ClientSession::ClientSession(std::unique_ptr<rc::Connection> connection, const H
     m_connection->SetPacketHandler(
         [this](rc::PacketType type, const uint8_t* p, size_t n) { OnPacket(type, p, n); });
     if (hello.raw.contains("display") || hello.raw.contains("decoders")) ApplyClientInfo(hello.raw);
+    m_inputAllowed = SettingsStore::Get().Snapshot().desktopInput;
+}
+
+// Picks up the setting. With announce, tells the headset when it changed, so a click that does
+// nothing isn't a mystery.
+void ClientSession::ApplyInputSetting(bool announce) {
+    const bool allowed = SettingsStore::Get().Snapshot().desktopInput;
+    const bool was = m_inputAllowed.exchange(allowed);
+    if (!allowed && was) input::ReleaseAll();  // nothing stays held down
+    if (announce && allowed != was) {
+        SendControl({{"type", rc::msg::kNotice},
+                     {"level", "info"},
+                     {"text", allowed ? "This PC now lets the headset use its mouse and keyboard."
+                                      : "This PC turned off the headset's mouse and keyboard. You can still watch."}});
+    }
 }
 
 ClientSession::~ClientSession() { Close("destroyed"); }
@@ -131,6 +146,9 @@ void ClientSession::OnControl(const std::string& text) {
     if (!m.is_object() || !m.contains("type")) return;
     // Input events are latency sensitive and cheap: handle them inline.
     const std::string type = m["type"].get<std::string>();
+    if (!m_inputAllowed && (type == rc::msg::kMouseButton || type == rc::msg::kMouseWheel ||
+                            type == rc::msg::kKey || type == rc::msg::kText))
+        return;
     if (type == rc::msg::kMouseButton) {
         input::MouseButton(m.value("button", 0), m.value("down", false));
         return;
@@ -233,7 +251,7 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
             std::lock_guard lock(m_mutex);
             auto it = m_desktop.find(p.monitorStreamId);
             if (it != m_desktop.end()) {
-                input::MoveMouse(it->second->Monitor(), p.u, p.v);
+                if (m_inputAllowed) input::MoveMouse(it->second->Monitor(), p.u, p.v);
                 if (m_lastMouseMonitor != p.monitorStreamId) {
                     m_lastMouseMonitor = p.monitorStreamId;
                     for (auto& [id, s] : m_desktop) s->SetActive(true);
@@ -537,6 +555,7 @@ void ClientSession::OnMonitorsChanged() {
 }
 
 void ClientSession::OnSettingsChanged() {
+    ApplyInputSetting(true);
     std::lock_guard lock(m_queueMutex);
     m_queue.push_back(json{{"type", rc::msg::kUpdateSettings}, {"settings", json::object()}});
     m_queue.push_back(json{{"type", "_audio"}});
@@ -606,6 +625,10 @@ void ClientSession::StartDesktop(const json& m) {
         created[streamId] = std::move(ds);
     }
     SendControl({{"type", rc::msg::kStreamConfig}, {"kind", "desktop"}, {"streams", streams}});
+    if (!pc.desktopInput)
+        SendControl({{"type", rc::msg::kNotice},
+                     {"level", "info"},
+                     {"text", "This PC has the headset's mouse and keyboard turned off. You can still watch."}});
     for (auto& [id, ds] : created) ds->Start();
     std::lock_guard lock(m_mutex);
     m_desktop = std::move(created);

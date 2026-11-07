@@ -108,6 +108,10 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     bool m_vpn;       // no account, but through a tunnel
     bool m_slowPath;  // either way: smaller packets, a careful bitrate
     std::atomic<bool> m_closed{false};
+    // "Let headsets use the mouse and keyboard": checked on every input event, so not a
+    // settings snapshot each time.
+    std::atomic<bool> m_inputAllowed{true};
+    void ApplyInputSetting(bool announce);
 
     // Control work happens off the network thread.
     std::thread m_worker;

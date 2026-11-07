@@ -2,6 +2,23 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.0.1 - 2026-11-07
+
+### New
+
+- RinCast Streamer can stop headsets from using the mouse and keyboard: turn off **Let headsets
+  use the mouse and keyboard** under **Headsets**. The headset still shows your screens, and
+  it's told when the PC turns this off or on. VR games still get the controllers.
+
+### Fixed
+
+- When PC VR starts but no picture reaches the headset, the logs now say why. The SteamVR
+  driver writes to SteamVR's `vrserver.txt` when SteamVR creates its frame textures, when the
+  first frame goes to the streamer, and why any frame was dropped. Every 10 seconds without a
+  picture, it also says how far SteamVR got. RinCast Streamer's log says when the first frame
+  arrived, why it dropped any, and what the hand-over looked like while nothing came through.
+- The headset app shows the right version number. It was always 1.0.0 before.
+
 ## 1.0.0 - 2026-11-06
 
 The first public release of RinCast: a free, open-source way to use your Windows PC from a

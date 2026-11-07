@@ -25,7 +25,7 @@ void SetPage(int page);
 void ToggleMenu(App& app);
 }
 
-static const char* kVersion = "1.0.0";
+static const char* kVersion = RINCAST_VERSION_STRING;
 
 App::App(android_app* androidApp) : m_android(androidApp), m_assets(androidApp->activity->assetManager) {}
 

@@ -50,6 +50,22 @@ void Log(const char* fmt, ...) {
     }
 }
 
+// For what can go wrong on every frame: each reason at most once every 5 seconds, with how
+// often it happened since it was last logged, so a stuck picture shows up in vrserver.txt
+// without flooding it.
+void LogEvery5s(const char* reason) {
+    static std::mutex mutex;
+    static std::map<const char*, std::pair<int64_t, uint32_t>> seen;  // last logged, count since
+    std::lock_guard lock(mutex);
+    auto& [last, count] = seen[reason];
+    count++;
+    const int64_t now = rcvr::QpcNowNs();
+    if (last && now - last < 5'000'000'000LL) return;
+    Log("%s (%u times)", reason, count);
+    last = now;
+    count = 0;
+}
+
 // Without a universe and room setup, SteamVR has no standing or play space and OpenXR games
 // lose their stage space. The Quest keeps its own boundary, so this is a default 2 m square
 // around the floor origin that is never drawn. SteamVR keeps any room setup already saved for
@@ -580,6 +596,8 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         }
         std::lock_guard lock(m_layerMutex);
         for (auto h : set->handles) m_swapSets[h] = set;
+        Log("SteamVR created frame textures %ux%u, format %u, %u samples, for process %u", td.Width, td.Height,
+            desc->nFormat, td.SampleDesc.Count, pid);
     }
     void DestroySwapTextureSet(vr::SharedTextureHandle_t handle) override {
         std::lock_guard lock(m_layerMutex);
@@ -608,11 +626,13 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         }
     }
     void SubmitLayer(const SubmitLayerPerEye_t (&perEye)[2]) override {
+        m_layersSubmitted++;
         std::lock_guard lock(m_layerMutex);
         if (m_layers.size() < 8) m_layers.push_back({perEye[0], perEye[1]});
     }
 
     void Present(vr::SharedTextureHandle_t syncTexture) override {
+        m_presents++;
         std::vector<std::array<SubmitLayerPerEye_t, 2>> layers;
         std::vector<std::array<ComPtr<ID3D11Texture2D>, 2>> textures;
         {
@@ -622,18 +642,26 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
                 textures.push_back({FindSwapTexture(l[0].hTexture), FindSwapTexture(l[1].hTexture)});
             }
         }
-        if (!m_device || layers.empty() || !g_shared->bridge.shared()) return;
+        if (!m_device) return LogEvery5s("Frame dropped: no graphics device (see the error when the headset was added)");
+        if (layers.empty()) return LogEvery5s("Frame dropped: SteamVR presented a frame without layers");
+        if (!g_shared->bridge.shared()) return LogEvery5s("Frame dropped: not connected to RinCast Streamer");
+        for (const auto& t : textures)
+            if (!t[0] || !t[1]) LogEvery5s("A layer's texture isn't one SteamVR created through this driver; that layer is left out");
         rcvr::Shared* s = g_shared->bridge.shared();
         // SteamVR's rendering into the layers is done once we hold the sync texture.
         ComPtr<ID3D11Texture2D> sync = OpenBackbuffer(syncTexture);
         ComPtr<IDXGIKeyedMutex> syncMutex;
         if (sync) sync.As(&syncMutex);
-        if (syncMutex && !rcvr::AcquireKeyed(syncMutex.Get(), 100)) return;
+        if (syncMutex && !rcvr::AcquireKeyed(syncMutex.Get(), 100))
+            return LogEvery5s("Frame dropped: SteamVR kept its frame locked for over 100 ms");
         const int slot = g_shared->bridge.AcquireSlot();
         ID3D11Texture2D* dst = slot >= 0 ? SlotTexture(slot) : nullptr;
         ComPtr<IDXGIKeyedMutex> dstMutex;
         if (dst) ComPtr<ID3D11Texture2D>(dst).As(&dstMutex);
         if (!dst || (dstMutex && !rcvr::AcquireKeyed(dstMutex.Get(), 20))) {
+            LogEvery5s(slot < 0   ? "Frame dropped: no free frame slot, RinCast Streamer isn't taking frames"
+                       : !dst     ? "Frame dropped: couldn't open RinCast Streamer's texture"
+                                  : "Frame dropped: RinCast Streamer kept its texture locked for over 20 ms");
             if (slot >= 0) g_shared->bridge.AbandonSlot(slot);
             if (syncMutex) syncMutex->ReleaseSync(0);
             return;
@@ -664,6 +692,19 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         s->producerPid = LONG(GetCurrentProcessId());
         InterlockedExchange64(&s->producerHeartbeatNs, rcvr::QpcNowNs());
         g_shared->bridge.PublishSlot(slot);
+        if (!m_framesPublished++) Log("First frame handed to RinCast Streamer (%ux%u)", dd.Width, dd.Height);
+        m_lastPublishNs = rcvr::QpcNowNs();
+    }
+
+    // For the tracking thread's report when no picture is getting through.
+    struct FrameCounts {
+        uint32_t presents, layers, published;
+        size_t textureSets;
+        int64_t lastPublishNs;
+    };
+    FrameCounts Counts() {
+        std::lock_guard lock(m_layerMutex);
+        return {m_presents, m_layersSubmitted, m_framesPublished, m_swapSets.size() / 3, m_lastPublishNs};
     }
 
     // Paces SteamVR to the headset's refresh rate: block until the next (virtual) vsync.
@@ -905,6 +946,8 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     std::mutex m_layerMutex;  // swap sets and layers (SteamVR calls from its own threads)
     std::map<vr::SharedTextureHandle_t, std::shared_ptr<SwapSet>> m_swapSets;
     std::vector<std::array<SubmitLayerPerEye_t, 2>> m_layers;
+    std::atomic<uint32_t> m_presents{0}, m_layersSubmitted{0}, m_framesPublished{0};
+    std::atomic<int64_t> m_lastPublishNs{0};
     ComPtr<ID3D11Buffer> m_rectBuffer;
     ComPtr<ID3D11BlendState> m_blend;
     int m_poseMismatchLogs = 0;
@@ -1089,6 +1132,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     void TrackingLoop() {
         int64_t lastPushed = 0;
         LONG configGeneration = -1;
+        int64_t lastFrameReportNs = rcvr::QpcNowNs();
         while (m_running) {
             if (!m_hmd || !g_shared->bridge.shared()) {
                 Sleep(50);
@@ -1143,6 +1187,16 @@ class Provider : public vr::IServerTrackedDeviceProvider {
                 m_hmd->Update(t, false, 0);
             }
             UpdateBodyTrackers(s, connected);
+            // While a headset is connected but no picture reaches the streamer, say every 10 s how
+            // far SteamVR got: no textures, no layers, no presents, or frames dropped on the way.
+            if (connected && rcvr::QpcNowNs() - lastFrameReportNs > 10'000'000'000LL) {
+                lastFrameReportNs = rcvr::QpcNowNs();
+                const auto c = m_hmd->Counts();
+                if (lastFrameReportNs - c.lastPublishNs > 10'000'000'000LL)
+                    Log("No frame for RinCast Streamer in 10 s. Since SteamVR started: %zu texture sets, %u layers, "
+                        "%u presents, %u frames handed over",
+                        c.textureSets, c.layers, c.presents, c.published);
+            }
             // Direct mode: SteamVR paces its frames by these.
             while (rcvr::QpcNowNs() < nextVsync) YieldProcessor();
             vr::VRServerDriverHost()->VsyncEvent(0.0);
