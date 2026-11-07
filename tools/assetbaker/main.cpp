@@ -1,8 +1,14 @@
 // Bakes signed-distance-field atlases for the headset UI:
-//   ui/text.png  + ui/text.json    Inter (Medium + SemiBold), Latin-1 and UI punctuation
+//   ui/text.png  + ui/text.json    Inter (Medium + SemiBold), Latin-1 and UI punctuation,
+//                                  plus the characters of a charset file from Noto Sans SC
 //   ui/icons.png + ui/icons.json   Material Symbols Rounded icons used by the app
 //
-//   assetbaker <fonts dir> <material symbols ttf> <codepoints file> <out dir>
+//   assetbaker <fonts dir> <material symbols ttf> <codepoints file> <out dir> [charset file]
+//
+// The optional charset file is UTF-8 text; every character in it that Inter doesn't
+// already cover is baked from NotoSansSC-{Medium,SemiBold}.ttf in the fonts dir. It holds
+// the non-ASCII characters the UI's translations use (app/strings.cpp), so Chinese and
+// Japanese render while the atlas stays small.
 //
 // SDF glyphs stay sharp at any distance in VR; the shader reconstructs edges
 // with screen-space derivatives.
@@ -25,6 +31,31 @@ using nlohmann::json;
 static std::vector<unsigned char> ReadFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     return std::vector<unsigned char>(std::istreambuf_iterator<char>(f), {});
+}
+
+// Decodes the next UTF-8 code point, advancing `i` past it. Lenient: bad bytes
+// count as one code point each, which the font simply won't have.
+static uint32_t NextCodepoint(const std::string& s, size_t& i) {
+    const auto b0 = static_cast<unsigned char>(s[i]);
+    auto cont = [&](size_t k) { return k < s.size() && (static_cast<unsigned char>(s[k]) & 0xC0) == 0x80; };
+    i++;
+    if (b0 < 0x80) return b0;
+    if ((b0 & 0xE0) == 0xC0 && cont(i)) {
+        const uint32_t cp = ((b0 & 0x1Fu) << 6) | (s[i] & 0x3Fu);
+        i++;
+        return cp >= 0x80 ? cp : b0;
+    }
+    if ((b0 & 0xF0) == 0xE0 && cont(i) && cont(i + 1)) {
+        const uint32_t cp = ((b0 & 0x0Fu) << 12) | ((s[i] & 0x3Fu) << 6) | (s[i + 1] & 0x3Fu);
+        i += 2;
+        return cp >= 0x800 ? cp : b0;
+    }
+    if ((b0 & 0xF8) == 0xF0 && cont(i) && cont(i + 1) && cont(i + 2)) {
+        const uint32_t cp = ((b0 & 0x07u) << 18) | ((s[i] & 0x3Fu) << 12) | ((s[i + 1] & 0x3Fu) << 6) | (s[i + 2] & 0x3Fu);
+        i += 3;
+        return cp >= 0x10000 ? cp : b0;
+    }
+    return b0;
 }
 
 struct Glyph {
@@ -91,21 +122,42 @@ static void WriteAtlas(std::vector<Glyph>& glyphs, const std::string& png, int s
 
 int main(int argc, char** argv) {
     if (argc < 5) {
-        std::printf("usage: assetbaker <inter ttf dir> <MaterialSymbols.ttf> <codepoints> <out dir>\n");
+        std::printf("usage: assetbaker <inter ttf dir> <MaterialSymbols.ttf> <codepoints> <out dir> [charset file]\n");
         return 1;
     }
     const std::string fontsDir = argv[1], iconFont = argv[2], codepointsPath = argv[3], outDir = argv[4];
+    const std::string charsetPath = argc > 5 ? argv[5] : "";
     constexpr float kTextPx = 56.f;
     constexpr int kPad = 8;
 
     // ---- text ----
     const char* faces[] = {"Inter-Medium.ttf", "Inter-SemiBold.ttf"};
+    const char* cjkFaces[] = {"NotoSansSC-Medium.ttf", "NotoSansSC-SemiBold.ttf"};
     std::vector<int> codepoints;
     for (int c = 32; c < 127; c++) codepoints.push_back(c);
     for (int c = 160; c < 256; c++) codepoints.push_back(c);
     for (int c : {0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026, 0x2190, 0x2191, 0x2192, 0x2193,
                   0x00D7, 0x2212, 0x2122, 0x20AC})
         codepoints.push_back(c);
+
+    // Characters of the translations that Inter doesn't cover, from the charset file.
+    // One codepoint goes to exactly one font: the Inter list wins, the rest are CJK.
+    std::string charset;
+    if (!charsetPath.empty()) {
+        const std::vector<unsigned char> raw = ReadFile(charsetPath);
+        charset.assign(raw.begin(), raw.end());
+    }
+    std::vector<int> cjkCodepoints;
+    if (!charset.empty()) {
+        std::vector<int> extra;
+        for (size_t i = 0; i < charset.size();) extra.push_back(NextCodepoint(charset, i));
+        for (int cp : extra)
+            if (std::find(codepoints.begin(), codepoints.end(), cp) == codepoints.end() &&
+                std::find(cjkCodepoints.begin(), cjkCodepoints.end(), cp) == cjkCodepoints.end())
+                cjkCodepoints.push_back(cp);
+    }
+    if (!cjkCodepoints.empty())
+        std::printf("%zu characters beyond Inter, baked from %s\n", cjkCodepoints.size(), cjkFaces[0]);
 
     std::vector<Glyph> textGlyphs;
     json textJson{{"size", kTextPx}, {"padding", kPad}, {"faces", json::array()}};
@@ -126,6 +178,18 @@ int main(int argc, char** argv) {
                 const int k = stbtt_GetCodepointKernAdvance(&info, a, b);
                 if (k) face["kerning"][std::to_string(a * 65536 + b)] = k * scale;
             }
+        // The CJK glyphs of this face come from Noto Sans SC, without kerning.
+        if (!cjkCodepoints.empty()) {
+            const std::string cjkPath = fontsDir + "/" + cjkFaces[f];
+            std::vector<unsigned char> cjkData = ReadFile(cjkPath);
+            if (cjkData.empty()) {
+                std::printf("missing %s\n", cjkPath.c_str());
+                return 1;
+            }
+            stbtt_fontinfo cjk;
+            stbtt_InitFont(&cjk, cjkData.data(), 0);
+            for (int c : cjkCodepoints) textGlyphs.push_back(Bake(cjk, c, kTextPx, kPad, f * 0x110000 + c));
+        }
         textJson["faces"].push_back(face);
     }
     WriteAtlas(textGlyphs, outDir + "/text.png", 1024);

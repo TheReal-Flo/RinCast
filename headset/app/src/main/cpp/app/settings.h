@@ -16,6 +16,9 @@ struct HeadsetSettings {
     std::string environment = "space-violet";
     float skyBrightness = 1.0f;
 
+    // Interface
+    std::string language = "auto";      // auto | en | zh-CN | de | es | fr | ja
+
     // Streaming (sent to the PC)
     float vrScale = 0.9f;               // pixels per eye against the headset's own, kMinVrScale..kMaxVrScale
     bool matchSteamVr = false;          // stream at the resolution SteamVR renders at instead

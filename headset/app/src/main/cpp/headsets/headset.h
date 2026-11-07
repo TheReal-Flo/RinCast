@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../xr/xr_context.h"
+#include "app/strings.h"
 #include "rc/protocol.h"
 
 namespace rv {
@@ -58,7 +59,7 @@ class Headset {
 
     // Face and eyes, for avatars (VRCFaceTracking on the PC).
     virtual bool FaceSupported(const XrContext&) const { return false; }
-    virtual const char* FaceHint() const { return "For avatars, through VRCFaceTracking on the PC"; }
+    virtual const char* FaceHint() const { return Tr("device.faceHint"); }
     virtual bool ReadFace(XrContext&, XrTime, rc::FaceTrackingPayload&) { return false; }
     virtual void StopFace() {}
 

@@ -58,6 +58,7 @@ jobject Platform::Activity() { return g_activity; }
 std::string Platform::DeviceId() { return g_deviceId; }
 std::string Platform::DeviceModel() { return g_model; }
 std::string Platform::FilesDir() { return g_filesDir; }
+std::string Platform::SystemLocale() { return CallString("getSystemLocale"); }
 
 bool Platform::HasMicPermission() {
     JniScope scope;

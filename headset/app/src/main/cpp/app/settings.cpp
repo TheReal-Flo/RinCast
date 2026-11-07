@@ -15,6 +15,7 @@ using json = nlohmann::json;
 json HeadsetSettings::ToJson() const {
     return {{"environment", environment},
             {"skyBrightness", skyBrightness},
+            {"language", language},
             {"vrQuality", vrQuality},
             {"vrScale", vrScale},
             {"matchSteamVr", matchSteamVr},
@@ -69,6 +70,7 @@ void HeadsetSettings::FromJson(const json& j) {
     };
     get("environment", environment);
     get("skyBrightness", skyBrightness);
+    get("language", language);
     get("vrQuality", vrQuality);
     // Settings from before the resolution slider: the preset's scale.
     if (!j.contains("vrScale")) {

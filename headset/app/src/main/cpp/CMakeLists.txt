@@ -17,6 +17,7 @@ add_library(rincast SHARED
   app/app.cpp
   app/screens.cpp
   app/settings.cpp
+  app/strings.cpp
   gfx/gl.cpp
   gfx/scene.cpp
   gfx/sky.cpp

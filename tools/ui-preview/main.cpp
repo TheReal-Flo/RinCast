@@ -11,6 +11,7 @@
 #include <map>
 
 #include "app/app.h"
+#include "app/strings.h"
 #include "gfx/scene.h"
 #include "platform/assets.h"
 #include "platform/jni_bridge.h"
@@ -196,6 +197,8 @@ int main(int argc, char** argv) {
     const std::string out = argv[2];
     const std::string only = argc > 3 ? argv[3] : "";
     std::filesystem::create_directories(out);
+    // RINCAST_LANG=<code> previews the UI in that language, e.g. zh-CN.
+    if (const char* lang = getenv("RINCAST_LANG")) SetLanguage(lang);
 
     // The GPU if it's free, else Windows' software renderer: the pictures come out the same.
     EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);

@@ -1,5 +1,7 @@
 // PICO 4, PICO 4 Ultra and Neo3: their controllers, the Motion Trackers and face tracking.
 #include "../headset.h"
+
+#include "app/strings.h"
 #include "pico_body.h"
 #include "pico_face.h"
 #include "rc/platform.h"
@@ -16,7 +18,7 @@ class PicoHeadset : public Headset {
     }
 
     const char* Family() const override { return "PICO"; }
-    const char* SettingsName() const override { return "PICO's settings"; }
+    const char* SettingsName() const override { return Tr("device.pico.settings"); }
 
     std::vector<ControllerProfile> Controllers() const override {
         // No thumbrest on any of them. The PICO 4 Ultra's controllers have two profiles: PICO's
@@ -35,7 +37,7 @@ class PicoHeadset : public Headset {
     bool VelocitiesFromPoses() const override { return true; }
 
     bool BodySupported(const XrContext&) const override { return m_body.Supported(); }
-    const char* BodyHint() const override { return "With PICO Motion Trackers"; }
+    const char* BodyHint() const override { return Tr("device.pico.bodyHint"); }
     std::string BodyStatus() const override {
         // Asked every frame while the settings show; the trackers don't change that fast.
         const int64_t now = rc::NowNs();

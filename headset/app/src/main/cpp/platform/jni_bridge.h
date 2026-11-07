@@ -30,6 +30,8 @@ class Platform {
     static std::string DeviceId();
     static std::string DeviceModel();
     static std::string FilesDir();
+    // The system's language as a BCP 47 tag, e.g. "zh-CN"; "en" when it can't be asked.
+    static std::string SystemLocale();
     static bool HasMicPermission();
     static void SetStreamingLocks(bool enable);
     enum class Sound { Click = 0, Connected = 1, Problem = 2 };
