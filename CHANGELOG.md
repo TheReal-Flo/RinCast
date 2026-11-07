@@ -2,6 +2,38 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.1.1 - 2026-11-07
+
+The 1.1.0 headset app doesn't start on any headset: update it. Install both, though; the other
+fixes are in the headset app and in the PC's SteamVR driver and streamer. Apart from the first
+fix, not tested on a headset yet.
+
+### Fixed
+
+- The 1.1.0 headset app didn't start at all: its OpenXR loader looked up the runtime's
+  functions without the instance it had just created, so every lookup failed
+  ([#5](https://github.com/TheReal-Flo/RinCast/pull/5)). Tested on a Quest 2 and a PICO 4.
+- Chinese PICO 4s (model A8110, "Phoenix") got the standard OpenXR loader instead of PICO's own.
+- VRChat took the controllers for Index controllers: fingers curled with the grip, a fist
+  wasn't possible, and its Touch gestures didn't work ([#4](https://github.com/TheReal-Flo/RinCast/issues/4)).
+  They said their fingers were partly measured; like Touch controllers, they now say the
+  fingers are estimated from the buttons. With "Finger tracking with controllers", the real
+  fingers still reach games that read SteamVR's skeleton, but not VRChat, which uses its own.
+- Tracked hands are their own SteamVR devices ("RinCast Hand"), as VRChat recommends for
+  streaming apps, instead of controllers with a hand's pose ([#2](https://github.com/TheReal-Flo/RinCast/issues/2)).
+  Their fingers count as fully tracked, so VRChat shows them as they are and makes its gestures
+  from them, fists included, and does its own pinches. RinCast's driver brings VRChat's bindings
+  for them; other games get pinch as the trigger and a fist as the grip.
+- Windows' default audio devices still weren't put back when Windows shut down or signed out
+  while a headset was connected: Windows ends the streamer before it gets to. It now puts them
+  back as Windows asks it to close.
+- The headset kept recording its microphone while RinCast was in the background (the Quest's
+  home, another app, the headset asleep) as long as the PC session lasted. A Quest Pro then
+  gave the next app to use the microphone, such as Virtual Desktop, a much quieter one until
+  the headset restarted. RinCast now lets go of it in the background and takes it again when
+  it's back in front.
+- The headset's video codec and frame-rate options didn't follow the language setting.
+
 ## 1.1.0 - 2026-11-07
 
 New in the headset app and the PC streamer: install both. A 1.1.0 headset still works with an

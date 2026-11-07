@@ -1,0 +1,68 @@
+{
+  "action_manifest_version": 0,
+  "alias_info": {},
+  "app_key": "steam.app.438100",
+  "bindings": {
+    "/actions/action_menu": {
+      "chords": [],
+      "haptics": [],
+      "poses": [],
+      "skeleton": [],
+      "sources": []
+    },
+    "/actions/global": {
+      "chords": [],
+      "haptics": [
+        {
+          "output": "/actions/global/out/haptic",
+          "path": "/user/hand/left/output/haptic"
+        },
+        {
+          "output": "/actions/global/out/haptic",
+          "path": "/user/hand/right/output/haptic"
+        }
+      ],
+      "poses": [
+        {
+          "output": "/actions/global/in/pose",
+          "path": "/user/hand/left/pose/raw"
+        },
+        {
+          "output": "/actions/global/in/pose",
+          "path": "/user/hand/right/pose/raw"
+        }
+      ],
+      "skeleton": [
+        {
+          "output": "/actions/global/in/skeletonlefthand",
+          "path": "/user/hand/left/input/skeleton/left"
+        },
+        {
+          "output": "/actions/global/in/skeletonrighthand",
+          "path": "/user/hand/right/input/skeleton/right"
+        }
+      ],
+      "sources": []
+    },
+    "/actions/menu": {
+      "chords": [],
+      "haptics": [],
+      "poses": [],
+      "skeleton": [],
+      "sources": []
+    },
+    "/actions/one_hand": {
+      "chords": [],
+      "haptics": [],
+      "poses": [],
+      "skeleton": [],
+      "sources": []
+    }
+  },
+  "category": "steamvr_input",
+  "controller_type": "rincast_hand",
+  "description": "RinCast's tracked hands in VRChat: pose and fingers only",
+  "name": "RinCast hands for VRChat",
+  "options": {},
+  "simulated_actions": []
+}

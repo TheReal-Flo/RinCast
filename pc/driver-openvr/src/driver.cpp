@@ -229,6 +229,15 @@ ModelNames NamesFor(const std::string& model) {
 // ---------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------
+void ToBones(const rcvr::HandSnapshot& h, vr::VRBoneTransform_t* bones) {
+    for (int i = 0; i < rcvr::kHandBones; i++) {
+        const auto& b = h.bones[i];
+        bones[i].position = {b.position[0], b.position[1], b.position[2], 1};
+        bones[i].orientation = {b.orientation[3], b.orientation[0], b.orientation[1], b.orientation[2]};
+    }
+    bones[0] = {{0, 0, 0, 1}, {1, 0, 0, 0}};
+}
+
 class Controller : public vr::ITrackedDeviceServerDriver {
    public:
     Controller(int hand, std::string serial, ModelNames names)
@@ -288,9 +297,13 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         m_stickTouch = boolean("/input/joystick/touch");
         m_thumbrest = boolean("/input/thumbrest/touch");
         in->CreateHapticComponent(c, "/output/haptic", &m_haptic);
+        // Estimated, as Touch controllers are: the fingers come from what the buttons feel.
+        // VRChat reads Partial as Index controllers (fingers curl with the grip, no fist,
+        // its Touch gestures off) and only uses a skeleton itself when it's Full, which the
+        // tracked hands are, on devices of their own (HandDevice).
         in->CreateSkeletonComponent(c, left ? "/input/skeleton/left" : "/input/skeleton/right",
                                     left ? "/skeleton/hand/left" : "/skeleton/hand/right", "/pose/raw",
-                                    vr::VRSkeletalTracking_Partial, nullptr, 0, &m_skeleton);
+                                    vr::VRSkeletalTracking_Estimated, nullptr, 0, &m_skeleton);
         // Games that read the skeleton before the first pose would otherwise get a frozen hand.
         UpdateControllerSkeleton({});
         return vr::VRInitError_None;
@@ -310,15 +323,16 @@ class Controller : public vr::ITrackedDeviceServerDriver {
     void Update(const rcvr::TrackingSnapshot& t, const rcvr::HandSnapshot* tracked, bool headsetConnected, double timeOffset) {
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         const auto& s = t.controllers[m_hand];
-        const bool connected = headsetConnected && (s.flags & 1);
+        // While the hand is tracked instead, the hand's own device stands in (VRChat's advice
+        // for streaming drivers: one device per kind of input, switched by connected/valid).
+        const bool connected = headsetConnected && (s.flags & 1) && !(s.flags & 4);
         const bool valid = connected && (s.flags & 2);
         // OpenXR grip pose -> SteamVR Oculus Touch "raw" pose.
         static const RigidPose toOculus[2] = {GripToOculus(0), GripToOculus(1)};
         const RigidPose& l = toOculus[m_hand];
-        // A tracked hand's pose is already the controller's: see rc::HandDevicePose.
-        m_lastPose = tracked && (s.flags & 4) ? MakePose(s.pose, valid, connected, timeOffset, false)
-                             : MakePose(s.pose, valid, connected, timeOffset, true, &l.q, l.t);
+        m_lastPose = MakePose(s.pose, valid, connected, timeOffset, true, &l.q, l.t);
         vr::VRServerDriverHost()->TrackedDevicePoseUpdated(m_id, m_lastPose, sizeof(m_lastPose));
+        if (!connected) return;
 
         auto* in = vr::VRDriverInput();
         const uint32_t b = s.buttons;
@@ -352,14 +366,11 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         in->UpdateSkeletonComponent(m_skeleton, vr::VRSkeletalMotionRange_WithoutController, withoutController, rcvr::kHandBones);
     }
 
+    // Real fingers around the controller ("Finger tracking with controllers"), for games that
+    // read the skeleton themselves.
     void UpdateTrackedSkeleton(const rcvr::HandSnapshot& h) {
         vr::VRBoneTransform_t bones[rcvr::kHandBones];
-        for (int i = 0; i < rcvr::kHandBones; i++) {
-            const auto& b = h.bones[i];
-            bones[i].position = {b.position[0], b.position[1], b.position[2], 1};
-            bones[i].orientation = {b.orientation[3], b.orientation[0], b.orientation[1], b.orientation[2]};
-        }
-        bones[0] = {{0, 0, 0, 1}, {1, 0, 0, 0}};
+        ToBones(h, bones);
         Publish(bones, bones);
     }
 
@@ -417,6 +428,91 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         m_stickY{}, m_stickClick{}, m_stickTouch{}, m_thumbrest{}, m_haptic{}, m_skeleton{};
     bool m_lastThumb = false, m_lastIndex = false;
     float m_thumbProgress = 0, m_indexProgress = 0;
+};
+
+// A hand the headset tracks without a controller, as its own device: VRChat (and SteamVR's
+// own guidance for streaming drivers) wants one device per kind of input. Its fingers are
+// measured, so the skeleton is Full: VRChat then animates them as they are, makes its gestures
+// from them (a fist is a fist) and does its own pinches. Pinch and fist are also a trigger and
+// a grip, which games made for Touch controllers get through resources/input's remapping.
+// Connected only while the hand is the input; the controller is the rest of the time.
+class HandDevice : public vr::ITrackedDeviceServerDriver {
+   public:
+    HandDevice(int hand, std::string serial) : m_hand(hand), m_serial(std::move(serial)) {}
+
+    vr::EVRInitError Activate(uint32_t id) override {
+        m_id = id;
+        auto* props = vr::VRProperties();
+        const auto c = props->TrackedDeviceToPropertyContainer(id);
+        const bool left = m_hand == 0;
+        // The controllers' tracking system: the same space, for Space Calibrator too.
+        props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
+        props->SetStringProperty(c, vr::Prop_ManufacturerName_String, "RinCast");
+        props->SetStringProperty(c, vr::Prop_ModelNumber_String, left ? "RinCast Hand (Left)" : "RinCast Hand (Right)");
+        props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
+        props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ("rincast/" + m_serial).c_str());
+        props->SetStringProperty(c, vr::Prop_ControllerType_String, "rincast_hand");
+        props->SetStringProperty(c, vr::Prop_InputProfilePath_String, "{rincast}/input/rincast_hand_profile.json");
+        props->SetInt32Property(c, vr::Prop_ControllerRoleHint_Int32,
+                                left ? vr::TrackedControllerRole_LeftHand : vr::TrackedControllerRole_RightHand);
+        props->SetInt32Property(c, vr::Prop_DeviceClass_Int32, vr::TrackedDeviceClass_Controller);
+        props->SetBoolProperty(c, vr::Prop_DeviceProvidesBatteryStatus_Bool, false);
+        // Below the controller, for when both happen to be connected at once.
+        props->SetInt32Property(c, vr::Prop_ControllerHandSelectionPriority_Int32, -1);
+
+        auto* in = vr::VRDriverInput();
+        in->CreateBooleanComponent(c, "/input/system/click", &m_system);
+        in->CreateBooleanComponent(c, "/input/trigger/click", &m_triggerClick);
+        in->CreateScalarComponent(c, "/input/trigger/value", &m_trigger, vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
+        in->CreateBooleanComponent(c, "/input/grip/click", &m_gripClick);
+        in->CreateScalarComponent(c, "/input/grip/value", &m_grip, vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
+        in->CreateHapticComponent(c, "/output/haptic", &m_haptic);
+        in->CreateSkeletonComponent(c, left ? "/input/skeleton/left" : "/input/skeleton/right",
+                                    left ? "/skeleton/hand/left" : "/skeleton/hand/right", "/pose/raw",
+                                    vr::VRSkeletalTracking_Full, nullptr, 0, &m_skeleton);
+        rcvr::BridgePose none{};
+        none.orientation[3] = 1;
+        m_lastPose = MakePose(none, false, false, 0, false);
+        return vr::VRInitError_None;
+    }
+
+    void Deactivate() override { m_id = vr::k_unTrackedDeviceIndexInvalid; }
+    void EnterStandby() override {}
+    void* GetComponent(const char*) override { return nullptr; }
+    void DebugRequest(const char*, char* response, uint32_t size) override {
+        if (size) response[0] = 0;
+    }
+    vr::DriverPose_t GetPose() override { return m_lastPose; }
+
+    void Update(const rcvr::TrackingSnapshot& t, const rcvr::HandSnapshot* bones, bool headsetConnected, double timeOffset) {
+        if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
+        const auto& s = t.controllers[m_hand];
+        const bool connected = headsetConnected && (s.flags & 1) && (s.flags & 4);
+        const bool valid = connected && (s.flags & 2);
+        // The pose is already where a controller in that hand would be: see rc::HandDevicePose.
+        m_lastPose = MakePose(s.pose, valid, connected, timeOffset, false);
+        vr::VRServerDriverHost()->TrackedDevicePoseUpdated(m_id, m_lastPose, sizeof(m_lastPose));
+        if (!connected) return;
+        auto* in = vr::VRDriverInput();
+        in->UpdateBooleanComponent(m_system, m_hand == 0 && (s.buttons & (1u << 4)), 0);
+        in->UpdateScalarComponent(m_trigger, s.trigger, 0);
+        in->UpdateBooleanComponent(m_triggerClick, s.trigger > 0.85f, 0);
+        in->UpdateScalarComponent(m_grip, s.grip, 0);
+        in->UpdateBooleanComponent(m_gripClick, s.grip > 0.85f, 0);
+        if (bones) {
+            vr::VRBoneTransform_t b[rcvr::kHandBones];
+            ToBones(*bones, b);
+            in->UpdateSkeletonComponent(m_skeleton, vr::VRSkeletalMotionRange_WithController, b, rcvr::kHandBones);
+            in->UpdateSkeletonComponent(m_skeleton, vr::VRSkeletalMotionRange_WithoutController, b, rcvr::kHandBones);
+        }
+    }
+
+   private:
+    int m_hand;
+    std::string m_serial;
+    uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
+    vr::DriverPose_t m_lastPose{};
+    vr::VRInputComponentHandle_t m_system{}, m_triggerClick{}, m_trigger{}, m_gripClick{}, m_grip{}, m_haptic{}, m_skeleton{};
 };
 
 // ---------------------------------------------------------------------------
@@ -1085,6 +1181,8 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         m_hmd.reset();
         m_controllers[0].reset();
         m_controllers[1].reset();
+        m_hands[0].reset();
+        m_hands[1].reset();
         for (auto& t : m_trackers) t.reset();
         delete g_shared;
         g_shared = nullptr;
@@ -1131,6 +1229,9 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             vr::VRServerDriverHost()->TrackedDeviceAdded(
                 (m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right")).c_str(),
                 vr::TrackedDeviceClass_Controller, m_controllers[i].get());
+            const std::string hand = m_hmd->Serial() + (i == 0 ? "_Hand_Left" : "_Hand_Right");
+            m_hands[i] = std::make_unique<HandDevice>(i, hand);
+            vr::VRServerDriverHost()->TrackedDeviceAdded(hand.c_str(), vr::TrackedDeviceClass_Controller, m_hands[i].get());
         }
         strncpy_s(s->applicationName, "SteamVR", _TRUNCATE);
         Log("Added HMD %s, rendering %ux%u per eye @ %.0f Hz", NamesFor(s->config.headsetModel).hmd.c_str(),
@@ -1235,6 +1336,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
                     const bool tracked = rcvr::ReadHand(s, i, hand) &&
                                          rcvr::QpcNowNs() - hand.receivedPcNs < 200'000'000LL;
                     m_controllers[i]->Update(t, tracked ? &hand : nullptr, connected, clamped);
+                    if (m_hands[i]) m_hands[i]->Update(t, tracked ? &hand : nullptr, connected, clamped);
                 }
             } else if (!connected && have) {
                 m_hmd->Update(t, false, 0);
@@ -1259,6 +1361,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
 
     std::unique_ptr<Hmd> m_hmd;
     std::unique_ptr<Controller> m_controllers[2];
+    std::unique_ptr<HandDevice> m_hands[2];
     std::unique_ptr<BodyTrackerDevice> m_trackers[rcvr::kBodyTrackers];
     std::atomic<bool> m_trackerAdded[rcvr::kBodyTrackers]{};
     bool m_trackerWasValid[rcvr::kBodyTrackers]{};

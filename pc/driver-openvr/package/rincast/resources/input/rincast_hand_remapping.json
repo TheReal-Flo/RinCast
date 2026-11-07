@@ -1,0 +1,47 @@
+{
+  "to_controller_type": "rincast_hand",
+  "layouts": [
+    {
+      "priority": 100,
+      "from_controller_type": "oculus_touch",
+      "simulate_controller_type": true,
+      "simulate_render_model": true,
+      "simulate_HMD": true,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/trigger",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/grip",
+          "to": "/user/hand/right/input/grip"
+        },
+        {
+          "from": "/user/hand/right/input/skeleton/right",
+          "to": "/user/hand/right/input/skeleton/right"
+        }
+      ]
+    },
+    {
+      "priority": 100,
+      "from_controller_type": "knuckles",
+      "simulate_controller_type": true,
+      "simulate_render_model": true,
+      "simulate_HMD": true,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/trigger",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/grip",
+          "to": "/user/hand/right/input/grip"
+        },
+        {
+          "from": "/user/hand/right/input/skeleton/right",
+          "to": "/user/hand/right/input/skeleton/right"
+        }
+      ]
+    }
+  ]
+}

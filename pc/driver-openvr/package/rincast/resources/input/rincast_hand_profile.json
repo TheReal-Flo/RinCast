@@ -1,0 +1,56 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "rincast_hand",
+  "device_class": "TrackedDeviceClass_Controller",
+  "resource_root": "rincast",
+  "driver_name": "rincast",
+  "remapping": "{rincast}/input/rincast_hand_remapping.json",
+  "input_bindingui_mode": "controller_handed",
+  "should_show_binding_errors": true,
+  "input_source": {
+    "/input/system": {
+      "type": "button",
+      "click": true,
+      "side": "left",
+      "order": 0
+    },
+    "/input/trigger": {
+      "type": "trigger",
+      "value": true,
+      "click": true,
+      "order": 1
+    },
+    "/input/grip": {
+      "type": "trigger",
+      "value": true,
+      "click": true,
+      "order": 2
+    },
+    "/input/skeleton/left": {
+      "type": "skeleton",
+      "skeleton": "/skeleton/hand/left",
+      "side": "left"
+    },
+    "/input/skeleton/right": {
+      "type": "skeleton",
+      "skeleton": "/skeleton/hand/right",
+      "side": "right"
+    },
+    "/pose/raw": {
+      "type": "pose"
+    },
+    "/output/haptic": {
+      "type": "vibration"
+    }
+  },
+  "default_bindings": [
+    {
+      "app_key": "steam.app.438100",
+      "binding_url": "vrchat_bindings_rincast_hand.json"
+    },
+    {
+      "app_key": "application.generated.unity.vrchat.exe",
+      "binding_url": "vrchat_bindings_rincast_hand.json"
+    }
+  ]
+}

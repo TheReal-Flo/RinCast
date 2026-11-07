@@ -82,6 +82,7 @@ void App::Run() {
             break;
         }
         if (!m_xr.Running()) {
+            ReleaseMicInBackground();
             m_music.Update(false);  // headset off or asleep: fade out
             continue;
         }
@@ -117,6 +118,7 @@ void App::Run() {
             break;
         }
         if (!m_xr.Running()) {
+            ReleaseMicInBackground();
             m_music.Update(false);
             usleep(10'000);
             continue;
@@ -1002,8 +1004,25 @@ void App::LayoutMonitors(bool force) {
 // Frame
 // ---------------------------------------------------------------------------
 
+// The headset's microphone while RinCast is in the background (the Quest's home, another app,
+// the headset asleep). The connection to the PC lives on its own thread, so before, a session
+// kept recording there until it ended. Android lets one app at a time record well: a Quest Pro
+// gave the next app that opened the microphone, Virtual Desktop say, a much quieter one until
+// the headset restarted. Let go of it, and take it again when RinCast is back in front.
+void App::ReleaseMicInBackground() {
+    if (!m_mic.Running()) return;
+    m_mic.Stop();
+    m_micReleased = true;
+    RC_LOGI("Microphone released while RinCast is in the background");
+}
+
 void App::Frame() {
     const int64_t now = rc::NowNs();
+    if (m_micReleased) {
+        m_micReleased = false;
+        if (m_settings.micPassthrough && m_client.GetState() == StreamClient::State::Connected)
+            m_mic.Start([this](const uint8_t* d, size_t n) { m_client.SendAudio(d, n); });
+    }
     const float dt = std::clamp(float(now - m_lastFrameNs) / 1e9f, 0.001f, 0.1f);
     m_lastFrameNs = now;
     m_time += dt;

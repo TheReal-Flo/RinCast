@@ -255,6 +255,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_ENDSESSION:
             g_quitting = true;
+            // Windows ends the process right after this returns, before App::Shutdown runs:
+            // put back the default audio devices a connected headset switched.
+            if (wp) audio::RestoreDefaults();
             return 0;
         case WM_DESTROY: {
             KillTimer(hwnd, 1);

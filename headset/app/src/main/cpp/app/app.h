@@ -195,6 +195,8 @@ class App {
     AudioPlayer m_audio;
     MusicPlayer m_music;
     MicCapture m_mic;
+    bool m_micReleased = false;  // stopped in the background; taken again in front
+    void ReleaseMicInBackground();
 
     bool m_initialized = false;
     bool m_exit = false;
