@@ -46,6 +46,10 @@ class XrInput {
     void SetSimultaneous(bool on);
     bool SimultaneousSupported() const { return m_resumeSimultaneous && m_pauseSimultaneous; }
     void Vibrate(int hand, float amplitude, float durationS, float frequency = XR_FREQUENCY_UNSPECIFIED);
+    // Where the eyes look (XR_EXT_eye_gaze_interaction): one direction for both, in the head's
+    // space (-z ahead). False while they aren't tracked, or the permission is missing.
+    bool GazeSupported() const { return m_gazeSpace != XR_NULL_HANDLE; }
+    bool LocateGaze(XrTime time, float direction[3]) const;
 
    private:
     void UpdateHandTracking(XrTime time);
@@ -61,11 +65,19 @@ class XrInput {
              m_touchTrigger = XR_NULL_HANDLE, m_touchThumbrest = XR_NULL_HANDLE;
     XrAction m_haptic = XR_NULL_HANDLE;
     XrSpace m_aimSpace[2] = {}, m_gripSpace[2] = {};
+    XrAction m_gazePose = XR_NULL_HANDLE;
+    XrSpace m_gazeSpace = XR_NULL_HANDLE;
     HandInput m_hands[2];
 
     // Hand tracking (XR_EXT_hand_tracking + XR_FB_hand_tracking_aim)
     XrHandTrackerEXT m_trackers[2] = {};
     PFN_xrLocateHandJointsEXT m_locateJoints = nullptr;
+    // Where hand tracking needs a permission granted while the app runs (Android XR), creating the
+    // trackers fails until then: tried again once a second.
+    PFN_xrCreateHandTrackerEXT m_createTracker = nullptr;
+    XrSession m_session = XR_NULL_HANDLE;
+    int64_t m_handRetryNs = 0;
+    bool CreateHandTrackers();
 
     // Simultaneous hands and controllers (XR_META_simultaneous_hands_and_controllers)
     PFN_xrResumeSimultaneousHandsAndControllersTrackingMETA m_resumeSimultaneous = nullptr;

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <sys/resource.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include "rc/platform.h"
@@ -66,21 +67,29 @@ int NalType(const std::vector<uint8_t>& d, size_t start, rc::VideoCodec codec) {
 
 VideoDecoder::~VideoDecoder() { Shutdown(); }
 
-// What can go wrong on every frame is logged at most once every 5 seconds per decoder and
-// reason, with how often it happened since, so a missing picture shows up in the log without
-// flooding it.
-void VideoDecoder::Warn(const char* what) {
-    static std::mutex mutex;
-    static std::map<std::string, std::pair<int64_t, uint32_t>> seen;  // last logged, count since
-    const std::string key = std::to_string(uintptr_t(this)) + what;
-    std::lock_guard lock(mutex);
-    auto& [last, count] = seen[key];
-    count++;
-    const int64_t now = rc::NowNs();
-    if (last && now - last < 5'000'000'000LL) return;
-    RC_LOGW("Decoder %s %dx%d: %s (%u times)", Mime(m_codec), m_width, m_height, what, count);
-    last = now;
-    count = 0;
+DecoderCaps VideoDecoder::Capabilities() {
+    // Quest, PICO and Android XR headsets decode H.264 and HEVC (10-bit too) up to 8K wide in
+    // hardware; AV1 only where a decoder for it exists.
+    DecoderCaps caps;
+    caps.hevc10 = true;
+    // Only a hardware AV1 decoder counts. Android's own software one (c2.android.*, OMX.google.*)
+    // exists on headsets without AV1 hardware (Quest 1 and 2) and is far too slow for a stream.
+    if (AMediaCodec* av1 = AMediaCodec_createDecoderByType("video/av01")) {
+        char* name = nullptr;
+        AMediaCodec_getName(av1, &name);
+        const bool software = name && (!strncmp(name, "c2.android.", 11) || !strncmp(name, "OMX.google.", 11));
+        caps.av1 = caps.av110 = !software;
+        RC_LOGI("AV1 decoder: %s%s", name ? name : "?", software ? " (software, not used)" : "");
+        if (name) AMediaCodec_releaseName(av1, name);
+        AMediaCodec_delete(av1);
+    }
+    // The Quest 1's Snapdragon 835 decodes up to 4K; later chips up to 8K.
+    char device[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.product.device", device);
+    const bool quest1 = !strcmp(device, "monterey");
+    caps.maxWidth = quest1 ? 4096 : 8192;
+    caps.maxHeight = quest1 ? 2160 : 4096;
+    return caps;
 }
 
 bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height, float fps) {
@@ -195,52 +204,6 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
     return true;
 }
 
-void VideoDecoder::Submit(uint32_t frameIndex, bool keyframe, bool recovery, std::vector<uint8_t>&& bitstream,
-                          std::vector<uint8_t>&& metadata, int64_t receivedNs) {
-    std::lock_guard lock(m_mutex);
-    if (m_hadKeyframe && !keyframe && frameIndex <= m_lastFrameIndex) return;  // stale duplicate / reordered
-    // Frames are predicted from the ones before. If any frame went missing (lost on
-    // the network, or arrived too late), everything after it would decode into smeared
-    // garbage, so keep showing the last good picture and ask the PC right away for a
-    // frame to resume from: a keyframe, or a recovery frame that only references
-    // frames up to LastGoodFrame().
-    if (keyframe) {
-        m_hadKeyframe = true;
-        m_seenKeyframe = true;
-    } else if (recovery && m_hadKeyframe) {
-        if (!m_seenKeyframe) RC_LOGI("Resuming at recovery frame %u", frameIndex);
-        m_seenKeyframe = true;
-    } else if (m_seenKeyframe && frameIndex != m_lastFrameIndex + 1) {
-        RC_LOGI("Frame %u missing (got %u), waiting for a frame to resume from", m_lastFrameIndex + 1, frameIndex);
-        m_seenKeyframe = false;
-    }
-    if (!m_seenKeyframe) {
-        Warn("frame skipped while waiting for a keyframe");
-        m_needKeyframe = true;
-        return;
-    }
-    // Never build a backlog: if the decoder falls behind, drop what is queued (the
-    // chain then ends at the last frame MediaCodec got; a keyframe starts a new one).
-    if (m_queue.size() > 6) {
-        m_queue.clear();
-        if (!keyframe) {
-            m_lastFrameIndex = m_lastQueued;
-            m_seenKeyframe = false;
-            m_needKeyframe = true;
-            return;
-        }
-    }
-    m_lastFrameIndex = frameIndex;
-    DecodedFrameInfo info;
-    info.frameIndex = frameIndex;
-    info.metadata = std::move(metadata);
-    info.receivedNs = receivedNs;
-    m_infos[int64_t(frameIndex)] = std::move(info);
-    while (m_infos.size() > 64) m_infos.erase(m_infos.begin());
-    m_queue.push_back({frameIndex, keyframe, std::move(bitstream), receivedNs});
-    m_cv.notify_one();
-}
-
 void VideoDecoder::InputLoop() {
     setpriority(PRIO_PROCESS, gettid(), -10);  // best effort
     while (m_running) {
@@ -282,11 +245,6 @@ void VideoDecoder::InputLoop() {
             Warn("queueInputBuffer failed");
         m_lastQueued = p.frameIndex;
     }
-}
-
-uint32_t VideoDecoder::LastGoodFrame() {
-    std::lock_guard lock(m_mutex);
-    return m_hadKeyframe ? m_lastFrameIndex : 0;
 }
 
 void VideoDecoder::OutputLoop() {
@@ -394,14 +352,6 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
         out.frameIndex = uint32_t(pts);
     }
     return true;
-}
-
-double VideoDecoder::AverageDecodeMs() {
-    std::lock_guard lock(m_statsMutex);
-    const double avg = m_decodeCount ? m_decodeMsSum / m_decodeCount : 0;
-    m_decodeMsSum = 0;
-    m_decodeCount = 0;
-    return avg;
 }
 
 }  // namespace rv

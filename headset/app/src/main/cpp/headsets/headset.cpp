@@ -24,6 +24,10 @@ std::vector<const char*> Headset::Extensions() {
         XR_BD_FACIAL_SIMULATION_EXTENSION_NAME,
         kBdMotionTrackingExtension,
         kPicoConfigurationExtension,
+        // Android XR
+        kAndroidXrMarkerExtension,
+        // Any: where the eyes look, for foveated encoding
+        XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME,
     };
 }
 
@@ -38,6 +42,7 @@ std::unique_ptr<Headset> Headset::Create(XrContext& xr) {
     const auto has = [&](const char* s) { return runtime.find(s) != std::string::npos; };
     if (has("oculus") || has("meta")) return CreateQuestHeadset();
     if (has("pico") || has("bytedance") || xr.HasExtension(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME)) return CreatePicoHeadset(xr);
+    if (has("android") || xr.HasExtension(kAndroidXrMarkerExtension)) return CreateAndroidXrHeadset();
     RC_LOGI("Unknown OpenXR runtime \"%s\": plain OpenXR only", xr.RuntimeName().c_str());
     return std::make_unique<Headset>();
 }

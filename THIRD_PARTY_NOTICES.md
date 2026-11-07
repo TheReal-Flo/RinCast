@@ -492,6 +492,10 @@ to Opus, and each track's level lowered by 0.5 to 1.9 dB so all four play equall
 
 Headers: `third_party/openxr`, PC tools and Headset. Loader: Headset, from Maven as `org.khronos.openxr:openxr_loader_for_android`, built from https://github.com/KhronosGroup/OpenXR-SDK. Copyright The Khronos Group Inc. Apache License 2.0, full text below (some files are also available under MIT; see that repository's `LICENSES` folder).
 
+PICO's OpenXR loader: Headset, as `libopenxr_loader_pico.so`, used on PICO headsets from before PICO OS 5.9. Taken from PICO's OpenXR SDK 2.2.0 (https://sdk.picovr.com/developer-platform/sdk/PICO_OpenXR_SDK_220.zip), downloaded when the app is built. It is PICO's build of the Khronos OpenXR loader, Copyright The Khronos Group Inc., Apache License 2.0, with PICO's changes for finding its runtime.
+
+Meta's OpenXR loader: Headset, Quest 1 build only, as `libopenxr_loader_quest1.so`. Taken from Meta's OpenXR Mobile SDK 64 (https://securecdn.oculus.com/binaries/download/?id=7577210995650755), downloaded when the app is built. Copyright Facebook Technologies, LLC and its affiliates. Used under the Oculus SDK License Agreement, https://developer.oculus.com/licenses/oculussdk/.
+
 ## OpenVR headers
 
 PC. `third_party/openvr`. https://github.com/ValveSoftware/openvr

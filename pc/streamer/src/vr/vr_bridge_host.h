@@ -47,6 +47,8 @@ class VrBridgeHost {
     rcvr::ProducerKind ActiveProducer() const;
     std::string ApplicationName() const;
     bool HasConfig() const { return m_hasConfig; }
+    // The size SteamVR renders each eye at, from its frames; false while it sends none.
+    bool SteamVrEyeSize(uint32_t& width, uint32_t& height) const;
     rcvr::DisplayConfig LastConfig() const;
 
    private:

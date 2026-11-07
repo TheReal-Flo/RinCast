@@ -2,11 +2,13 @@
 
 #include <audioclient.h>
 #include <avrt.h>
+#include <endpointvolume.h>
 #include <initguid.h>
 #include <propkeydef.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <mmdeviceapi.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -92,6 +94,41 @@ std::wstring DeviceId(IMMDevice* d) {
     }
     return out;
 }
+
+// The Windows volume and mute of an endpoint, as a gain for the samples. RinCast's driver
+// reports its volume controls as hardware that it never applies, and loopback records a
+// speaker before its volume anyway: without this the sliders and volume keys do nothing.
+class EndpointVolume {
+   public:
+    void Open(IMMDevice* device) {
+        m_volume.Reset();
+        m_nextRead = 0;
+        m_target = m_gain = 1.f;
+        if (device) device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, &m_volume);
+    }
+    // Per sample; follows changes over ~20 ms so they don't click.
+    float Next() {
+        m_gain += (m_target - m_gain) * 0.002f;
+        return m_gain;
+    }
+    // Reads the setting at most 10 times a second.
+    void Update() {
+        const int64_t now = rc::NowNs();
+        if (!m_volume || now < m_nextRead) return;
+        m_nextRead = now + 100'000'000;
+        BOOL mute = FALSE;
+        float scalar = 1, db = 0;
+        if (FAILED(m_volume->GetMute(&mute)) || FAILED(m_volume->GetMasterVolumeLevelScalar(&scalar)) ||
+            FAILED(m_volume->GetMasterVolumeLevel(&db)))
+            return;
+        m_target = mute || scalar <= 0.f ? 0.f : std::min(1.f, std::pow(10.f, db / 20.f));
+    }
+
+   private:
+    ComPtr<IAudioEndpointVolume> m_volume;
+    int64_t m_nextRead = 0;
+    float m_target = 1.f, m_gain = 1.f;
+};
 
 std::mutex g_defaultsMutex;
 std::wstring g_prevRender, g_prevCapture;
@@ -349,6 +386,8 @@ void AudioStreamer::Run() {
         }
         client->Start();
         RC_LOGI("Streaming audio from %s", Narrow(FriendlyName(device.Get())).c_str());
+        EndpointVolume volume;
+        volume.Open(device.Get());
         double resamplePos = 0;
         float lastL = 0, lastR = 0;
         int64_t lastDeviceCheck = rc::NowNs();
@@ -371,10 +410,14 @@ void AudioStreamer::Run() {
                 DWORD flags = 0;
                 if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
                 const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+                volume.Update();
                 // Linear resampling to 48 kHz.
                 for (UINT32 i = 0; i < frames; i++) {
                     float l = 0, r = 0;
                     if (!silent) reader.Stereo(data + size_t(i) * blockAlign, l, r);
+                    const float g = volume.Next();
+                    l *= g;
+                    r *= g;
                     while (resamplePos < 1.0) {
                         pcm.push_back(ToS16(lastL + (l - lastL) * float(resamplePos)));
                         pcm.push_back(ToS16(lastR + (r - lastR) * float(resamplePos)));
@@ -489,6 +532,10 @@ void MicPlayer::Run() {
         }
         m_available = true;
         client->Start();
+        // The microphone's recording level in Windows: turning it down did nothing on
+        // "RinCast Microphone", and testers found the same on Steam Streaming Microphone.
+        EndpointVolume level;
+        if (!m_micName.empty()) level.Open(FindEndpoint(eCapture, m_micName.c_str()).Get());
         // Source samples are pulled from the jitter buffer in 10 ms blocks and
         // linearly resampled to the device rate; leftovers carry over.
         std::vector<int16_t> block(480);
@@ -504,6 +551,7 @@ void MicPlayer::Run() {
             if (!frames) continue;
             BYTE* out = nullptr;
             if (FAILED(render->GetBuffer(frames, &out))) break;
+            level.Update();
             for (UINT32 i = 0; i < frames; i++) {
                 while (pos >= 1.0) {
                     if (blockPos >= block.size()) {
@@ -514,7 +562,7 @@ void MicPlayer::Run() {
                     cur = block[blockPos++];
                     pos -= 1.0;
                 }
-                const float v = (prev + (cur - prev) * float(pos)) / 32768.f;
+                const float v = (prev + (cur - prev) * float(pos)) / 32768.f * level.Next();
                 pos += step;
                 uint8_t* frame = out + size_t(i) * blockAlign;
                 for (UINT c = 0; c < channels; c++) {

@@ -134,6 +134,7 @@ class WindowManager {
     } m_drag;
     bool m_hapticPending = false;
     int m_hapticHand = 1;
+    int m_pressHand = -1;  // the hand whose press on a UI window is still held (it owns the pointer)
 };
 
 }  // namespace rv

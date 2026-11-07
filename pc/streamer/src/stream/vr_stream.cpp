@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <vector>
 
+#include "foveator.h"
 #include "motion_estimator.h"
 #include "rc/motion_field.h"
 
@@ -70,6 +72,41 @@ void WarnEvery5s(const char* reason) {
 
 }  // namespace
 
+// The full-density square follows the eyes, but only moves once they look clearly elsewhere:
+// while it stays put, the encoder can keep referring to the frames before. Without a recent
+// gaze, it sits where each eye's lens is sharpest.
+void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
+    rc::GazePayload g;
+    int64_t at;
+    {
+        std::lock_guard lock(m_gazeMutex);
+        g = m_gaze;
+        at = m_gazeNs;
+    }
+    const bool fresh = at && rc::NowNs() - at < 250'000'000LL;
+    const float F = Foveator::kFoveaSize;
+    for (int eye = 0; eye < 2; eye++) {
+        const float* t = fovTan[eye];  // left, right, up, down
+        // The eye's own gaze, or the other one's while it blinks.
+        const int from = (g.flags & (1 << eye)) ? eye : (g.flags & (1 << (1 - eye))) ? 1 - eye : -1;
+        float u = t[0] / (t[0] + t[1]), v = t[2] / (t[2] + t[3]);  // straight ahead
+        if (fresh && from >= 0 && g.gaze[from][2] < -0.2f) {
+            const float* d = g.gaze[from];
+            u = (d[0] / -d[2] + t[0]) / (t[0] + t[1]);
+            v = (t[2] - d[1] / -d[2]) / (t[2] + t[3]);
+        }
+        const float x = std::clamp(u - F / 2, 0.f, 1.f - F), y = std::clamp(v - F / 2, 0.f, 1.f - F);
+        float* s = m_foveaStart[eye];
+        if (!m_foveaPlaced || std::fabs(x - s[0]) > 0.04f || std::fabs(y - s[1]) > 0.04f) {
+            s[0] = x;
+            s[1] = y;
+        }
+        start[eye][0] = s[0];
+        start[eye][1] = s[1];
+    }
+    m_foveaPlaced = true;
+}
+
 VrStream::VrStream(rc::Connection* connection, VrBridgeHost* bridge, const VrStreamConfig& config,
                    StateHandler onState)
     : m_connection(connection),
@@ -113,8 +150,11 @@ void VrStream::Run() {
     rcvr::Shared* shared = m_bridge->Shared();
 
     ColorConverter converter;
+    Foveator foveator;
+    const bool foveated = m_config.foveatedEyeWidth && m_config.foveatedEyeHeight;
     std::unique_ptr<VideoEncoder> encoder;
-    uint32_t encWidth = 0, encHeight = 0;
+    uint32_t srcWidth = 0, srcHeight = 0;  // the frame from the game
+    uint32_t encWidth = 0, encHeight = 0;  // what's encoded: smaller when foveated
     uint32_t appliedKbps = 0;
     constexpr double kHalfRateBelowBpp = 0.03, kFullRateAboveBpp = 0.05;
     bool halfRate = false, skipNext = false;
@@ -202,9 +242,17 @@ void VrStream::Run() {
             RC_LOGI("VR: first frame from %s (%ux%u, format %u)", ProducerName(producer), desc.Width, desc.Height,
                     unsigned(desc.Format));
         }
-        if (!encoder || encWidth != desc.Width || encHeight != desc.Height) {
-            encWidth = desc.Width & ~1u;
-            encHeight = desc.Height & ~1u;
+        if (!encoder || srcWidth != (desc.Width & ~1u) || srcHeight != (desc.Height & ~1u)) {
+            srcWidth = desc.Width & ~1u;
+            srcHeight = desc.Height & ~1u;
+            encWidth = foveated ? m_config.foveatedEyeWidth * 2 : srcWidth;
+            encHeight = foveated ? m_config.foveatedEyeHeight : srcHeight;
+            if (foveated && !foveator.Init(device, srcWidth / 2, srcHeight, encWidth / 2, encHeight)) {
+                WarnEvery5s("VR frame dropped: foveated encoding didn't start");
+                encoder.reset();
+                InterlockedExchange(&fs.state, rcvr::kSlotFree);
+                continue;
+            }
             if (!converter.Init(device, encWidth, encHeight, m_config.tenBit)) {
                 WarnEvery5s("VR frame dropped: the colour converter didn't start");
                 InterlockedExchange(&fs.state, rcvr::kSlotFree);
@@ -218,11 +266,12 @@ void VrStream::Run() {
             ec.bitrateKbps = m_sender.TargetBitrateKbps();
             ec.tenBit = m_config.tenBit;
             ec.inputFormat = converter.Format();
-            ec.foveated = m_config.foveated;
+            // The lens-based bit budget assumes a picture that isn't squeezed.
+            ec.foveated = m_config.foveated && !foveated;
             ec.adaptiveQuant = m_config.adaptiveQuant;
             ec.twoPass = m_config.twoPass;
             motionViews.clear();
-            motionReady = m_config.motionField && motion.Init(device, encWidth, encHeight);
+            motionReady = m_config.motionField && motion.Init(device, srcWidth, srcHeight);
             if (m_config.motionField && !motionReady) RC_LOGW("Frame generation: the motion estimator didn't start");
             encoder = CreateEncoder(device, m_bridge->VendorId(), ec);
             appliedKbps = ec.bitrateKbps;
@@ -254,7 +303,10 @@ void VrStream::Run() {
             InterlockedExchange(&fs.state, rcvr::kSlotFree);
             continue;
         }
-        const bool converted = converter.Convert(ctx.Get(), tex);
+        float foveaStart[2][2] = {};
+        if (foveated) PlaceFovea(fs.fovTan, foveaStart);
+        const bool converted = foveated ? foveator.Squeeze(ctx.Get(), tex, foveaStart) && converter.Convert(ctx.Get(), foveator.Output())
+                                        : converter.Convert(ctx.Get(), tex);
         bool motionValid = false;
         if (converted && motionReady) {
             ComPtr<ID3D11ShaderResourceView>& view = motionViews[tex];
@@ -287,7 +339,7 @@ void VrStream::Run() {
             encoder->SetBitrate(encoderKbps);
             appliedKbps = encoderKbps;
         }
-        if (m_config.foveated) encoder->SetFoveation(slotCopy.fovTan);
+        if (m_config.foveated && !foveated) encoder->SetFoveation(slotCopy.fovTan);
         const bool keyframe = m_sender.BeginFrame(*encoder);
         const int64_t encStart = rc::NowNs();
         if (!encoder->Encode(converter.Output(), keyframe, out)) {
@@ -303,12 +355,17 @@ void VrStream::Run() {
         std::memcpy(meta.renderPose.position, slotCopy.renderPose.position, sizeof(float) * 3);
         std::memcpy(meta.fovTan, slotCopy.fovTan, sizeof(meta.fovTan));
         meta.ipd = shared->config.ipd;
-        meta.eyeWidth = encWidth / 2;
-        meta.eyeHeight = encHeight;
+        meta.eyeWidth = srcWidth / 2;
+        meta.eyeHeight = srcHeight;
         meta.pcSubmitNs = slotCopy.submitPcNs;
         meta.pcEncodeStartNs = encStart;
         meta.pcEncodeEndNs = encEnd;
         frameMeta.assign(reinterpret_cast<const uint8_t*>(&meta), reinterpret_cast<const uint8_t*>(&meta) + sizeof(meta));
+        if (foveated) {
+            rc::VrFoveationMetadata fm{};
+            std::memcpy(fm.foveaStart, foveaStart, sizeof(fm.foveaStart));
+            frameMeta.insert(frameMeta.end(), reinterpret_cast<const uint8_t*>(&fm), reinterpret_cast<const uint8_t*>(&fm) + sizeof(fm));
+        }
         // The encoder has waited for the GPU work before it by now, so this doesn't stall.
         if (motionValid && motion.Read(ctx.Get(), motionField)) AppendMotion(motion, motionField, motionPreviousTimestamp, motionGrid, frameMeta);
         motionPreviousTimestamp = slotCopy.headsetTargetNs;

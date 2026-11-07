@@ -3,6 +3,11 @@
 #include <chrono>
 #include <string>
 
+#ifndef __ANDROID__
+#include <pulse/error.h>
+#include <pulse/simple.h>
+#endif
+
 #include "rc/platform.h"
 
 namespace rv {
@@ -51,6 +56,7 @@ void MusicPlayer::Update(bool wanted) {
     }
 }
 
+#ifdef __ANDROID__
 bool MusicPlayer::Open() {
     AAudioStreamBuilder* b = nullptr;
     AAudio_createStreamBuilder(&b);
@@ -91,5 +97,44 @@ aaudio_data_callback_result_t MusicPlayer::Callback(AAudioStream*, void* user, v
 void MusicPlayer::ErrorCallback(AAudioStream*, void* user, aaudio_result_t error) {
     if (error == AAUDIO_ERROR_DISCONNECTED) static_cast<MusicPlayer*>(user)->m_restart = true;
 }
+
+#else  // PulseAudio: a thread renders 20 ms blocks; latency doesn't matter for music
+
+bool MusicPlayer::Open() {
+    pa_sample_spec spec{};
+    spec.format = PA_SAMPLE_S16LE;
+    spec.rate = 48000;
+    spec.channels = 2;
+    int error = 0;
+    pa_simple* s = pa_simple_new(nullptr, "RinCast", PA_STREAM_PLAYBACK, nullptr, "Music", &spec, nullptr, nullptr, &error);
+    if (!s) {
+        RC_LOGW("Music: no audio output: %s", pa_strerror(error));
+        return false;
+    }
+    m_stream = s;
+    m_running = true;
+    m_output = std::thread([this] {
+        int16_t block[960 * 2];
+        while (m_running) {
+            m_mixer.Render(block, 960);
+            int err = 0;
+            if (pa_simple_write(static_cast<pa_simple*>(m_stream), block, sizeof(block), &err) < 0) {
+                m_restart = true;
+                break;
+            }
+        }
+    });
+    return true;
+}
+
+void MusicPlayer::Close() {
+    if (!m_stream) return;
+    m_running = false;
+    if (m_output.joinable()) m_output.join();
+    pa_simple_free(static_cast<pa_simple*>(m_stream));
+    m_stream = nullptr;
+}
+
+#endif
 
 }  // namespace rv

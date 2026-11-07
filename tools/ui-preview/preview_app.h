@@ -151,6 +151,7 @@ class App {
     XrContext& Xr() { return xr; }
     Headset& Device() { return device; }
     XrInput& Input() { return input; }
+    bool GazeSupported() { return true; }
     void ConnectLan(const DiscoveredPc&) {}
     void ConnectCloud(const CloudPc&) {}
     void Disconnect() {}

@@ -128,12 +128,14 @@ jobs:
           if ($leaks) { throw "Signing material in dist: $($leaks.Name -join ', ')" }
           # A signed release must really be signed with the release key, not Android's debug key.
           if ($env:APK_SIGNED -eq 'true') {
-            $apk = Get-Item "dist\RinCast-$env:RC_VERSION.apk"
             $apksigner = Get-ChildItem "$env:ANDROID_HOME\build-tools" -Directory | Sort-Object Name | Select-Object -Last 1
-            $certs = & (Join-Path $apksigner.FullName 'apksigner.bat') verify --print-certs $apk.FullName
-            if ($LASTEXITCODE -ne 0) { throw 'The APK signature does not verify.' }
-            if ($certs -match 'Android Debug') { throw 'The APK is signed with the debug key.' }
-            $certs | Select-String 'certificate DN|SHA-256'
+            foreach ($name in "RinCast-$env:RC_VERSION.apk", "RinCast-$env:RC_VERSION-quest1.apk") {
+              $apk = Get-Item "dist\$name"
+              $certs = & (Join-Path $apksigner.FullName 'apksigner.bat') verify --print-certs $apk.FullName
+              if ($LASTEXITCODE -ne 0) { throw "$name's signature does not verify." }
+              if ($certs -match 'Android Debug') { throw "$name is signed with the debug key." }
+              "$name"; $certs | Select-String 'certificate DN|SHA-256'
+            }
           }
 
       - name: Tag the commit and create the release

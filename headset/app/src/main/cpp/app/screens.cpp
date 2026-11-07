@@ -557,20 +557,21 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     const float gap = 44, w = (body.w - gap) / 2;
     Column l{body.x, body.y, w};
     Section(ui, l, "Image");
-    Label(ui, l, "Quality (pixels per eye)");
-    static const char* qn[] = {"Low", "Medium", "High", "Ultra", "Maximum"};
-    static const char* qk[] = {"low", "medium", "high", "ultra", "godlike"};
-    static const float qs[] = {0.6f, 0.75f, 0.9f, 1.f, 1.2f};
-    for (int i = 0; i < 5; i++) {
-        const std::string id = std::string("quality#") + qk[i];
-        const std::string res = PixelSize(int(app.Xr().RecommendedWidth() * qs[i]), int(app.Xr().RecommendedHeight() * qs[i]));
-        ui.NextLabel("VR graphics quality");
-        if (ui.Radio(id.c_str(), {l.x - 8, l.y, l.w + 8, 44}, qn[i], s.vrQuality == qk[i], res)) {
-            s.vrQuality = qk[i];
-            changed = true;
-        }
-        l.y += 45;
+    // Pixels per eye, against the headset's own. Each change restarts the stream (and may ask
+    // for a SteamVR restart), so it's applied when the handle is let go.
+    static float dragScale = -1;
+    float scale = dragScale >= 0 ? dragScale : s.vrScale;
+    const std::string pixels = PixelSize(int(app.Xr().RecommendedWidth() * scale), int(app.Xr().RecommendedHeight() * scale));
+    if (BarRow(ui, l, "resolution", "Resolution per eye", scale, kMinVrScale, kMaxVrScale, 0.05f,
+               s.matchSteamVr ? "Same as SteamVR" : Percent(scale) + ", " + pixels, !s.matchSteamVr, 1.f))
+        dragScale = scale;
+    if (dragScale >= 0 && !ui.IsHeld("resolution")) {
+        s.SetVrScale(dragScale);
+        dragScale = -1;
+        changed = true;
     }
+    changed |= CheckRow(ui, l, "match-steamvr", "Match SteamVR's resolution", s.matchSteamVr,
+                        "Set in SteamVR, under Video");
     l.y += 14;
     Label(ui, l, "Frame rate (fps)");
     std::vector<std::string> rates;
@@ -601,6 +602,9 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         changed = true;
     }
     changed |= CheckRow(ui, l, "10bit", "10-bit color", s.tenBit, ci == 3 ? "Needs HEVC or AV1" : "", ci != 3);
+    Section(ui, l, "Enhancements");
+    changed |= CheckRow(ui, l, "upscaling", "Upscaling", s.upscaling, "Sharper below 100%. Uses more battery");
+    changed |= CheckRow(ui, l, "framegen", "Frame generation", s.frameGeneration, "For a slow PC. Moving edges can wobble");
 
     Column c{body.x + w + gap, body.y, w};
     Section(ui, c, "Bitrate");
@@ -619,9 +623,6 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         changed = true;
     }
     changed |= CheckRow(ui, c, "adaptive", "Adjust bitrate automatically", s.adaptiveBitrate);
-    Section(ui, c, "Enhancements");
-    changed |= CheckRow(ui, c, "upscaling", "Upscaling", s.upscaling, "Sharper below Ultra. Uses more battery");
-    changed |= CheckRow(ui, c, "framegen", "Frame generation", s.frameGeneration, "For a slow PC. Moving edges can wobble");
     Section(ui, c, "Tracking");
     // The Quest can't run body and finger tracking together, so there each turns the other off.
     Headset& device = app.Device();
@@ -647,6 +648,9 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     changed |= CheckRow(ui, c, "handsgames", "Hands in games", s.handsInGames, "Pinch for the trigger, fist to grab");
     if (device.FaceSupported(app.Xr()))
         changed |= CheckRow(ui, c, "face", "Face tracking", s.faceTracking, device.FaceHint());
+    if (app.GazeSupported())
+        changed |= CheckRow(ui, c, "foveated", "Foveated encoding", s.gazeFoveation,
+                            "Full detail only where you look: half the data");
     return changed;
 }
 
@@ -763,6 +767,12 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     if (CheckRow(ui, l, "mic", "Use the headset microphone", mic,
                  micAllowed ? "On the PC it's " + micName : std::string("Allow microphone access for RinCast in ") + app.Device().SettingsName(), micAllowed)) {
         s.micPassthrough = mic;
+        changed = true;
+    }
+    l.y += 8;
+    float mv = s.micVolume;
+    if (BarRow(ui, l, "micvolume", "Microphone volume", mv, 0, 2, 0.05f, Percent(s.micVolume), mic, 1.f)) {
+        s.micVolume = mv;
         changed = true;
     }
     Section(ui, l, "Controllers");

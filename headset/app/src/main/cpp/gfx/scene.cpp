@@ -51,6 +51,8 @@ void main() {
     if (uHole == 1) { if (m < 0.5) discard; oColor = vec4(0.0); return; }
     // UI textures are y-up (rendered via FBO): flip v.
     vec4 c = texture(uTex, vec2(vUv.x, 1.0 - vUv.y));
+    // Clears what's behind by the canvas's coverage (blended with ZERO, ONE_MINUS_SRC_ALPHA).
+    if (uHole == 2) { if (c.a < 0.02) discard; oColor = vec4(0.0, 0.0, 0.0, c.a); return; }
     oColor = vec4(c.rgb * uBrightness, c.a) * uOpacity * m;
     // Clear parts (around the canvas's rounded card) mustn't hide what's behind them.
     if (oColor.a < 0.02) discard;
@@ -130,6 +132,25 @@ void main() {
     gl_Position = vec4(c * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
+// Foveated encoding (rc::VrFoveationMetadata): where a point of the full picture is in the
+// squeezed frame. uv over both eyes side by side, y from the top.
+static const char* kFoveateFs = R"(
+uniform int uFoveated;
+uniform vec4 uFoveaStart;   // left eye x, y, right eye x, y
+uniform vec3 uFoveaLayout;  // size, density x, density y
+float FoveaAxis(float u, float a, float s) {
+    float F = uFoveaLayout.x;
+    float e = u < a ? u * s : u < a + F ? a * s + (u - a) : a * s + F + (u - a - F) * s;
+    return e / (F + (1.0 - F) * s);
+}
+vec2 Foveate(vec2 uv) {
+    if (uFoveated == 0) return uv;
+    float eye = uv.x < 0.5 ? 0.0 : 1.0;
+    vec2 a = eye < 0.5 ? uFoveaStart.xy : uFoveaStart.zw;
+    float x = FoveaAxis(uv.x * 2.0 - eye, a.x, uFoveaLayout.y);
+    return vec2((x + eye) * 0.5, FoveaAxis(uv.y, a.y, uFoveaLayout.z));
+}
+)";
 static const char* kBlitExtFs = R"(
 uniform samplerExternalOES uTex;
 uniform vec4 uCrop;  // visible part of the decoder buffer: offset.xy, scale.zw
@@ -137,7 +158,7 @@ in vec2 vUv;
 out vec4 oColor;
 // Layer swapchains are sRGB: linearize the gamma-encoded video first.
 void main() {
-    vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+    vec2 uv = Foveate(vec2(vUv.x, 1.0 - vUv.y));
     vec3 g = texture(uTex, uCrop.xy + uv * uCrop.zw).rgb;
     oColor = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
 }
@@ -149,7 +170,7 @@ uniform vec4 uCrop;
 in vec2 vUv;
 out vec4 oColor;
 void main() {
-    vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+    vec2 uv = Foveate(vec2(vUv.x, 1.0 - vUv.y));
     oColor = vec4(texture(uTex, uCrop.xy + uv * uCrop.zw).rgb, 1.0);
 }
 )";
@@ -267,8 +288,8 @@ bool SceneRenderer::Init() {
     ok &= m_panelExt.Build(kPanelVs, extFs.c_str(), "panelExt");
     ok &= m_beam.Build(kBeamVs, kBeamFs, "beam");
     ok &= m_dot.Build(kDotVs, kDotFs, "dot");
-    const std::string blitExt = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kBlitExtFs;
-    const std::string blitExtGamma = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kBlitExtGammaFs;
+    const std::string blitExt = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kFoveateFs + kBlitExtFs;
+    const std::string blitExtGamma = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kFoveateFs + kBlitExtGammaFs;
     // Optional: without it, upscaling just stays off.
     m_upscalerReady = m_blitExtGamma.Build(kBlitVs, blitExtGamma.c_str(), "blitExtGamma");
     m_upscalerReady = m_gsr.Build(kBlitVs, kGsrFs, "gsr") && m_upscalerReady;
@@ -305,14 +326,14 @@ void SceneRenderer::Panel(const PanelDraw& p) {
     glUniform1f(prog.Uniform("uOpacity"), p.opacity);
     glUniform1f(prog.Uniform("uBrightness"), p.brightness);
     glUniform1f(prog.Uniform("uCorner"), p.cornerRadius);
-    glUniform1i(prog.Uniform("uHole"), p.holePunch ? 1 : 0);
+    glUniform1i(prog.Uniform("uHole"), !p.holePunch ? 0 : p.holeFromAlpha ? 2 : 1);
     if (p.source == PanelSource::External) glUniform4fv(prog.Uniform("uCrop"), 1, p.crop);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(p.source == PanelSource::External ? GL_TEXTURE_EXTERNAL_OES : GL_TEXTURE_2D, p.texture);
     glUniform1i(prog.Uniform("uTex"), 0);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    if (p.holePunch) glBlendFunc(GL_ONE, GL_ZERO);
+    if (p.holePunch) glBlendFunc(p.holeFromAlpha ? GL_ZERO : GL_ONE, p.holeFromAlpha ? GL_ONE_MINUS_SRC_ALPHA : GL_ZERO);
     // Panels hide each other per pixel, whatever order they come in. One fading in or out
     // doesn't hide what's drawn after it.
     glEnable(GL_DEPTH_TEST);
@@ -380,8 +401,16 @@ void SceneRenderer::ControllerOrb(const Pose& aim, const Color& c) {
     Dot(aim.position, toEye, 0.012f, c);
 }
 
+// The squeeze of a foveated VR frame, or none.
+static void SetFoveation(const Program& p, const VideoFoveation* f) {
+    glUniform1i(p.Uniform("uFoveated"), f ? 1 : 0);
+    if (!f) return;
+    glUniform4f(p.Uniform("uFoveaStart"), f->start[0][0], f->start[0][1], f->start[1][0], f->start[1][1]);
+    glUniform3f(p.Uniform("uFoveaLayout"), f->size, f->density[0], f->density[1]);
+}
+
 void SceneRenderer::BlitExternal(GLuint texture, int width, int height, const float* crop, float u0, float v0, float u1,
-                                 float v1) {
+                                 float v1, const VideoFoveation* foveation) {
     static const float kFull[4] = {0, 0, 1, 1};
     glViewport(0, 0, width, height);
     glDisable(GL_BLEND);
@@ -389,6 +418,7 @@ void SceneRenderer::BlitExternal(GLuint texture, int width, int height, const fl
     m_blitExt.Use();
     glUniform4f(m_blitExt.Uniform("uRect"), u0, v0, u1, v1);
     glUniform4fv(m_blitExt.Uniform("uCrop"), 1, crop ? crop : kFull);
+    SetFoveation(m_blitExt, foveation);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture);
     glUniform1i(m_blitExt.Uniform("uTex"), 0);
@@ -396,7 +426,7 @@ void SceneRenderer::BlitExternal(GLuint texture, int width, int height, const fl
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int height) {
+void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int height, const VideoFoveation* foveation) {
     static const float kFull[4] = {0, 0, 1, 1};
     if (width != m_gsrWidth || height != m_gsrHeight) {
         if (m_gsrFbo) glDeleteFramebuffers(1, &m_gsrFbo);
@@ -422,6 +452,7 @@ void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int 
     m_blitExtGamma.Use();
     glUniform4f(m_blitExtGamma.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4fv(m_blitExtGamma.Uniform("uCrop"), 1, crop ? crop : kFull);
+    SetFoveation(m_blitExtGamma, foveation);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture);
     glUniform1i(m_blitExtGamma.Uniform("uTex"), 0);

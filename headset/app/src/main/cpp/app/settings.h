@@ -1,11 +1,15 @@
 // Persistent headset settings (<files dir>/settings.json).
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "nlohmann/json.hpp"
 
 namespace rv {
+
+inline constexpr float kMinVrScale = 0.5f, kMaxVrScale = 1.3f;
 
 struct HeadsetSettings {
     // Environment
@@ -13,7 +17,10 @@ struct HeadsetSettings {
     float skyBrightness = 1.0f;
 
     // Streaming (sent to the PC)
-    std::string vrQuality = "high";     // low | medium | high | ultra | godlike
+    float vrScale = 0.9f;               // pixels per eye against the headset's own, kMinVrScale..kMaxVrScale
+    bool matchSteamVr = false;          // stream at the resolution SteamVR renders at instead
+    bool gazeFoveation = false;         // foveated encoding: full detail only where the eyes look
+    std::string vrQuality = "high";     // the preset nearest vrScale, for PCs before 1.1.0
     float refreshRate = 90;
     std::string codec = "auto";         // auto | hevc | av1 | h264
     bool tenBit = false;
@@ -36,6 +43,7 @@ struct HeadsetSettings {
     bool streamAudio = true;
     bool micPassthrough = true;
     float volume = 1.0f;
+    float micVolume = 1.0f;             // 0 .. 2
     bool music = true;                  // while no PC is connected
 
     // Controls
@@ -62,6 +70,15 @@ struct HeadsetSettings {
     nlohmann::json ToJson() const;
     void FromJson(const nlohmann::json& j);
     nlohmann::json StreamSettingsJson() const;  // what the PC needs
+    void SetVrScale(float scale) {              // and vrQuality to match
+        vrScale = std::clamp(std::round(scale * 20.f) / 20.f, kMinVrScale, kMaxVrScale);  // 5% steps
+        static const char* presets[] = {"low", "medium", "high", "ultra", "godlike"};
+        static const float scales[] = {0.6f, 0.75f, 0.9f, 1.f, 1.2f};
+        int nearest = 0;
+        for (int i = 1; i < 5; i++)
+            if (std::fabs(scales[i] - vrScale) < std::fabs(scales[nearest] - vrScale)) nearest = i;
+        vrQuality = presets[nearest];
+    }
 
     static HeadsetSettings Load(const std::string& path);
     void Save(const std::string& path) const;

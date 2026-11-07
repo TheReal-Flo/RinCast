@@ -56,6 +56,25 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
     m_touchThumbrest = CreateAction(m_set, XR_ACTION_TYPE_BOOLEAN_INPUT, "touch_thumbrest", "Touch thumbrest", m_handPath, 2);
     m_haptic = CreateAction(m_set, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic", "Haptic", m_handPath, 2);
 
+    // Eye gaze, where the runtime has it and the headset can track the eyes.
+    if (xr.HasExtension(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME)) {
+        XrSystemEyeGazeInteractionPropertiesEXT gaze{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};
+        XrSystemProperties props{XR_TYPE_SYSTEM_PROPERTIES};
+        props.next = &gaze;
+        if (XR_SUCCEEDED(xrGetSystemProperties(inst, xr.System(), &props)) && gaze.supportsEyeGazeInteraction) {
+            m_gazePose = CreateAction(m_set, XR_ACTION_TYPE_POSE_INPUT, "eye_gaze", "Eye gaze", nullptr, 0);
+            const XrActionSuggestedBinding b{m_gazePose, Path(inst, "/user/eyes_ext/input/gaze_ext/pose")};
+            XrInteractionProfileSuggestedBinding eb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+            eb.interactionProfile = Path(inst, "/interaction_profiles/ext/eye_gaze_interaction");
+            eb.suggestedBindings = &b;
+            eb.countSuggestedBindings = 1;
+            if (XR_FAILED(xrSuggestInteractionProfileBindings(inst, &eb))) {
+                RC_LOGW("Eye gaze bindings rejected");
+                m_gazePose = XR_NULL_HANDLE;
+            }
+        }
+    }
+
     // Every family's controllers have the Touch layout: A/B and X/Y, a trigger, a grip and a stick.
     XrInteractionProfileSuggestedBinding sb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     for (const ControllerProfile& profile : profiles) {
@@ -123,6 +142,13 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
         sci.action = m_gripPose;
         xrCreateActionSpace(xr.Session(), &sci, &m_gripSpace[i]);
     }
+    if (m_gazePose) {
+        XrActionSpaceCreateInfo sci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        sci.poseInActionSpace.orientation.w = 1;
+        sci.action = m_gazePose;
+        if (XR_SUCCEEDED(xrCreateActionSpace(xr.Session(), &sci, &m_gazeSpace))) RC_LOGI("Eye gaze available");
+        else m_gazeSpace = XR_NULL_HANDLE;
+    }
 
     if (xr.HandTracking() && xr.HasExtension(XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME) &&
         xr.HasExtension(XR_META_DETACHED_CONTROLLERS_EXTENSION_NAME)) {
@@ -146,14 +172,22 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
         PFN_xrVoidFunction f = nullptr;
         xrGetInstanceProcAddr(inst, "xrLocateHandJointsEXT", &f);
         m_locateJoints = reinterpret_cast<PFN_xrLocateHandJointsEXT>(f);
-        for (int i = 0; i < 2 && create; i++) {
-            XrHandTrackerCreateInfoEXT ci{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
-            ci.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
-            ci.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
-            create(xr.Session(), &ci, &m_trackers[i]);
-        }
+        m_createTracker = create;
+        m_session = xr.Session();
+        if (!CreateHandTrackers()) RC_LOGI("Hand tracking isn't available yet (permission?); trying again");
     }
     return true;
+}
+
+bool XrInput::CreateHandTrackers() {
+    for (int i = 0; i < 2 && m_createTracker; i++) {
+        if (m_trackers[i]) continue;
+        XrHandTrackerCreateInfoEXT ci{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
+        ci.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
+        ci.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
+        if (XR_FAILED(m_createTracker(m_session, &ci, &m_trackers[i]))) m_trackers[i] = XR_NULL_HANDLE;
+    }
+    return m_trackers[0] && m_trackers[1];
 }
 
 static bool GetBool(XrSession s, XrAction a, XrPath sub) {
@@ -216,6 +250,18 @@ void XrInput::Update(XrTime time) {
     UpdateHandTracking(time);
 }
 
+bool XrInput::LocateGaze(XrTime time, float direction[3]) const {
+    if (!m_gazeSpace) return false;
+    XrSpaceLocation l{XR_TYPE_SPACE_LOCATION};
+    const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    if (XR_FAILED(xrLocateSpace(m_gazeSpace, m_xr->ViewSpace(), time, &l)) || (l.locationFlags & need) != need) return false;
+    const XrQuaternionf& q = l.pose.orientation;  // -z rotated by it
+    direction[0] = -2.f * (q.w * q.y + q.x * q.z);
+    direction[1] = 2.f * (q.w * q.x - q.y * q.z);
+    direction[2] = -1.f + 2.f * (q.x * q.x + q.y * q.y);
+    return true;
+}
+
 void XrInput::Locate(XrTime time, HandInput hands[2]) {
     for (int i = 0; i < 2; i++) {
         HandInput& h = hands[i];
@@ -226,6 +272,13 @@ void XrInput::Locate(XrTime time, HandInput hands[2]) {
 
 void XrInput::UpdateHandTracking(XrTime time) {
     if (!m_locateJoints) return;
+    if ((!m_trackers[0] || !m_trackers[1]) && m_createTracker) {
+        const int64_t now = rc::NowNs();
+        if (now - m_handRetryNs > 1'000'000'000LL) {
+            m_handRetryNs = now;
+            if (CreateHandTrackers()) RC_LOGI("Hand tracking started");
+        }
+    }
     for (int i = 0; i < 2; i++) {
         if (!m_trackers[i]) continue;
         if (m_hands[i].held) {  // the controller is what plays; only its fingers are wanted

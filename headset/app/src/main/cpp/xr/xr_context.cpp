@@ -1,6 +1,8 @@
 #include "xr_context.h"
 
+#ifdef __ANDROID__
 #include <android_native_app_glue.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -79,6 +81,8 @@ bool XrContext::InitEgl() {
 }
 
 bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>& extra) {
+    if (!xrloader::Load()) return false;
+#ifdef __ANDROID__
     auto initLoader = GetProc<PFN_xrInitializeLoaderKHR>(XR_NULL_HANDLE, "xrInitializeLoaderKHR");
     if (initLoader) {
         XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
@@ -86,6 +90,7 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
         info.applicationContext = app->activity->clazz;
         initLoader(reinterpret_cast<XrLoaderInitInfoBaseHeaderKHR*>(&info));
     }
+#endif
 
     uint32_t count = 0;
     xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
@@ -93,7 +98,13 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
     xrEnumerateInstanceExtensionProperties(nullptr, count, &count, props.data());
 
     const char* wanted[] = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
+#ifdef __ANDROID__
                             XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
+                            XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME,
+#else
+                            XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
+                            XR_MNDX_EGL_ENABLE_EXTENSION_NAME,
+#endif
                             XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME,
                             XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
                             XR_FB_PASSTHROUGH_EXTENSION_NAME,
@@ -106,8 +117,7 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
                             XR_META_DETACHED_CONTROLLERS_EXTENSION_NAME,
                             XR_EXT_LOCAL_FLOOR_EXTENSION_NAME,
                             XR_FB_COLOR_SPACE_EXTENSION_NAME,
-                            XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME,
-                            XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME};
+                            XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME};
     std::vector<const char*> all(std::begin(wanted), std::end(wanted));
     all.insert(all.end(), extra.begin(), extra.end());
     std::vector<const char*> enabled;
@@ -121,19 +131,49 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
             }
         }
     }
+#ifdef __ANDROID__
     if (!HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
         RC_LOGE("Runtime lacks XR_KHR_opengl_es_enable");
         return false;
     }
+#else
+    {
+        std::string all;
+        for (const auto& p : props) all += std::string(" ") + p.extensionName;
+        RC_LOGI("Runtime extensions:%s", all.c_str());
+    }
+    // RinCast draws with OpenGL ES (and its video shaders need ES's external textures). An
+    // EGL context reaches the runtime through XR_MNDX_egl_enable; if the runtime has no GL ES
+    // extension, the same context goes under XR_KHR_opengl_enable.
+    if (!HasExtension(XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
+        RC_LOGE("Runtime lacks XR_MNDX_egl_enable: it can't take an EGL context");
+        return false;
+    }
+    m_glNotEs = !HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
+    if (m_glNotEs && !HasExtension(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
+        RC_LOGE("Runtime has neither XR_KHR_opengl_es_enable nor XR_KHR_opengl_enable");
+        return false;
+    }
+    // Only one graphics API per instance.
+    const char* unused = m_glNotEs ? XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME : XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
+    std::erase_if(enabled, [&](const char* e) { return !strcmp(e, unused); });
+    std::erase_if(m_extensions, [&](const std::string& e) { return e == unused; });
+    RC_LOGI("Graphics: OpenGL ES context through XR_MNDX_egl_enable, as %s",
+            m_glNotEs ? "XR_KHR_opengl_enable (the runtime has no GL ES extension)" : "XR_KHR_opengl_es_enable");
+#endif
     m_cylinder = HasExtension(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
     m_layerSettings = HasExtension(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     m_handTracking = HasExtension(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
 
+    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __ANDROID__
     XrInstanceCreateInfoAndroidKHR android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
     android.applicationVM = app->activity->vm;
     android.applicationActivity = app->activity->clazz;
-    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     ci.next = &android;
+#else
+    (void)app;
+#endif
     strcpy(ci.applicationInfo.applicationName, "RinCast");
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "RinCast");
@@ -142,6 +182,7 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
     ci.enabledExtensionCount = uint32_t(enabled.size());
     ci.enabledExtensionNames = enabled.data();
     XR_CHECK(xrCreateInstance(&ci, &m_instance));
+    if (!xrloader::LoadInstance(m_instance)) return false;
     XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
     if (XR_SUCCEEDED(xrGetInstanceProperties(m_instance, &ip))) m_runtimeName = ip.runtimeName;
     RC_LOGI("OpenXR runtime: %s", m_runtimeName.c_str());
@@ -159,6 +200,7 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
 }
 
 bool XrContext::CreateSession(bool preferStage) {
+#ifdef __ANDROID__
     auto getReqs = GetProc<PFN_xrGetOpenGLESGraphicsRequirementsKHR>(m_instance, "xrGetOpenGLESGraphicsRequirementsKHR");
     XrGraphicsRequirementsOpenGLESKHR reqs{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
     XR_CHECK(getReqs(m_instance, m_system, &reqs));
@@ -167,6 +209,23 @@ bool XrContext::CreateSession(bool preferStage) {
     binding.display = m_display;
     binding.config = m_config;
     binding.context = m_context;
+#else
+    // The runtime insists on being asked for its graphics requirements first.
+    if (m_glNotEs) {
+        auto getReqs = GetProc<PFN_xrGetOpenGLGraphicsRequirementsKHR>(m_instance, "xrGetOpenGLGraphicsRequirementsKHR");
+        XrGraphicsRequirementsOpenGLKHR reqs{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR};
+        XR_CHECK(getReqs(m_instance, m_system, &reqs));
+    } else {
+        auto getReqs = GetProc<PFN_xrGetOpenGLESGraphicsRequirementsKHR>(m_instance, "xrGetOpenGLESGraphicsRequirementsKHR");
+        XrGraphicsRequirementsOpenGLESKHR reqs{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
+        XR_CHECK(getReqs(m_instance, m_system, &reqs));
+    }
+    XrGraphicsBindingEGLMNDX binding{XR_TYPE_GRAPHICS_BINDING_EGL_MNDX};
+    binding.getProcAddress = reinterpret_cast<PFN_xrEglGetProcAddressMNDX>(eglGetProcAddress);
+    binding.display = m_display;
+    binding.config = m_config;
+    binding.context = m_context;
+#endif
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
     sci.next = &binding;
     sci.systemId = m_system;
@@ -242,6 +301,14 @@ bool XrContext::CreateSession(bool preferStage) {
             m_passthrough = XR_NULL_HANDLE;
         }
     }
+    if (!m_passthroughLayer) {
+        uint32_t n = 0;
+        xrEnumerateEnvironmentBlendModes(m_instance, m_system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &n, nullptr);
+        std::vector<XrEnvironmentBlendMode> modes(n);
+        if (n) xrEnumerateEnvironmentBlendModes(m_instance, m_system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, n, &n, modes.data());
+        m_alphaBlend = std::find(modes.begin(), modes.end(), XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) != modes.end();
+        if (m_alphaBlend) RC_LOGI("Passthrough through the alpha-blend environment mode");
+    }
     return true;
 }
 
@@ -277,10 +344,12 @@ void XrContext::HandleStateChange(XrSessionState state) {
         XrSessionBeginInfo bi{XR_TYPE_SESSION_BEGIN_INFO};
         bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
         if (XR_SUCCEEDED(xrBeginSession(m_session, &bi))) m_running = true;
+#ifdef __ANDROID__
         if (HasExtension(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME)) {
             if (auto set = GetProc<PFN_xrSetAndroidApplicationThreadKHR>(m_instance, "xrSetAndroidApplicationThreadKHR"))
                 set(m_session, XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR, gettid());
         }
+#endif
         // Rate requests before the session runs may be ignored.
         if (m_requestedHz > 0) SetRefreshRate(m_requestedHz);
     } else if (state == XR_SESSION_STATE_STOPPING) {
@@ -327,7 +396,12 @@ bool XrContext::CreateSwapchain(int width, int height, int64_t format, int array
     XR_CHECK(xrCreateSwapchain(m_session, &ci, &out.handle));
     uint32_t n = 0;
     xrEnumerateSwapchainImages(out.handle, 0, &n, nullptr);
+    // OpenGL and OpenGL ES swapchain images have the same layout, only their type differs.
     std::vector<XrSwapchainImageOpenGLESKHR> imgs(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+#ifndef __ANDROID__
+    if (m_glNotEs)
+        for (auto& i : imgs) i.type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
+#endif
     xrEnumerateSwapchainImages(out.handle, n, &n, reinterpret_cast<XrSwapchainImageBaseHeader*>(imgs.data()));
     out.width = width;
     out.height = height;
@@ -483,7 +557,8 @@ void XrContext::EndFrame(const FrameState& frame, const std::vector<const XrComp
     }
     XrFrameEndInfo fei{XR_TYPE_FRAME_END_INFO};
     fei.displayTime = frame.predictedDisplayTime;
-    fei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    fei.environmentBlendMode = m_passthroughActive && m_alphaBlend && !m_passthroughLayer ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
+                                                                                         : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     fei.layerCount = uint32_t(layers.size());
     fei.layers = layers.data();
     const XrResult r = xrEndFrame(m_session, &fei);
@@ -523,7 +598,12 @@ void XrContext::SetRefreshRate(float hz) {
 }
 
 void XrContext::SetPassthrough(bool enable) {
-    if (!m_passthrough || !m_passthroughLayer || enable == m_passthroughActive) return;
+    if (enable == m_passthroughActive) return;
+    if (!m_passthroughLayer && m_alphaBlend) {  // nothing to start: the frame's blend mode says it
+        m_passthroughActive = enable;
+        return;
+    }
+    if (!m_passthrough || !m_passthroughLayer) return;
     if (enable) {
         GetProc<PFN_xrPassthroughStartFB>(m_instance, "xrPassthroughStartFB")(m_passthrough);
         GetProc<PFN_xrPassthroughLayerResumeFB>(m_instance, "xrPassthroughLayerResumeFB")(m_passthroughLayer);

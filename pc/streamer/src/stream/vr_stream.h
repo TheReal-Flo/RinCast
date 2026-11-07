@@ -4,10 +4,13 @@
 
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <thread>
 
 #include "../encode/color_convert.h"
 #include "../encode/encoder.h"
+#include "rc/platform.h"
+#include "rc/protocol.h"
 #include "video_sender.h"
 
 namespace rcs {
@@ -29,6 +32,10 @@ struct VrStreamConfig {
     bool adaptiveQuant = true;
     bool twoPass = false;
     bool motionField = false;       // for frame generation on the headset
+    // Foveated encoding around where the eyes look (see Foveator): the size each eye is
+    // encoded at, 0 = off. eyeWidth x eyeHeight stays the size the headset shows.
+    uint32_t foveatedEyeWidth = 0;
+    uint32_t foveatedEyeHeight = 0;
 };
 
 class VrStream {
@@ -48,12 +55,20 @@ class VrStream {
         if (m_paused.exchange(paused) && !paused) m_sender.RequestKeyframe();
     }
     void OnFeedback(const rc::VideoFeedbackPayload& fb) { m_sender.OnFeedback(fb); }
+    // Where the eyes look, as the headset tracked it (foveated encoding).
+    void SetGaze(const rc::GazePayload& gaze) {
+        std::lock_guard lock(m_gazeMutex);
+        m_gaze = gaze;
+        m_gazeNs = rc::NowNs();
+    }
     VideoSenderStats Stats() { return m_sender.Stats(); }
     const VrStreamConfig& Config() const { return m_config; }
     bool Running() const { return m_streaming; }
 
    private:
     void Run();
+    // Where each eye's full-density square starts for this frame, from the gaze.
+    void PlaceFovea(const float fovTan[2][4], float start[2][2]);
 
     rc::Connection* m_connection;
     VrBridgeHost* m_bridge;
@@ -64,6 +79,11 @@ class VrStream {
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_streaming{false};
     std::atomic<bool> m_paused{false};
+    std::mutex m_gazeMutex;
+    rc::GazePayload m_gaze{};
+    int64_t m_gazeNs = 0;
+    float m_foveaStart[2][2] = {};  // encoding thread only
+    bool m_foveaPlaced = false;
 };
 
 }  // namespace rcs

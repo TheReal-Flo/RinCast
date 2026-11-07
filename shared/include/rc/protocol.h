@@ -163,6 +163,17 @@ struct VrFrameMetadata {
     int64_t pcEncodeEndNs;
 };
 
+// Foveated encoding: the PC keeps every pixel of a square around where the eyes look and half
+// of them elsewhere, which the headset undoes when it draws the frame. A VR stream whose config
+// has "foveation" carries this right after VrFrameMetadata (before any motion field).
+//
+// Along each axis of an eye, the picture's 0..1 is three parts: [0, a) at density s, [a, a + F)
+// at full density, [a + F, 1] at s again. F is the config's "size"; s follows from the sizes,
+// (encoded / eye - F) / (1 - F), separately for x and y.
+struct VrFoveationMetadata {
+    float foveaStart[2][2];  // a per eye (left, right): x, y (from the top), as a part of the eye's picture
+};
+
 struct DesktopFrameMetadata {
     uint32_t width;
     uint32_t height;
@@ -257,6 +268,20 @@ struct FaceTrackingPayload {
     float gaze[2][3];                        // eye directions in the head's space: +x right, +y up, -z ahead
 };
 static_assert(sizeof(FaceTrackingPayload) == 104);
+
+// Where the eyes look, for foveated encoding: appended to a TrackingPayload (older PCs ignore
+// it) by headsets that track the eyes, while foveated encoding is on.
+enum GazeFlags : uint8_t {
+    kGazeLeftValid = 1 << 0,
+    kGazeRightValid = 1 << 1,
+};
+
+struct GazePayload {
+    uint8_t flags;  // GazeFlags
+    uint8_t reserved[3];
+    float gaze[2][3];  // eye directions in the head's space: +x right, +y up, -z ahead
+};
+static_assert(sizeof(GazePayload) == 28);
 
 // --- Tracked hands in games -------------------------------------------------
 inline constexpr int kHandJointCount = 26;  // XR_EXT_hand_tracking
