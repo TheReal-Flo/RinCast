@@ -1,6 +1,7 @@
 #include "mac_audio_streamer.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #include <algorithm>
 #include <cmath>
 
@@ -57,55 +58,98 @@ void MacAudioStreamer::HandleAudioSampleBuffer(CMSampleBufferRef sampleBuffer) {
     const AudioStreamBasicDescription* asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc);
     if (!asbd) return;
 
-    CMBlockBufferRef blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
-    if (!blockBuffer) return;
+    const CMItemCount numFrames = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (numFrames <= 0) return;
 
-    size_t lengthAtOffset = 0;
-    size_t totalLength = 0;
-    char* dataPointer = nullptr;
-    OSStatus status = CMBlockBufferGetDataPointer(blockBuffer, 0, &lengthAtOffset, &totalLength, &dataPointer);
-    if (status != noErr || !dataPointer || totalLength == 0) return;
+    size_t bufferListSizeNeeded = 0;
+    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &bufferListSizeNeeded,
+        NULL,
+        0,
+        NULL,
+        NULL,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        NULL
+    );
 
-    const uint32_t srcChannels = asbd->mChannelsPerFrame;
+    if (status != noErr || bufferListSizeNeeded == 0) return;
+
+    std::vector<uint8_t> ablStorage(bufferListSizeNeeded);
+    AudioBufferList* abl = reinterpret_cast<AudioBufferList*>(ablStorage.data());
+    CMBlockBufferRef blockBuffer = nullptr;
+
+    status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        NULL,
+        abl,
+        bufferListSizeNeeded,
+        NULL,
+        NULL,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &blockBuffer
+    );
+
+    if (status != noErr) {
+        if (blockBuffer) CFRelease(blockBuffer);
+        return;
+    }
+
     const double srcSampleRate = asbd->mSampleRate;
     const bool isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
     const bool isSignedInt = (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0;
     const uint32_t bytesPerSample = asbd->mBitsPerChannel / 8;
 
-    if (srcChannels == 0 || bytesPerSample == 0) return;
-
-    const size_t numFrames = totalLength / (srcChannels * bytesPerSample);
-    if (numFrames == 0) return;
-
     std::vector<int16_t> pcmInterleaved;
     pcmInterleaved.reserve(numFrames * kChannels);
 
-    if (isFloat && bytesPerSample == 4) {
-        const float* floatData = reinterpret_cast<const float*>(dataPointer);
-        for (size_t i = 0; i < numFrames; ++i) {
-            float l = floatData[i * srcChannels];
-            float r = (srcChannels > 1) ? floatData[i * srcChannels + 1] : l;
+    if (abl->mNumberBuffers >= 2 && isFloat && bytesPerSample == 4) {
+        // Non-interleaved stereo float (ScreenCaptureKit default: Buffer 0 = Left, Buffer 1 = Right)
+        const float* leftChannel = reinterpret_cast<const float*>(abl->mBuffers[0].mData);
+        const float* rightChannel = reinterpret_cast<const float*>(abl->mBuffers[1].mData);
 
-            l = std::clamp(l, -1.0f, 1.0f);
-            r = std::clamp(r, -1.0f, 1.0f);
-
-            pcmInterleaved.push_back(static_cast<int16_t>(l * 32767.0f));
-            pcmInterleaved.push_back(static_cast<int16_t>(r * 32767.0f));
+        if (leftChannel && rightChannel) {
+            for (CMItemCount i = 0; i < numFrames; ++i) {
+                float l = std::clamp(leftChannel[i], -1.0f, 1.0f);
+                float r = std::clamp(rightChannel[i], -1.0f, 1.0f);
+                pcmInterleaved.push_back(static_cast<int16_t>(l * 32767.0f));
+                pcmInterleaved.push_back(static_cast<int16_t>(r * 32767.0f));
+            }
         }
-    } else if (isSignedInt && bytesPerSample == 2) {
-        const int16_t* intData = reinterpret_cast<const int16_t*>(dataPointer);
-        for (size_t i = 0; i < numFrames; ++i) {
-            int16_t l = intData[i * srcChannels];
-            int16_t r = (srcChannels > 1) ? intData[i * srcChannels + 1] : l;
-            pcmInterleaved.push_back(l);
-            pcmInterleaved.push_back(r);
+    } else if (abl->mNumberBuffers == 1 && isFloat && bytesPerSample == 4) {
+        // Interleaved stereo float (or mono)
+        const float* floatData = reinterpret_cast<const float*>(abl->mBuffers[0].mData);
+        const uint32_t ch = abl->mBuffers[0].mNumberChannels;
+        if (floatData) {
+            for (CMItemCount i = 0; i < numFrames; ++i) {
+                float l = std::clamp(floatData[i * ch], -1.0f, 1.0f);
+                float r = (ch > 1) ? std::clamp(floatData[i * ch + 1], -1.0f, 1.0f) : l;
+                pcmInterleaved.push_back(static_cast<int16_t>(l * 32767.0f));
+                pcmInterleaved.push_back(static_cast<int16_t>(r * 32767.0f));
+            }
         }
-    } else {
-        return;
+    } else if (abl->mNumberBuffers == 1 && isSignedInt && bytesPerSample == 2) {
+        // Interleaved 16-bit int
+        const int16_t* intData = reinterpret_cast<const int16_t*>(abl->mBuffers[0].mData);
+        const uint32_t ch = abl->mBuffers[0].mNumberChannels;
+        if (intData) {
+            for (CMItemCount i = 0; i < numFrames; ++i) {
+                int16_t l = intData[i * ch];
+                int16_t r = (ch > 1) ? intData[i * ch + 1] : l;
+                pcmInterleaved.push_back(l);
+                pcmInterleaved.push_back(r);
+            }
+        }
     }
 
+    if (blockBuffer) {
+        CFRelease(blockBuffer);
+    }
+
+    if (pcmInterleaved.empty()) return;
+
     // Resample if necessary (e.g. from 44.1 kHz to 48 kHz)
-    if (std::abs(srcSampleRate - kTargetSampleRate) > 10.0) {
+    if (std::abs(srcSampleRate - kTargetSampleRate) > 10.0 && srcSampleRate > 0) {
         const double step = srcSampleRate / kTargetSampleRate;
         const size_t outFrames = static_cast<size_t>(numFrames / step);
         std::vector<int16_t> resampled;
@@ -114,7 +158,7 @@ void MacAudioStreamer::HandleAudioSampleBuffer(CMSampleBufferRef sampleBuffer) {
         for (size_t i = 0; i < outFrames; ++i) {
             double srcIdx = i * step;
             size_t idx0 = static_cast<size_t>(srcIdx);
-            size_t idx1 = std::min(idx0 + 1, numFrames - 1);
+            size_t idx1 = std::min(idx0 + 1, static_cast<size_t>(numFrames - 1));
             float frac = static_cast<float>(srcIdx - idx0);
 
             int16_t l0 = pcmInterleaved[idx0 * 2];
