@@ -12,6 +12,9 @@ struct HeadsetSettings {
     std::string environment = "space-violet";
     float skyBrightness = 1.0f;
 
+    // Interface
+    std::string language = "auto";      // auto | en | zh-CN | de | es | fr | ja
+
     // Streaming (sent to the PC)
     std::string vrQuality = "high";     // low | medium | high | ultra | godlike
     float refreshRate = 90;

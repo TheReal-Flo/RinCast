@@ -1,6 +1,8 @@
 // Meta Quest: body tracking (XR_FB_body_tracking) and face tracking (XR_FB_face_tracking2), with
 // Touch controllers.
 #include "../headset.h"
+
+#include "app/strings.h"
 #include "quest_body.h"
 #include "quest_face.h"
 
@@ -11,7 +13,7 @@ namespace {
 class QuestHeadset : public Headset {
    public:
     const char* Family() const override { return "Quest"; }
-    const char* SettingsName() const override { return "Quest settings"; }
+    const char* SettingsName() const override { return Tr("device.quest.settings"); }
 
     std::vector<ControllerProfile> Controllers() const override {
         return {{"/interaction_profiles/oculus/touch_controller", nullptr, true, true}};

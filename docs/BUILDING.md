@@ -59,6 +59,15 @@ here. If you have a local copy, build it with `-DRINCAST_BUILD_OPENXR=ON`
   ```
   Decode `--out` with ffmpeg (`-f obu` for AV1) to check it. `--yuv` writes the encoder input, for `psnr` comparisons.
 - **assetbaker.** Bakes the SDF text and icon atlases used by the headset UI (`headset/app/src/main/assets/ui`).
+  An optional fifth argument is a charset file: every character in it that Inter doesn't cover is baked
+  from Noto Sans SC in the same fonts dir. The charset (`assets/ui/charset.txt`) holds the non-ASCII
+  characters the UI translations use, so the atlas carries exactly the Chinese and Japanese glyphs the
+  menus need. Regenerate it after adding translated strings to `app/strings.cpp`:
+  ```powershell
+  assetbaker third_party\fonts third_party\fonts\MaterialSymbolsRounded.ttf `
+             third_party\fonts\MaterialSymbolsRounded.codepoints `
+             headset\app\src\main\assets\ui headset\app\src\main\assets\ui\charset.txt
+  ```
 - **headset-sim --interfaces** lists which network adapters and IPv6 addresses the PC offers for remote connections.
 - **portmap-test [port]** asks the router for a UDP port mapping the way the streamer does (PCP, then NAT-PMP, then UPnP), prints the result or the reason it isn't possible, and removes the mapping again.
 - **remote-e2e** tests a complete remote (account) connection on one machine: a local server, the real streamer signed in to a throwaway account, and the headset app's real `StreamClient` compiled for Windows. Close RinCast Streamer first (the tool restores your settings afterwards), start a local server, then run:

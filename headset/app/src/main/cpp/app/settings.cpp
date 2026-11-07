@@ -13,6 +13,7 @@ using json = nlohmann::json;
 json HeadsetSettings::ToJson() const {
     return {{"environment", environment},
             {"skyBrightness", skyBrightness},
+            {"language", language},
             {"vrQuality", vrQuality},
             {"autoConnect", autoConnect},
             {"usbCable", usbCable},
@@ -63,6 +64,7 @@ void HeadsetSettings::FromJson(const json& j) {
     };
     get("environment", environment);
     get("skyBrightness", skyBrightness);
+    get("language", language);
     get("vrQuality", vrQuality);
     get("autoConnect", autoConnect);
     get("usbCable", usbCable);

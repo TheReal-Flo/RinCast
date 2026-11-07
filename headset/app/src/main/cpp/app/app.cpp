@@ -16,6 +16,7 @@
 #include "rc/platform.h"
 #include "rc/protocol.h"
 #include "stb/stb_image.h"
+#include "strings.h"
 
 namespace rv {
 
@@ -86,6 +87,7 @@ void App::Init() {
     Platform::Init(m_android);
     m_settingsPath = Platform::FilesDir() + "/settings.json";
     m_settings = HeadsetSettings::Load(m_settingsPath);
+    SetLanguage(m_settings.language, Platform::SystemLocale());
     {
         rc::crypto::IdentitySeed seed{};
         if (!rc::HexDecode(m_settings.deviceSecret, seed.data(), seed.size())) {
@@ -443,10 +445,10 @@ void App::RequestGameImage(GameInfo& g) {
 }
 
 std::string App::VrStateText() const {
-    if (m_vrState == "launching") return m_vrProducer == "openxr" ? "Starting game…" : "Starting SteamVR…";
-    if (m_vrState == "running") return m_vrApp.empty() ? "Running" : m_vrApp;
-    if (m_vrState == "error") return "Couldn't start VR";
-    return "Ready";
+    if (m_vrState == "launching") return m_vrProducer == "openxr" ? Tr("vrState.startingGame") : Tr("vrState.startingSteamvr");
+    if (m_vrState == "running") return m_vrApp.empty() ? Tr("vrState.running") : m_vrApp;
+    if (m_vrState == "error") return Tr("vrState.error");
+    return Tr("vrState.ready");
 }
 
 bool App::IsVisible(const std::string& id) {
@@ -551,7 +553,7 @@ void App::EnterMode(Mode m) {
             if (m_settings.vrMenuHints < 3) {
                 m_settings.vrMenuHints++;
                 SaveSettings();
-                PostNotice("For RinCast's menu in a game: double-press the left menu button, or hold A and B.", "info");
+                PostNotice(Tr("notice.menuHint"), "info");
             }
             break;
     }
@@ -640,7 +642,7 @@ void App::UpdateMode(float dt) {
                     m_lastRetry = m_time - 3.f;  // first try almost at once
                     if (m_settings.uiSounds) Platform::PlaySound(Platform::Sound::Problem);
                 } else {
-                    PostNotice(status.empty() ? "Disconnected" : status, "warning");
+                    PostNotice(status.empty() ? Tr("notice.disconnected") : status, "warning");
                 }
                 return;
             }
@@ -666,11 +668,10 @@ void App::UpdateMode(float dt) {
                     m_vrNoPicture, vrDecoder ? "present" : "missing", vrDecoder && vrDecoder->Started(),
                     vrDecoder && vrDecoder->Failed(), vrDecoder ? vrDecoder->DecodedFrames() : 0u, m_vrEyeWidth * 2,
                     m_vrEyeHeight);
-            PostNotice("Your PC is sending the game, but this headset can't show it. Try H.264 or a lower VR quality in Settings.",
-                       "error", "vr.retry");
+            PostNotice(Tr("notice.cantShow"), "error", "vr.retry");
             EnterMode(Mode::Desktop);
         } else if (m_mode == Mode::LaunchingVr && (m_vrState == "error" || m_modeTime > 100.f)) {
-            PostNotice(m_vrState == "error" ? "VR couldn't start on your PC. Check that SteamVR opens there." : "SteamVR took too long to start. Check that it opens on your PC.", "error", "vr.retry");
+            PostNotice(m_vrState == "error" ? Tr("notice.vrError") : Tr("notice.vrTimeout"), "error", "vr.retry");
             EnterMode(Mode::Desktop);
         }
     } else if (m_mode == Mode::Vr) {
@@ -736,7 +737,7 @@ void App::HandleControl(const json& m) {
         m_settings.cloudUserName = m.value("name", "");
         SaveSettings();
     } else if (type == "_connectFailed") {
-        m_problem = m.value("error", "Couldn't connect");
+        m_problem = m.value("error", Tr("computers.couldntConnect"));
         EnterMode(Mode::Home);
     } else if (type == "_cloudTarget") {
         ConnectTarget t;

@@ -12,6 +12,7 @@
 #include "../platform/jni_bridge.h"
 #include "app.h"
 #include "rc/project.h"
+#include "strings.h"
 
 namespace rv::screens {
 
@@ -214,26 +215,26 @@ void PageComputers(Ui& ui, const Rect& body) {
         const Rect row{body.x - 8, body.y - 8, body.w + 16, kPcRowH};
         const bool slowLink = PoorLatency(app.CurrentStats());
         PcText(ui, row, "desktop_windows", app.Client().ServerName(),
-               slowLink ? (app.Client().IsVpn() ? "Slow through the VPN. A direct path between the devices helps" : app.Client().IsRemote() ? "Slow over the internet. A faster connection helps" : "Slow. A cable from the PC to the router helps most")
-                        : app.Client().IsVpn() ? "Connected through a VPN" : app.Client().IsRemote() ? "Connected over the internet" : "Connected",
+               slowLink ? (app.Client().IsVpn() ? Tr("net.slowVpn") : app.Client().IsRemote() ? Tr("net.slowInternet") : Tr("net.slowLocal"))
+                        : app.Client().IsVpn() ? Tr("net.throughVpn") : app.Client().IsRemote() ? Tr("net.overInternet") : Tr("net.connected"),
                slowLink ? kWarn : kGood);
         const bool armed = ui.Time() - g_disconnectArmed < 4.f;
-        if (ui.Button("pc-disconnect", PcAction(row, armed ? 320 : 170), armed ? "Press again to disconnect" : "Disconnect", nullptr, armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
+        if (ui.Button("pc-disconnect", PcAction(row, armed ? 320 : 170), armed ? Tr("btn.disconnectAgain") : Tr("btn.disconnect"), nullptr, armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
             if (armed) app.Disconnect();
             else g_disconnectArmed = ui.Time();
         }
         ButtonRow b{body.x, row.Bottom() + 16};
-        if (b.Add(ui, "pc-games", "Choose a game", ButtonStyle::Primary)) ShowPage(app, kGames);
-        if (b.Add(ui, "pc-steamvr", app.VrRunning() ? "Back to VR" : "Start SteamVR")) app.LaunchSteamVr();
+        if (b.Add(ui, "pc-games", Tr("btn.chooseGame"), ButtonStyle::Primary)) ShowPage(app, kGames);
+        if (b.Add(ui, "pc-steamvr", app.VrRunning() ? Tr("btn.backToVr") : Tr("btn.startSteamvr"))) app.LaunchSteamVr();
         const auto st = app.CurrentStats();
         Column c{body.x, row.Bottom() + 100, body.w};
         struct Line {
             const char* name;
             std::string value;
         };
-        const Line lines[] = {{"Network", st.rttMs > 0 ? FormatMs(st.rttMs) + " ms round trip" : "–"},
-                              {"Decoding", st.decodeMs > 0 ? FormatMs(st.decodeMs) + " ms" : "–"},
-                              {"Video", st.codec.empty() ? "–" : st.codec + ", " + PixelSize(st.width, st.height)}};
+        const Line lines[] = {{Tr("stat.network"), st.rttMs > 0 ? Trf("unit.roundTrip", {{"ms", FormatMs(st.rttMs)}}) : "–"},
+                              {Tr("stat.decoding"), st.decodeMs > 0 ? FormatMs(st.decodeMs) + " ms" : "–"},
+                              {Tr("stat.video"), st.codec.empty() ? "–" : st.codec + ", " + PixelSize(st.width, st.height)}};
         for (const Line& l : lines) {
             ui.Divider(c.x, c.y, c.w);
             R.Text(l.name, c.x, c.y + 12, 21, kMuted);
@@ -247,15 +248,15 @@ void PageComputers(Ui& ui, const Rect& body) {
     // ---- connecting / approval ----
     if (app.CurrentMode() == Mode::Connecting || app.Reconnecting()) {
         const bool approval = clientState == StreamClient::State::WaitingApproval;
-        const std::string title = approval ? "Waiting for your PC"
-                                  : app.Reconnecting() ? "Reconnecting"
-                                                       : "Connecting to " + app.Client().ServerName();
-        const std::string text = approval ? "On the PC, choose Allow once or Always allow."
-                                 : app.Reconnecting() ? "The connection dropped. Trying again."
+        const std::string title = approval ? Tr("computers.waitingPc")
+                                  : app.Reconnecting() ? Tr("computers.reconnecting")
+                                                       : Trf("computers.connectingTo", {{"name", app.Client().ServerName()}});
+        const std::string text = approval ? Tr("computers.approvalHint")
+                                 : app.Reconnecting() ? Tr("computers.reconnectingText")
                                                       : app.Client().StatusText();
         const float y = Message(ui, body, title, text, kText, true);
         ButtonRow b{body.x, y};
-        if (b.Add(ui, "cancel", "Cancel")) {
+        if (b.Add(ui, "cancel", Tr("btn.cancel"))) {
             app.DismissProblem();
             app.Disconnect();
         }
@@ -265,11 +266,11 @@ void PageComputers(Ui& ui, const Rect& body) {
     Rect list = body;
     // What went wrong with the last connection stays until it's dealt with.
     if (!app.ConnectionProblem().empty()) {
-        R.Text("Couldn't connect", body.x, body.y, 28, kDanger, Face::SemiBold);
+        R.Text(Tr("computers.couldntConnect"), body.x, body.y, 28, kDanger, Face::SemiBold);
         const float h = R.WrapText(app.ConnectionProblem(), {body.x, body.y + 44, body.w - 330, 60}, 21, kText, Face::Medium, 28);
         const float right = body.Right();
-        if (ui.Button("dismiss", {right - 130, body.y + 6, 130, 54}, "Dismiss")) app.DismissProblem();
-        if (app.CanRetry() && ui.Button("retry", {right - 130 - 10 - 160, body.y + 6, 160, 54}, "Try again", nullptr, ButtonStyle::Primary)) app.RetryConnection();
+        if (ui.Button("dismiss", {right - 130, body.y + 6, 130, 54}, Tr("btn.dismiss"))) app.DismissProblem();
+        if (app.CanRetry() && ui.Button("retry", {right - 130 - 10 - 160, body.y + 6, 160, 54}, Tr("btn.tryAgain"), nullptr, ButtonStyle::Primary)) app.RetryConnection();
         const float used = std::max(70.f, 44 + h) + 28;
         ui.Divider(body.x, body.y + used - 14, body.w);
         list.y += used;
@@ -285,7 +286,7 @@ void PageComputers(Ui& ui, const Rect& body) {
         e.lan = true;
         e.online = true;
         e.busy = pc.busy;
-        e.detail = pc.viaUsb ? "USB cable" : pc.viaVpn ? "Through a VPN" : "On this network";
+        e.detail = pc.viaUsb ? Tr("pcDetail.usb") : pc.viaVpn ? Tr("pcDetail.vpn") : Tr("pcDetail.lan");
         e.lanInfo = pc;
         entries.push_back(e);
     }
@@ -299,7 +300,7 @@ void PageComputers(Ui& ui, const Rect& body) {
         e.name = pc.name;
         e.online = pc.online;
         e.busy = pc.busy;
-        e.detail = pc.online ? "On another network" : "Start RinCast Streamer on it";
+        e.detail = pc.online ? Tr("pcDetail.remote") : Tr("pcDetail.offlineHint");
         e.cloudInfo = pc;
         entries.push_back(e);
     }
@@ -317,7 +318,7 @@ void PageComputers(Ui& ui, const Rect& body) {
     };
     if (enteringAddress) {
         // Number pad for networks that block discovery (guest Wi-Fi, some mesh systems).
-        const float y = Message(ui, list, "Enter your PC's address", "It's on the Home page of RinCast Streamer. An address from a VPN like Tailscale works too.");
+        const float y = Message(ui, list, Tr("computers.enterAddressTitle"), Tr("computers.enterAddressText"));
         const float kw = 124, kh = 56, padW = 3 * kw + 16;
         const Rect field{list.x, y, padW, 58};
         R.RectBorder(field, Color(0, 0, 0, 1), kRadius, kEdge, 2.f);
@@ -329,7 +330,7 @@ void PageComputers(Ui& ui, const Rect& body) {
                 const Rect kr{list.x + col * (kw + 8), y + 68 + row * (kh + 6), kw, kh};
                 const std::string id = "pad-" + k;
                 const bool back = k == "<";
-                if (back) ui.NextLabel("Backspace");
+                if (back) ui.NextLabel(Tr("a11y.backspace"));
                 if (ui.Button(id.c_str(), kr, back ? "" : k, back ? "backspace" : nullptr, ButtonStyle::Secondary, true, 30)) {
                     if (back) { if (!address.empty()) address.pop_back(); }
                     else if (address.size() < 15) address += k;
@@ -338,7 +339,7 @@ void PageComputers(Ui& ui, const Rect& body) {
         }
         // The actions stay beside the pad, where they fit whatever came above it.
         const float ax = list.x + padW + 24;
-        if (ui.Button("pad-ok", {ax, y, 240, 58}, "Look for this PC", nullptr, ButtonStyle::Primary, !address.empty())) {
+        if (ui.Button("pad-ok", {ax, y, 240, 58}, Tr("btn.lookForPc"), nullptr, ButtonStyle::Primary, !address.empty())) {
             // Four numbers from 0 to 255; anything else can't be a PC on this network.
             int a = -1, b = -1, c = -1, d = -1;
             char rest = 0;
@@ -352,24 +353,24 @@ void PageComputers(Ui& ui, const Rect& body) {
                 entriesWhenLooking = entries.size();
             }
         }
-        if (ui.Button("pad-cancel", {ax, y + 68, 240, 56}, "Cancel")) {
+        if (ui.Button("pad-cancel", {ax, y + 68, 240, 56}, Tr("btn.cancel"))) {
             enteringAddress = false;
             addressValid = true;
         }
-        if (!addressValid) R.WrapText("That isn't a complete address. It needs four numbers.", {ax, y + 140, list.Right() - ax, 90}, 20, kWarn, Face::Medium, 27);
+        if (!addressValid) R.WrapText(Tr("computers.badAddress"), {ax, y + 140, list.Right() - ax, 90}, 20, kWarn, Face::Medium, 27);
         return;
     }
     if (entries.empty() && !lookingAt.empty()) {
         if (app.Time() - lookingSince < 8.f) {
-            Message(ui, list, "Looking at " + lookingAt, {}, kText, true);
+            Message(ui, list, Trf("computers.lookingAt", {{"address", lookingAt}}), {}, kText, true);
         } else {
-            const float y = Message(ui, list, "No answer from " + lookingAt, "Check the address, that RinCast Streamer is running, and that Windows' firewall allows it.", kWarn);
+            const float y = Message(ui, list, Trf("computers.noAnswer", {{"address", lookingAt}}), Tr("computers.noAnswerHint"), kWarn);
             ButtonRow b{list.x, y};
-            if (b.Add(ui, "manual-again", "Change address")) {
+            if (b.Add(ui, "manual-again", Tr("btn.changeAddress"))) {
                 openAddress();
                 lookingAt.clear();
             }
-            if (b.Add(ui, "manual-done", "Back")) lookingAt.clear();
+            if (b.Add(ui, "manual-done", Tr("btn.back"))) lookingAt.clear();
         }
         return;
     }
@@ -377,32 +378,33 @@ void PageComputers(Ui& ui, const Rect& body) {
     if (entries.empty()) {
         float y;
         if (searching > 15.f) {
-            y = Message(ui, list, "Still looking for your PC", {}, kText, true) - 12;
-            const std::string getIt = std::string("Run RinCast Streamer on your PC. Get it from ") + rc::kDownloadSite + ".";
-            const std::string checks[] = {getIt, "Put the PC and this headset on the same network. Guest Wi-Fi keeps them apart: there, sign in or use a VPN.",
-                                          "Check the firewall message in RinCast Streamer, or any security software on the PC."};
+            y = Message(ui, list, Tr("computers.stillLooking"), {}, kText, true) - 12;
+            const std::string getIt = Trf("computers.getIt", {{"site", rc::kDownloadSite}});
+            const std::string checks[] = {getIt, Tr("computers.check1"), Tr("computers.check2")};
             for (int i = 0; i < 3; i++) {
                 R.Text(std::to_string(i + 1), list.x, y, 21, kText, Face::SemiBold);
                 y += R.WrapText(checks[i], {list.x + 34, y, std::min(list.w - 34, 660.f), 90}, 21, kMuted, Face::Medium, 30) + 12;
             }
             y += 10;
         } else {
-            y = Message(ui, list, "Looking for your PC", "Run RinCast Streamer on your PC, on the same network as this headset.", kText, true);
+            y = Message(ui, list, Tr("computers.looking"), Tr("computers.lookingHint"), kText, true);
         }
         ButtonRow b{list.x, y};
-        if (b.Add(ui, "manual", "Enter PC address")) openAddress();
-        if (state != Cloud::SignInState::SignedIn && b.Add(ui, "signin-empty", "Sign in for other networks")) ShowPage(app, kAccount);
+        if (b.Add(ui, "manual", Tr("btn.enterAddress"))) openAddress();
+        if (state != Cloud::SignInState::SignedIn && b.Add(ui, "signin-empty", Tr("btn.signinOtherNetworks"))) ShowPage(app, kAccount);
         return;
     }
 
     // The address someone typed gets its answer here, above what's already listed.
     if (!lookingAt.empty()) {
         const bool still = app.Time() - lookingSince < 8.f;
-        R.TextIn(still ? "Looking at " + lookingAt : "No answer from " + lookingAt, {list.x, list.y, list.w - 330, 54}, 22, still ? kText : kWarn, Face::SemiBold);
+        const std::string lookTitle = still ? Trf("computers.lookingAt", {{"address", lookingAt}})
+                                            : Trf("computers.noAnswer", {{"address", lookingAt}});
+        R.TextIn(lookTitle, {list.x, list.y, list.w - 330, 54}, 22, still ? kText : kWarn, Face::SemiBold);
         if (still) {
-            ui.Spinner(list.x + R.Measure("Looking at " + lookingAt, 22, Face::SemiBold) + 30, list.y + 27, 13, kText);
+            ui.Spinner(list.x + R.Measure(lookTitle, 22, Face::SemiBold) + 30, list.y + 27, 13, kText);
         } else {
-            if (ui.Button("look-again", {list.Right() - 240, list.y, 180 + 60, 54}, "Change address")) {
+            if (ui.Button("look-again", {list.Right() - 240, list.y, 180 + 60, 54}, Tr("btn.changeAddress"))) {
                 openAddress();
                 lookingAt.clear();
             }
@@ -440,7 +442,7 @@ void PageComputers(Ui& ui, const Rect& body) {
         const Rect row{list.x - 8, y, list.w + 16, kPcRowH};
         const std::string id = "pc-" + e.id;
         const bool armed = e.busy && takeOverId == e.id && ui.Time() - takeOverAt < 4.f;
-        const std::string detail = e.busy ? "In use. Connecting ends that session" : e.detail;
+        const std::string detail = e.busy ? Tr("pcDetail.busy") : e.detail;
         ui.NextLabel(e.name + ", " + detail);
         if (ui.Hit(id.c_str(), row, e.online)) {
             if (e.busy && !armed) {
@@ -455,20 +457,20 @@ void PageComputers(Ui& ui, const Rect& body) {
         // Looks like a button; the whole row takes the click, which is easier to hit.
         const Rect action = PcAction(row, armed ? 220 : 170);
         if (e.online) {
-            // While "Try again" is on show, that's the main action.
+            // While Tr("btn.tryAgain") is on show, that's the main action.
             const bool primary = !armed && e.id == likeliest && app.ConnectionProblem().empty();
             const Color fill = armed ? kDangerFill : primary ? kAccent : kControl;
             R.RectFill(action, fill, kRadius);
-            R.TextIn(armed ? "Press to take over" : e.busy ? "Take over" : "Connect", action, 21, primary ? kOnAccent : kText, Face::SemiBold, Align::Center);
+            R.TextIn(armed ? Tr("btn.pressTakeOver") : e.busy ? Tr("btn.takeOver") : Tr("btn.connect"), action, 21, primary ? kOnAccent : kText, Face::SemiBold, Align::Center);
         } else {
-            R.TextIn("Offline", action, 21, kMuted, Face::SemiBold, Align::Right);
+            R.TextIn(Tr("pcDetail.offline"), action, 21, kMuted, Face::SemiBold, Align::Right);
         }
         y += kPcRowH + 8;
     }
     ui.EndScroll();
     // A network that blocks discovery can hide the one you're after.
     ButtonRow more{list.x, list.Bottom() - 54};
-    if (more.Add(ui, "manual", "Enter PC address")) openAddress();
+    if (more.Add(ui, "manual", Tr("btn.enterAddress"))) openAddress();
 }
 
 // Up to two lines, then an ellipsis.
@@ -495,26 +497,26 @@ void PageGames(Ui& ui, const Rect& body) {
     App& app = *g_app;
     UiRenderer& R = ui.R();
     if (!Connected(app)) {
-        const float y = Message(ui, body, "Connect to a PC first", "Its VR games are listed here.");
+        const float y = Message(ui, body, Tr("games.connectFirst"), Tr("games.connectFirstHint"));
         ButtonRow b{body.x, y};
-        if (b.Add(ui, "to-computers", "Choose a PC", ButtonStyle::Primary)) ShowPage(app, kComputers);
+        if (b.Add(ui, "to-computers", Tr("btn.choosePc"), ButtonStyle::Primary)) ShowPage(app, kComputers);
         return;
     }
     auto& games = app.Games();
     if (games.empty() && !app.GamesAnswered() && app.GamesRequestedAgo() >= 5.f) {
-        const float y = Message(ui, body, "Your PC didn't answer", "Check the connection, then try again.", kWarn);
+        const float y = Message(ui, body, Tr("games.noAnswer"), Tr("games.noAnswerHint"), kWarn);
         ButtonRow b{body.x, y};
-        if (b.Add(ui, "refresh", "Try again", ButtonStyle::Primary)) app.RequestGames();
+        if (b.Add(ui, "refresh", Tr("btn.tryAgain"), ButtonStyle::Primary)) app.RequestGames();
         return;
     }
     if (games.empty() && !app.GamesAnswered()) {
-        Message(ui, body, "Looking for games on your PC", {}, kText, true);
+        Message(ui, body, Tr("games.looking"), {}, kText, true);
         return;
     }
     if (games.empty()) {
-        const float y = Message(ui, body, "No VR games found", "VR games you install in Steam show up here. They need SteamVR.");
+        const float y = Message(ui, body, Tr("games.none"), Tr("games.noneHint"));
         ButtonRow b{body.x, y};
-        if (b.Add(ui, "refresh", "Look again")) app.RequestGames();
+        if (b.Add(ui, "refresh", Tr("btn.lookAgain"))) app.RequestGames();
         return;
     }
     const int cols = 5;
@@ -543,7 +545,7 @@ void PageGames(Ui& ui, const Rect& body) {
         if (app.VrRunning() && app.VrStateText() == g.name) {
             const Rect tag{art.x + 8, art.y + 8, 104, 34};
             R.RectFill(tag, kAccent, kRadius);
-            R.TextIn("Running", tag, 20, kOnAccent, Face::SemiBold, Align::Center);
+            R.TextIn(Tr("games.running"), tag, 20, kOnAccent, Face::SemiBold, Align::Center);
         }
         TwoLines(ui, g.name, {card.x, art.Bottom() + 8, cardW, 54}, 20, 25);
     }
@@ -556,23 +558,23 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     bool changed = false;
     const float gap = 44, w = (body.w - gap) / 2;
     Column l{body.x, body.y, w};
-    Section(ui, l, "Image");
-    Label(ui, l, "Quality (pixels per eye)");
-    static const char* qn[] = {"Low", "Medium", "High", "Ultra", "Maximum"};
+    Section(ui, l, Tr("vr.imageSection"));
+    Label(ui, l, Tr("vr.qualityLabel"));
+    static const char* qn[] = {"quality.low", "quality.medium", "quality.high", "quality.ultra", "quality.max"};
     static const char* qk[] = {"low", "medium", "high", "ultra", "godlike"};
     static const float qs[] = {0.6f, 0.75f, 0.9f, 1.f, 1.2f};
     for (int i = 0; i < 5; i++) {
         const std::string id = std::string("quality#") + qk[i];
         const std::string res = PixelSize(int(app.Xr().RecommendedWidth() * qs[i]), int(app.Xr().RecommendedHeight() * qs[i]));
-        ui.NextLabel("VR graphics quality");
-        if (ui.Radio(id.c_str(), {l.x - 8, l.y, l.w + 8, 44}, qn[i], s.vrQuality == qk[i], res)) {
+        ui.NextLabel(Tr("vr.qualityA11y"));
+        if (ui.Radio(id.c_str(), {l.x - 8, l.y, l.w + 8, 44}, Tr(qn[i]), s.vrQuality == qk[i], res)) {
             s.vrQuality = qk[i];
             changed = true;
         }
         l.y += 45;
     }
     l.y += 14;
-    Label(ui, l, "Frame rate (fps)");
+    Label(ui, l, Tr("vr.fpsLabel"));
     std::vector<std::string> rates;
     int ri = 0;
     const auto available = app.Xr().RefreshRates();
@@ -581,7 +583,7 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         if (std::fabs(available[i] - s.refreshRate) < 1) ri = int(i);
     }
     if (rates.size() > 1) {
-        if (RadioLine(ui, l, "rate", "Frame rate, frames per second", rates, ri)) {
+        if (RadioLine(ui, l, "rate", Tr("vr.fpsA11y"), rates, ri)) {
             s.refreshRate = available[size_t(ri)];
             changed = true;
         }
@@ -590,46 +592,46 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         l.y += 46;
     }
     l.y += 14;
-    Label(ui, l, "Video codec");
-    static const std::vector<std::string> codecs = {"Same as PC", "HEVC", "AV1", "H.264"};
+    Label(ui, l, Tr("vr.codecLabel"));
+    static const std::vector<std::string> codecs = {Tr("codec.auto"), "HEVC", "AV1", "H.264"};
     static const char* ck[] = {"auto", "hevc", "av1", "h264"};
     int ci = 0;
     for (int i = 0; i < 4; i++)
         if (s.codec == ck[i]) ci = i;
-    if (RadioGrid(ui, l, "codec", "Video codec", codecs, ci, 2)) {
+    if (RadioGrid(ui, l, "codec", Tr("vr.codecLabel"), codecs, ci, 2)) {
         s.codec = ck[ci];
         changed = true;
     }
-    changed |= CheckRow(ui, l, "10bit", "10-bit color", s.tenBit, ci == 3 ? "Needs HEVC or AV1" : "", ci != 3);
+    changed |= CheckRow(ui, l, "10bit", Tr("vr.tenBit"), s.tenBit, ci == 3 ? Tr("vr.needsHevcAv1") : "", ci != 3);
 
     Column c{body.x + w + gap, body.y, w};
-    Section(ui, c, "Bitrate");
+    Section(ui, c, Tr("vr.bitrateSection"));
     const bool usePc = s.vrBitrateMbps == 0;
     // The PC tells what its own limit is once connected.
     const int pcLimit = app.ServerInfo().value("vrBitrateMbps", 0);
     bool followPc = usePc;
-    if (CheckRow(ui, c, "bitrate-pc", "Use the PC's limit", followPc)) {
+    if (CheckRow(ui, c, "bitrate-pc", Tr("vr.usePcLimit"), followPc)) {
         s.vrBitrateMbps = followPc ? 0 : pcLimit > 0 ? pcLimit : 150;
         changed = true;
     }
     float bitrate = usePc ? float(std::max(20, pcLimit)) : float(s.vrBitrateMbps);
-    const std::string bitrateText = !usePc ? std::to_string(int(bitrate)) + " Mbps" : pcLimit > 0 ? std::to_string(pcLimit) + " Mbps" : "Set on the PC";
-    if (BarRow(ui, c, "bitrate", "Bitrate limit for games", bitrate, 20, 500, 20, bitrateText, !usePc)) {
+    const std::string bitrateText = !usePc ? std::to_string(int(bitrate)) + " Mbps" : pcLimit > 0 ? std::to_string(pcLimit) + " Mbps" : Tr("vr.setOnPc");
+    if (BarRow(ui, c, "bitrate", Tr("vr.bitrateLabel"), bitrate, 20, 500, 20, bitrateText, !usePc)) {
         s.vrBitrateMbps = int(bitrate);
         changed = true;
     }
-    changed |= CheckRow(ui, c, "adaptive", "Adjust bitrate automatically", s.adaptiveBitrate);
-    Section(ui, c, "Enhancements");
-    changed |= CheckRow(ui, c, "upscaling", "Upscaling", s.upscaling, "Sharper below Ultra. Uses more battery");
-    changed |= CheckRow(ui, c, "framegen", "Frame generation", s.frameGeneration, "For a slow PC. Moving edges can wobble");
-    Section(ui, c, "Tracking");
+    changed |= CheckRow(ui, c, "adaptive", Tr("vr.adaptive"), s.adaptiveBitrate);
+    Section(ui, c, Tr("vr.enhancements"));
+    changed |= CheckRow(ui, c, "upscaling", Tr("vr.upscaling"), s.upscaling, Tr("vr.upscalingHint"));
+    changed |= CheckRow(ui, c, "framegen", Tr("vr.frameGen"), s.frameGeneration, Tr("vr.frameGenHint"));
+    Section(ui, c, Tr("vr.tracking"));
     // The Quest can't run body and finger tracking together, so there each turns the other off.
     Headset& device = app.Device();
     const bool exclusive = device.BodyExcludesFingers();
     if (device.BodySupported(app.Xr())) {
         const std::string status = device.BodyStatus();
         const char* hint = device.BodyHint();
-        if (CheckRow(ui, c, "body", "Body tracking", s.bodyTracking, !status.empty() ? status : hint ? hint : "")) {
+        if (CheckRow(ui, c, "body", Tr("vr.bodyTracking"), s.bodyTracking, !status.empty() ? status : hint ? hint : "")) {
             changed = true;
             if (s.bodyTracking && exclusive) s.fingersWithControllers = false;
         }
@@ -640,13 +642,13 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         }
     }
     if (app.Input().SimultaneousSupported() &&
-        CheckRow(ui, c, "fingers", "Finger tracking with controllers", s.fingersWithControllers, exclusive ? "Turns off Body tracking" : "")) {
+        CheckRow(ui, c, "fingers", Tr("vr.fingerTracking"), s.fingersWithControllers, exclusive ? Tr("vr.fingerExclusive") : "")) {
         changed = true;
         if (s.fingersWithControllers && exclusive) s.bodyTracking = false;
     }
-    changed |= CheckRow(ui, c, "handsgames", "Hands in games", s.handsInGames, "Pinch for the trigger, fist to grab");
+    changed |= CheckRow(ui, c, "handsgames", Tr("vr.handsInGames"), s.handsInGames, Tr("vr.handsHint"));
     if (device.FaceSupported(app.Xr()))
-        changed |= CheckRow(ui, c, "face", "Face tracking", s.faceTracking, device.FaceHint());
+        changed |= CheckRow(ui, c, "face", Tr("vr.faceTracking"), s.faceTracking, device.FaceHint());
     return changed;
 }
 
@@ -657,9 +659,9 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     const float gap = 44, w = (body.w - gap) / 2;
     const float distanceBefore = s.screenDistance;
     Column l{body.x, body.y, w};
-    Section(ui, l, "Screens");
+    Section(ui, l, Tr("desktop.screensSection"));
     float curve = s.curvature;
-    if (BarRow(ui, l, "curve", "Curve", curve, 0, 1, 0.05f, s.curvature < 0.03f ? "Flat" : Percent(s.curvature))) {
+    if (BarRow(ui, l, "curve", Tr("desktop.curve"), curve, 0, 1, 0.05f, s.curvature < 0.03f ? Tr("desktop.flat") : Percent(s.curvature))) {
         s.curvature = curve;
         changed = true;
     }
@@ -667,26 +669,26 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     float dist = s.screenDistance;
     char hint[32];
     snprintf(hint, sizeof(hint), "%.2f m", s.screenDistance);
-    if (BarRow(ui, l, "distance", "Distance", dist, 0.8f, 3.f, 0.05f, hint)) {
+    if (BarRow(ui, l, "distance", Tr("desktop.distance"), dist, 0.8f, 3.f, 0.05f, hint)) {
         s.screenDistance = dist;
         changed = true;
     }
     l.y += 8;
     ButtonRow b{l.x, l.y};
-    if (b.Add(ui, "arrange", "Recenter")) app.Recenter();
+    if (b.Add(ui, "arrange", Tr("btn.recenter"))) app.Recenter();
 
     Column c{body.x + w + gap, body.y, w};
-    Section(ui, c, "Quality");
-    Label(ui, c, "Frame rate (fps)");
+    Section(ui, c, Tr("desktop.qualitySection"));
+    Label(ui, c, Tr("desktop.fpsLabel"));
     int fpsI = s.desktopFps == 0 ? 0 : s.desktopFps <= 30 ? 1 : s.desktopFps <= 60 ? 2 : 3;
-    static const std::vector<std::string> fps = {"Automatic", "30", "60", "90"};
-    if (RadioGrid(ui, c, "dfps", "Frame rate, frames per second", fps, fpsI, 2)) {
+    static const std::vector<std::string> fps = {Tr("fps.auto"), "30", "60", "90"};
+    if (RadioGrid(ui, c, "dfps", Tr("vr.fpsA11y"), fps, fpsI, 2)) {
         static const int v[] = {0, 30, 60, 90};
         s.desktopFps = v[fpsI];
         changed = true;
     }
     c.y += 8;
-    changed |= CheckRow(ui, c, "sharp", "Sharp text", s.sharpLayers, "Small performance cost");
+    changed |= CheckRow(ui, c, "sharp", Tr("desktop.sharpText"), s.sharpLayers, Tr("desktop.sharpHint"));
     if (changed) app.UpdateScreenShape(distanceBefore);
     return changed;
 }
@@ -707,7 +709,7 @@ bool PageEnvironment(Ui& ui, const Rect& body) {
         shown++;
         const std::string id = std::string("env-") + e.key;
         const bool sel = s.environment == e.key;
-        ui.NextLabel(e.name);
+        ui.NextLabel(Tr((std::string("env.") + e.key).c_str()));
         if (ui.Hit(id.c_str(), card)) {
             s.environment = e.key;
             changed = true;
@@ -731,7 +733,7 @@ bool PageEnvironment(Ui& ui, const Rect& body) {
     }
     Column c{body.x, y + 14, cardW * 2 + gap};
     float b = s.skyBrightness;
-    if (BarRow(ui, c, "brightness", "Background brightness", b, 0.3f, 1.6f, 0.05f, Percent(s.skyBrightness), true, 1.f)) {
+    if (BarRow(ui, c, "brightness", Tr("env.brightness"), b, 0.3f, 1.6f, 0.05f, Percent(s.skyBrightness), true, 1.f)) {
         s.skyBrightness = b;
         changed = true;
     }
@@ -744,11 +746,11 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     bool changed = false;
     const float gap = 44, w = (body.w - gap) / 2;
     Column l{body.x, body.y, w};
-    Section(ui, l, "Audio");
-    changed |= CheckRow(ui, l, "audio", "Play PC sound in the headset", s.streamAudio);
+    Section(ui, l, Tr("general.audioSection"));
+    changed |= CheckRow(ui, l, "audio", Tr("general.playSound"), s.streamAudio);
     l.y += 8;
     float v = s.volume;
-    if (BarRow(ui, l, "volume", "Sound volume", v, 0, 1, 0.05f, Percent(s.volume), s.streamAudio)) {
+    if (BarRow(ui, l, "volume", Tr("general.volume"), v, 0, 1, 0.05f, Percent(s.volume), s.streamAudio)) {
         s.volume = v;
         changed = true;
     }
@@ -760,57 +762,82 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     const json& info = app.ServerInfo();
     if (info.contains("audioDriver") && info["audioDriver"].value("devices", "") == "steam")
         micName = "Steam Streaming Microphone";
-    if (CheckRow(ui, l, "mic", "Use the headset microphone", mic,
-                 micAllowed ? "On the PC it's " + micName : std::string("Allow microphone access for RinCast in ") + app.Device().SettingsName(), micAllowed)) {
+    if (CheckRow(ui, l, "mic", Tr("general.useMic"), mic,
+                 micAllowed ? Trf("general.micOnPc", {{"mic", micName}})
+                            : Trf("general.micPermission", {{"where", std::string(app.Device().SettingsName())}}),
+                 micAllowed)) {
         s.micPassthrough = mic;
         changed = true;
     }
-    Section(ui, l, "Controllers");
-    changed |= CheckRow(ui, l, "haptics", "Haptic feedback", s.haptics);
+    Section(ui, l, Tr("general.controllersSection"));
+    changed |= CheckRow(ui, l, "haptics", Tr("general.haptics"), s.haptics);
     l.y += 8;
     float sp = s.scrollSpeed;
     char spHint[16];
     snprintf(spHint, sizeof(spHint), "%.1f×", s.scrollSpeed);
-    if (BarRow(ui, l, "scroll", "Scroll speed", sp, 0.3f, 3, 0.1f, spHint, true, 1.f)) {
+    if (BarRow(ui, l, "scroll", Tr("general.scrollSpeed"), sp, 0.3f, 3, 0.1f, spHint, true, 1.f)) {
         s.scrollSpeed = sp;
         changed = true;
     }
 
     Column c{body.x + w + gap, body.y, w};
-    Section(ui, c, "Connecting");
-    changed |= CheckRow(ui, c, "autoconnect", "Auto connect", s.autoConnect, "To the last PC, when RinCast opens");
+    Section(ui, c, Tr("general.connectingSection"));
+    changed |= CheckRow(ui, c, "autoconnect", Tr("general.autoConnect"), s.autoConnect, Tr("general.autoConnectHint"));
     {
         // The headset asks once whether RinCast may use the cable.
         using U = Platform::UsbNetwork;
         const U& u = app.UsbNetwork();
-        const std::string hint = !s.usbCable ? "Instead of Wi-Fi, with a USB-C cable to the PC"
-                                 : u.state == U::Connected ? (u.kbps >= 1000000 ? "Connected, USB 3" : "Connected, USB 2: a USB 3 cable and port is faster")
-                                 : u.state == U::NotAllowed ? "Not allowed on the headset. Turn this off and on to be asked again"
-                                                            : "Waiting for a cable to the PC";
+        const std::string hint = !s.usbCable ? Tr("general.usbHint.wifi")
+                                 : u.state == U::Connected ? (u.kbps >= 1000000 ? Tr("general.usbHint.usb3") : Tr("general.usbHint.usb2"))
+                                 : u.state == U::NotAllowed ? Tr("general.usbHint.notAllowed")
+                                                            : Tr("general.usbHint.waiting");
         bool usb = s.usbCable;
-        if (CheckRow(ui, c, "usbcable", "USB cable", usb, hint)) app.SetUsbCable(usb);
+        if (CheckRow(ui, c, "usbcable", Tr("general.usbCable"), usb, hint)) app.SetUsbCable(usb);
     }
-    Section(ui, c, "Interface");
-    Label(ui, c, "Size");
+    Section(ui, c, Tr("general.interfaceSection"));
+    Label(ui, c, Tr("general.sizeLabel"));
     // Larger would no longer fit in view.
     static const std::vector<std::string> sizes = {"100%", "115%", "130%"};
     int sizeI = s.uiScale > 1.2f ? 2 : s.uiScale > 1.05f ? 1 : 0;
-    if (RadioLine(ui, c, "uisize", "Size", sizes, sizeI)) {
+    if (RadioLine(ui, c, "uisize", Tr("general.sizeLabel"), sizes, sizeI)) {
         static const float sv[] = {1.f, 1.15f, 1.3f};
         s.uiScale = sv[sizeI];
         app.ApplyAccessibility();
         changed = true;
     }
     c.y += 4;
-    if (CheckRow(ui, c, "contrast", "High contrast", s.highContrast)) {
+    if (CheckRow(ui, c, "contrast", Tr("general.highContrast"), s.highContrast)) {
         app.ApplyAccessibility();
         changed = true;
     }
-    changed |= CheckRow(ui, c, "sounds", "Interface sounds", s.uiSounds);
-    changed |= CheckRow(ui, c, "music", "Music", s.music, "Until a PC is connected");
-    changed |= CheckRow(ui, c, "readaloud", "Read aloud", s.readAloud, "Speaks what you point at. Needs a text-to-speech voice on the headset");
-    if (CheckRow(ui, c, "stats", "Performance overlay", s.showStats)) {
+    changed |= CheckRow(ui, c, "sounds", Tr("general.uiSounds"), s.uiSounds);
+    changed |= CheckRow(ui, c, "music", Tr("general.music"), s.music, Tr("general.musicHint"));
+    changed |= CheckRow(ui, c, "readaloud", Tr("general.readAloud"), s.readAloud, Tr("general.readAloudHint"));
+    if (CheckRow(ui, c, "stats", Tr("general.perfOverlay"), s.showStats)) {
         app.ToggleWindow("stats", s.showStats && app.CurrentMode() != Mode::Home);
+        changed = true;
+    }
+    c.y += 4;
+    // The language, named in its own words so it's findable in any UI.
+    Label(ui, c, Tr("general.language"));
+    size_t langCount = 0;
+    const auto* langs = LanguageChoices(langCount);
+    std::vector<std::string> langNames;
+    int langI = 0;
+    for (size_t i = 0; i < langCount; i++) {
+        langNames.push_back(langs[i].name);
+        if (Language() == langs[i].code) langI = int(i) + 1;
+    }
+    // Index 0 is "auto", which follows the headset's system language.
+    langNames.insert(langNames.begin(), Tr("language.auto"));
+    if (RadioLine(ui, c, "language", Tr("general.language"), langNames, langI)) {
+        if (langI == 0) {
+            s.language = "auto";
+        } else {
+            s.language = langs[size_t(langI) - 1].code;
+        }
+        SetLanguage(s.language, Platform::SystemLocale());
+        app.SaveSettings();
         changed = true;
     }
     return changed;
@@ -824,14 +851,14 @@ void PageAccount(Ui& ui, const Rect& body) {
     switch (st) {
         case Cloud::SignInState::SignedOut:
         case Cloud::SignInState::Error: {
-            float y = Message(ui, body, "Reach your PCs from any network", "Sign in with the same account as RinCast Streamer. You don't need one on your own network.");
+            float y = Message(ui, body, Tr("account.reachTitle"), Tr("account.reachHint"));
             if (st == Cloud::SignInState::Error) y += R.WrapText(app.Account().Error(), {body.x, y, std::min(body.w, 680.f), 90}, 21, kDanger, Face::Medium, 30) + 14;
             ButtonRow b{body.x, y};
-            if (b.Add(ui, "getcode", "Sign in", ButtonStyle::Primary)) app.Account().BeginSignIn();
+            if (b.Add(ui, "getcode", Tr("btn.signIn"), ButtonStyle::Primary)) app.Account().BeginSignIn();
             break;
         }
         case Cloud::SignInState::RequestingCode:
-            Message(ui, body, "Getting a code", {}, kText, true);
+            Message(ui, body, Tr("account.gettingCode"), {}, kText, true);
             break;
         case Cloud::SignInState::WaitingForApproval: {
             const std::string code = app.Account().UserCode();
@@ -840,59 +867,59 @@ void PageAccount(Ui& ui, const Rect& body) {
                 announced = code;
                 std::string spaced;
                 for (char c : code) if (c != '-') { spaced += c; spaced += ' '; }
-                ui.Announce("Your sign-in code is " + spaced);
+                ui.Announce(Trf("account.codeAnnounce", {{"code", spaced}}));
             }
-            R.Text("Enter this code", body.x, body.y, 28, kText, Face::SemiBold);
+            R.Text(Tr("account.enterCode"), body.x, body.y, 28, kText, Face::SemiBold);
             R.Text(code, body.x, body.y + 54, 70, kText, Face::SemiBold);
             std::string url = app.Account().VerificationUrl();
             const size_t scheme = url.find("://");
             if (scheme != std::string::npos) url = url.substr(scheme + 3);
             const float top = body.y + 158;
-            const float h = R.WrapText("Go to " + url + " on your phone or computer, or use Account in RinCast Streamer on your PC.",
+            const float h = R.WrapText(Trf("account.goTo", {{"url", url}}),
                                        {body.x, top, std::min(body.w, 680.f), 90}, 21, kMuted, Face::Medium, 30);
             const float y = top + h + 20;
-            R.Text("Waiting for you to confirm", body.x, y, 21, kText);
-            ui.Spinner(body.x + R.Measure("Waiting for you to confirm", 21, Face::Medium) + 24, y + 13, 12, kText);
+            R.Text(Tr("account.waitingConfirm"), body.x, y, 21, kText);
+            ui.Spinner(body.x + R.Measure(Tr("account.waitingConfirm"), 21, Face::Medium) + 24, y + 13, 12, kText);
             ButtonRow b{body.x, y + 46};
-            if (b.Add(ui, "cancel-signin", "Cancel")) app.Account().CancelSignIn();
+            if (b.Add(ui, "cancel-signin", Tr("btn.cancel"))) app.Account().CancelSignIn();
             break;
         }
         case Cloud::SignInState::SignedIn: {
-            const float y = Message(ui, body, "Signed in as " + app.Account().UserName());
+            const float y = Message(ui, body, Trf("account.signedInAs", {{"name", app.Account().UserName()}}));
             static float signOutArmed = -100;
             const bool armed = ui.Time() - signOutArmed < 4.f;
             ButtonRow b{body.x, y};
-            if (b.Add(ui, "signout", armed ? "Press again to sign out" : "Sign out", armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
+            if (b.Add(ui, "signout", armed ? Tr("btn.signOutAgain") : Tr("btn.signOut"), armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
                 if (armed) app.Account().SignOut();
                 else signOutArmed = ui.Time();
             }
             break;
         }
     }
-    if (s.cloudServer != HeadsetSettings{}.cloudServer) R.TextIn("Account server: " + s.cloudServer, {body.x, body.Bottom() - 30, body.w, 30}, 18, kMuted);
+    if (s.cloudServer != HeadsetSettings{}.cloudServer) R.TextIn(Trf("account.serverLine", {{"server", s.cloudServer}}), {body.x, body.Bottom() - 30, body.w, 30}, 18, kMuted);
 }
 
 void PageHelp(Ui& ui, const Rect& body) {
     App& app = *g_app;
     UiRenderer& R = ui.R();
     Column l{body.x, body.y, body.w};
-    Section(ui, l, "Controllers and hands");
+    Section(ui, l, Tr("help.section"));
     struct Line {
         const char* input;
         const char* action;
     };
-    static const Line lines[] = {{"Trigger or pinch", "Click"},
-                                 {"B, Y or a long pinch", "Right-click"},
-                                 {"Stick, or pinch and move", "Scroll"},
-                                 {"Press the stick", "Middle-click"},
-                                 {"Drag the bar under a window", "Move the window"},
-                                 {"Drag that bar's ends", "Resize the window"},
-                                 {"Left menu button", "Show or hide the dock"},
-                                 {"In a game: left menu twice, or hold A and B", "Open RinCast's menu"}};
+    static const Line lines[] = {{"help.input1", "help.action1"},
+                                 {"help.input2", "help.action2"},
+                                 {"help.input3", "help.action3"},
+                                 {"help.input4", "help.action4"},
+                                 {"help.input5", "help.action5"},
+                                 {"help.input6", "help.action6"},
+                                 {"help.input7", "help.action7"},
+                                 {"help.input8", "help.action8"}};
     for (const Line& line : lines) {
         ui.Divider(l.x, l.y, l.w);
-        R.Text(line.action, l.x, l.y + 10, 21, kText);
-        const float h = R.WrapText(line.input, {l.x + 270, l.y + 10, l.w - 270, 60}, 21, kMuted, Face::Medium, 28);
+        R.Text(Tr(line.action), l.x, l.y + 10, 21, kText);
+        const float h = R.WrapText(Tr(line.input), {l.x + 270, l.y + 10, l.w - 270, 60}, 21, kMuted, Face::Medium, 28);
         l.y += h + 19;
     }
     ui.Divider(l.x, l.y, l.w);
@@ -903,8 +930,7 @@ void PageHelp(Ui& ui, const Rect& body) {
         R.Text(info.value("pcName", "") + ": Streamer " + info.value("version", "") + ", " + info.value("os", "") + ", " + info.value("gpu", ""), l.x, l.y, 20, kMuted);
         l.y += 34;
     }
-    l.y += R.WrapText("Free and open source under the MIT license. Licenses for the parts it uses are in THIRD_PARTY_NOTICES.md, in every release. "
-                      "Not affiliated with Meta, Valve or Virtual Desktop.",
+    l.y += R.WrapText(Tr("help.license"),
                       {l.x, l.y, l.w, 90}, 20, kMuted, Face::Medium, 28) + 12;
     // CC-BY: title, author, license and where to find them, for each track.
     for (const MusicTrack& t : kMusicTracks) {
@@ -925,28 +951,28 @@ void BuildMain(Ui& ui, const Rect& r) {
     Logo(ui, r.x + 44, r.y + 44, 44);
     R.Text("RinCast", r.x + 76, r.y + 28, 27, kText, Face::SemiBold);
 
-    static const char* names[kPageCount] = {"PCs", "Games", "VR quality", "Desktop", "Environment", "General", "Account", "Help"};
+    static const char* names[kPageCount] = {"nav.pcs", "nav.games", "nav.vrQuality", "nav.desktop", "nav.environment", "nav.general", "nav.account", "nav.help"};
     float ny = r.y + 84;
     for (int i = 0; i < kPageCount; i++) {
         const Rect row{r.x + 12, ny, navW - 24, 52};
         const std::string id = std::string("nav-") + names[i];
-        ui.NextLabel(names[i]);
+        ui.NextLabel(Tr(names[i]));
         if (ui.Row(id.c_str(), row, g_page == i)) ShowPage(app, i);
         const Color fg = g_page == i || ui.IsHot(id.c_str()) ? kText : kMuted;
-        R.TextIn(names[i], {row.x + 16, row.y, row.w - 24, row.h}, 22, fg, g_page == i ? Face::SemiBold : Face::Medium);
+        R.TextIn(Tr(names[i]), {row.x + 16, row.y, row.w - 24, row.h}, 22, fg, g_page == i ? Face::SemiBold : Face::Medium);
         ny += 54;
     }
     if (connected) {
         R.RectFill({r.x + 12, statusY - 14 - 54 - 12, navW - 24, 2}, kLine);
-        if (ui.Button("nav-close", {r.x + 12, statusY - 14 - 54, navW - 24, 54}, "Hide menu", nullptr, ButtonStyle::Quiet)) app.ToggleWindow("home", false);
+        if (ui.Button("nav-close", {r.x + 12, statusY - 14 - 54, navW - 24, 54}, Tr("btn.hideMenu"), nullptr, ButtonStyle::Quiet)) app.ToggleWindow("home", false);
         // Live numbers along the bottom, on every page.
         R.RectFill({r.x + 2, statusY, r.w - 4, 2}, kLine);
         const auto st = app.CurrentStats();
         const float sx = r.Right() - 36;
-        if (g_page != kComputers) Stat(ui, r.x + 28, statusY + 14, "Connected to", app.Client().ServerName());
-        Stat(ui, sx, statusY + 14, "Bitrate", st.mbps > 0 ? FormatMs(st.mbps) + " Mbps" : "–", Align::Right);
-        Stat(ui, sx - 180, statusY + 14, "Frame rate", st.fps > 0 ? FormatMs(st.fps) + " fps" : "–", Align::Right, app.CurrentMode() == Mode::Vr && PoorFrameRate(st, app.Settings().refreshRate));
-        Stat(ui, sx - 360, statusY + 14, "Latency", st.latencyMs > 0 ? FormatMs(st.latencyMs) + " ms" : "–", Align::Right, PoorLatency(st));
+        if (g_page != kComputers) Stat(ui, r.x + 28, statusY + 14, Tr("stat.connectedTo"), app.Client().ServerName());
+        Stat(ui, sx, statusY + 14, Tr("stat.bitrate"), st.mbps > 0 ? FormatMs(st.mbps) + " Mbps" : "–", Align::Right);
+        Stat(ui, sx - 180, statusY + 14, Tr("stat.fps"), st.fps > 0 ? FormatMs(st.fps) + " fps" : "–", Align::Right, app.CurrentMode() == Mode::Vr && PoorFrameRate(st, app.Settings().refreshRate));
+        Stat(ui, sx - 360, statusY + 14, Tr("stat.latency"), st.latencyMs > 0 ? FormatMs(st.latencyMs) + " ms" : "–", Align::Right, PoorLatency(st));
     }
 
     // A lost connection, a retry or a failure is news on any page.
@@ -980,7 +1006,7 @@ void BuildDock(Ui& ui, const Rect& r) {
     const auto st = app.CurrentStats();
     const bool slow = st.latencyMs >= 80;  // the same line the PC draws
     R.TextIn(app.Client().ServerName(), {r.x + 24, r.y + 18, 176, 36}, 21, kText, Face::SemiBold);
-    const std::string sub = st.latencyMs > 0 ? "Latency " + FormatMs(st.latencyMs) + " ms" + (slow ? ", slow" : "") : app.Client().IsVpn() ? "Through a VPN" : app.Client().IsRemote() ? "Over the internet" : "Connected";
+    const std::string sub = st.latencyMs > 0 ? Trf("dock.latency", {{"ms", FormatMs(st.latencyMs)}}) + (slow ? Tr("net.slowSuffix") : "") : app.Client().IsVpn() ? Tr("pcDetail.vpn") : app.Client().IsRemote() ? Tr("net.overInternet") : Tr("net.connected");
     R.TextIn(sub, {r.x + 24, r.y + 54, 176, 30}, 19, slow ? kWarn : kMuted);
     R.RectFill({r.x + 212, r.y + 14, 2, r.h - 28}, kLine);
 
@@ -989,10 +1015,11 @@ void BuildDock(Ui& ui, const Rect& r) {
         const char* icon;
         const char* label;
     };
-    const Btn btns[] = {{"monitors", "desktop_windows", "Desktop"}, {"games", "sports_esports", "Games"},
-                        {"keyboard", "keyboard", "Keyboard"}, {"menu", "apps", "Menu"},
-                        {"steamvr", "rocket_launch", app.VrRunning() ? "Back to VR" : "SteamVR"}, {"recenter", "center_focus_strong", "Recenter"},
-                        {"disconnect", "logout", "Disconnect"}};
+    // The labels are i18n keys; "SteamVR" isn't one and Tr passes it through.
+    const Btn btns[] = {{"monitors", "desktop_windows", "nav.desktop"}, {"games", "sports_esports", "nav.games"},
+                        {"keyboard", "keyboard", "dock.keyboard"}, {"menu", "apps", "dock.menu"},
+                        {"steamvr", "rocket_launch", app.VrRunning() ? "btn.backToVr" : "dock.steamvr"}, {"recenter", "center_focus_strong", "btn.recenter"},
+                        {"disconnect", "logout", "btn.disconnect"}};
     const float bw = 100, gap = 4;
     float x = r.x + 224;
     int index = 0;
@@ -1014,7 +1041,7 @@ void BuildDock(Ui& ui, const Rect& r) {
         // Disconnecting takes a second press within a few seconds: it ends what you're doing.
         const bool armed = id == "disconnect" && ui.Time() - g_disconnectArmed < 4.f;
         if (armed) R.RectFill(br, kDangerFill, kRadius);
-        if (ui.IconButton(b.id, br, armed ? "warning" : b.icon, active, armed ? "Press again" : b.label)) {
+        if (ui.IconButton(b.id, br, armed ? "warning" : b.icon, active, armed ? Tr("btn.pressAgain") : Tr(b.label))) {
             if (id == "monitors") app.ShowMonitors(!app.MonitorsVisible());
             if (id == "games") {
                 if (panel && g_page == kGames) {
@@ -1062,14 +1089,14 @@ void BuildKeyboard(Ui& ui, const Rect& window) {
     static float lastTyped = 0;
     if (!typed.empty() && ui.Time() - lastTyped > 30.f) typed.clear();
     if (typed.empty()) {
-        R.TextIn("Keys go to the window in focus on your PC", {echo.x + 14, echo.y, echo.w - 120, echo.h}, 20, kMuted);
+        R.TextIn(Tr("kb.hint"), {echo.x + 14, echo.y, echo.w - 120, echo.h}, 20, kMuted);
     } else {
         const std::string shown = showTyped ? typed : std::string(typed.size() - 1, '*') + typed.back();
         R.TextIn(shown, {echo.x + 14, echo.y, echo.w - 120, echo.h}, 21, kText, Face::Medium);
     }
     if (!typed.empty()) {
-        ui.NextLabel(showTyped ? "Hide what I typed" : "Show what I typed");
-        if (ui.Button("echo-show", {echo.Right() - 136, echo.y + 5, 130, echo.h - 10}, showTyped ? "Hide text" : "Show text", nullptr, ButtonStyle::Secondary, true, 20)) showTyped = !showTyped;
+        ui.NextLabel(showTyped ? Tr("a11y.hideTyped") : Tr("a11y.showTyped"));
+        if (ui.Button("echo-show", {echo.Right() - 136, echo.y + 5, 130, echo.h - 10}, showTyped ? Tr("kb.hideText") : Tr("kb.showText"), nullptr, ButtonStyle::Secondary, true, 20)) showTyped = !showTyped;
     }
     const std::string typedBefore = typed;
 
@@ -1171,9 +1198,9 @@ void BuildKeyboard(Ui& ui, const Rect& window) {
         const char* icon;
         const char* spoken;
         uint16_t vk;
-    } arrows[] = {{"left", "arrow_back", "Left", 0x25}, {"up", "arrow_upward", "Up", 0x26}, {"down", "arrow_downward", "Down", 0x28}, {"right", "arrow_forward", "Right", 0x27}};
+    } arrows[] = {{"left", "arrow_back", "a11y.left", 0x25}, {"up", "arrow_upward", "a11y.up", 0x26}, {"down", "arrow_downward", "a11y.down", 0x28}, {"right", "arrow_forward", "a11y.right", 0x27}};
     for (const auto& a : arrows) {
-        if (repeating(a.id, key(a.id, x, 0, 1.f, "", a.icon, false, a.spoken, true))) tap(a.vk);
+        if (repeating(a.id, key(a.id, x, 0, 1.f, "", a.icon, false, Tr(a.spoken), true))) tap(a.vk);
         x += span(1.f) + gap;
     }
 
@@ -1184,7 +1211,7 @@ void BuildKeyboard(Ui& ui, const Rect& window) {
         if (key("d" + std::to_string(i), x, 1, 1.f, std::string(1, c), nullptr, false)) typeOrCombo(c, std::string(1, c));
         x += span(1.f) + gap;
     }
-    if (repeating("back", key("back", x, 1, 1.f, "", "backspace", false, "Backspace"))) {
+    if (repeating("back", key("back", x, 1, 1.f, "", "backspace", false, Tr("a11y.backspace")))) {
         const bool combo = g_ctrl || g_alt || g_win;
         tap(0x08);
         if (!combo && !typed.empty()) typed.pop_back();
@@ -1216,7 +1243,7 @@ void BuildKeyboard(Ui& ui, const Rect& window) {
             if (key("k" + std::to_string(row) + "_" + std::to_string(i), x, row + 2, 1.f, ch, nullptr, false)) typeOrCombo(chars[i], ch);
             x += span(1.f) + gap;
         }
-        if (row == 1 && key("enter", x, 3, 1.5f, "", "keyboard_return", false, "Enter")) {
+        if (row == 1 && key("enter", x, 3, 1.5f, "", "keyboard_return", false, Tr("a11y.enter"))) {
             tap(0x0D);
             typed.clear();
         }
@@ -1228,7 +1255,7 @@ void BuildKeyboard(Ui& ui, const Rect& window) {
     x += span(2.f) + gap;
     if (key("slash", x, 5, 1.f, "/", nullptr, false)) typeOrCombo('/', "/");
     x += span(1.f) + gap;
-    if (repeating("space", key("space", x, 5, 7.f, "", "space_bar", false, "Space"))) {
+    if (repeating("space", key("space", x, 5, 7.f, "", "space_bar", false, Tr("a11y.space")))) {
         const bool combo = g_ctrl || g_alt || g_win;
         tap(0x20);
         if (!combo) typed += ' ';
@@ -1249,12 +1276,12 @@ void BuildStats(Ui& ui, const Rect& r) {
         const char* label;
         std::string value;
     };
-    const Item items[] = {{"Latency", s.latencyMs > 0 ? FormatMs(s.latencyMs) + " ms" : "–"},
-                          {"Frame rate", s.fps > 0 ? FormatMs(s.fps) + " fps" : "–"},
-                          {"Bitrate", s.mbps > 0 ? FormatMs(s.mbps) + " Mbps" : "–"},
-                          {"Decoding", s.decodeMs > 0 ? FormatMs(s.decodeMs) + " ms" : "–"},
-                          {"Network", s.rttMs > 0 ? FormatMs(s.rttMs) + " ms" : "–"},
-                          {"Video", s.codec.empty() ? "–" : s.codec + " " + PixelSize(s.width, s.height)}};
+    const Item items[] = {{Tr("stat.latency"), s.latencyMs > 0 ? FormatMs(s.latencyMs) + " ms" : "–"},
+                          {Tr("stat.fps"), s.fps > 0 ? FormatMs(s.fps) + " fps" : "–"},
+                          {Tr("stat.bitrate"), s.mbps > 0 ? FormatMs(s.mbps) + " Mbps" : "–"},
+                          {Tr("stat.decoding"), s.decodeMs > 0 ? FormatMs(s.decodeMs) + " ms" : "–"},
+                          {Tr("stat.network"), s.rttMs > 0 ? FormatMs(s.rttMs) + " ms" : "–"},
+                          {Tr("stat.video"), s.codec.empty() ? "–" : s.codec + " " + PixelSize(s.width, s.height)}};
     for (int i = 0; i < 6; i++) {
         const float y = r.y + 16 + i * 38;
         R.Text(items[i].label, r.x + 22, y, 20, kMuted);
@@ -1271,15 +1298,15 @@ void BuildStats(Ui& ui, const Rect& r) {
     ui.Divider(r.x + 22, y, r.w - 44);
     y += 16;
     if (total <= 0) {
-        R.Text("Latency by stage shows once frames arrive", r.x + 22, y, 18, kMuted);
+        R.Text(Tr("stats.stagesWaiting"), r.x + 22, y, 18, kMuted);
         return;
     }
-    R.Text("Latency by stage", r.x + 22, y, 20, kText, Face::SemiBold);
+    R.Text(Tr("stats.stages"), r.x + 22, y, 20, kText, Face::SemiBold);
     y += 36;
     for (int i = 0; i < kStageCount; i++) {
         const double ms = s.stageMs[i];
         if (ms < 0) continue;
-        R.Text(kLatencyStages[i].label, r.x + 22, y, 18, kMuted);
+        R.Text(Tr((std::string("stage.") + kLatencyStages[i].key).c_str()), r.x + 22, y, 18, kMuted);
         R.Text(FormatMs(ms) + " ms", r.Right() - 22, y, 18, kText, Face::SemiBold, Align::Right);
         const float w = float((r.w - 44) * std::max(ms, 0.0) / total);
         R.RectFill({r.x + 22, y + 25, std::max(w, 2.f), 4}, ms == biggest ? kAccent : kEdge, 2);
@@ -1304,12 +1331,12 @@ void BuildNotices(Ui& ui, const Rect& r) {
     const Rect text{r.x + 76, r.y, r.w - (actions ? 390 : stays ? 240 : 100), r.h};
     const float h = WrapHeight(ui, n.text, text.w, 20, 27);
     R.WrapText(n.text, {text.x, r.y + (r.h - h) / 2, text.w, h}, 20, kText.WithAlpha(fade), Face::Medium, 27);
-    if (stays && !actions && ui.Button("dismiss", {r.Right() - 134, r.y + 22, 114, r.h - 44}, "Dismiss")) app.DismissNotice();
+    if (stays && !actions && ui.Button("dismiss", {r.Right() - 134, r.y + 22, 114, r.h - 44}, Tr("btn.dismiss"))) app.DismissNotice();
     if (actions) {
-        const std::string label = n.action == "vr.retry" ? "Try again" : n.action.find("estart") != std::string::npos ? "Restart" : "Open";
+        const std::string label = std::string(n.action == "vr.retry" ? Tr("btn.tryAgain") : n.action.find("estart") != std::string::npos ? Tr("btn.restart") : Tr("btn.open"));
         const std::string action = n.action;
-        if (ui.Button("dismiss", {r.Right() - 170 - 8 - 114, r.y + 22, 114, r.h - 44}, "Not now")) app.DismissNotice();
-        else if (ui.Button("action", {r.Right() - 170, r.y + 22, 150, r.h - 44}, label, nullptr, label == "Restart" ? ButtonStyle::Danger : ButtonStyle::Primary)) {
+        if (ui.Button("dismiss", {r.Right() - 170 - 8 - 114, r.y + 22, 114, r.h - 44}, Tr("btn.notNow"))) app.DismissNotice();
+        else if (ui.Button("action", {r.Right() - 170, r.y + 22, 150, r.h - 44}, label, nullptr, label == Tr("btn.restart") ? ButtonStyle::Danger : ButtonStyle::Primary)) {
             app.DismissNotice();
             app.RunAction(action);
         }
@@ -1324,9 +1351,9 @@ void BuildLaunch(Ui& ui, const Rect& r) {
     Background(ui, r);
     ui.Spinner(r.x + 44, r.y + r.h / 2, 20, kText);
     R.TextIn(app.VrStateText(), {r.x + 80, r.y + 18, r.w - 320, 40}, 26, kText, Face::SemiBold);
-    R.TextIn("This can take a minute.", {r.x + 80, r.y + 58, r.w - 320, 30}, 20, kMuted);
+    R.TextIn(Tr("launch.takeTime"), {r.x + 80, r.y + 58, r.w - 320, 30}, 20, kMuted);
     // SteamVR keeps starting on the PC; this only stops waiting for it here.
-    if (ui.Button("launch-cancel", {r.Right() - 24 - 200, r.y + (r.h - 54) / 2, 200, 54}, "Back to desktop")) app.ExitVr();
+    if (ui.Button("launch-cancel", {r.Right() - 24 - 200, r.y + (r.h - 54) / 2, 200, 54}, Tr("btn.backToDesktop"))) app.ExitVr();
 }
 
 // ---- VR overlay ---------------------------------------------------------------------------
@@ -1338,20 +1365,20 @@ void BuildVrOverlay(Ui& ui, const Rect& r) {
     const float pad = 24;
     R.TextIn(app.VrStateText(), {r.x + pad, r.y + 14, r.w - 400, 54}, 30, kText, Face::SemiBold);
     const auto s = app.CurrentStats();
-    if (s.latencyMs > 0) R.TextIn("Latency " + FormatMs(s.latencyMs) + " ms", {r.Right() - 390, r.y + 14, 230, 54}, 21, kMuted, Face::Medium, Align::Right);
-    if (ui.Button("close", {r.Right() - pad - 120, r.y + 14, 120, 54}, "Resume", nullptr, ButtonStyle::Primary)) app.ToggleWindow("vr-overlay", false);
+    if (s.latencyMs > 0) R.TextIn(Trf("dock.latency", {{"ms", FormatMs(s.latencyMs)}}), {r.Right() - 390, r.y + 14, 230, 54}, 21, kMuted, Face::Medium, Align::Right);
+    if (ui.Button("close", {r.Right() - pad - 120, r.y + 14, 120, 54}, Tr("btn.resume"), nullptr, ButtonStyle::Primary)) app.ToggleWindow("vr-overlay", false);
     // Left-aligned with the title, in the order you're likely to need them.
     ButtonRow b{r.x + pad, r.y + 88};
-    if (b.Add(ui, "desktop", "Back to desktop")) app.ExitVr();
-    if (b.Add(ui, "recenter", "Recenter")) app.Recenter();
-    if (b.Add(ui, "stats", app.Settings().showStats ? "Hide performance" : "Show performance")) {
+    if (b.Add(ui, "desktop", Tr("btn.backToDesktop"))) app.ExitVr();
+    if (b.Add(ui, "recenter", Tr("btn.recenter"))) app.Recenter();
+    if (b.Add(ui, "stats", app.Settings().showStats ? Tr("vrOverlay.hidePerf") : Tr("vrOverlay.showPerf"))) {
         app.Settings().showStats = !app.Settings().showStats;
         app.SaveSettings();
         app.ToggleWindow("stats", app.Settings().showStats);
     }
     const bool armed = ui.Time() - g_disconnectArmed < 4.f;
     const Rect dis{r.Right() - pad - 180, r.y + 88, 180, 54};
-    if (ui.Button("disconnect", dis, armed ? "Press again" : "Disconnect", nullptr, armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
+    if (ui.Button("disconnect", dis, armed ? Tr("btn.pressAgain") : Tr("btn.disconnect"), nullptr, armed ? ButtonStyle::Danger : ButtonStyle::Secondary)) {
         if (armed) app.Disconnect();
         else g_disconnectArmed = ui.Time();
     }

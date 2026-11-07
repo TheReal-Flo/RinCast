@@ -351,23 +351,37 @@ float UiRenderer::WrapText(const std::string& text, const Rect& r, float size, c
         y += lineHeight;
         line.clear();
     };
+    // Chinese and Japanese have no spaces: any CJK character may end a line. One such
+    // character counts as a word of its own, joined without a space. A Latin word that
+    // directly follows CJK still gets its natural space, which reads right in both.
+    auto isCjk = [](uint32_t cp) {
+        return (cp >= 0x2E80 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+               (cp >= 0xFF00 && cp <= 0xFFEF) || (cp >= 0x20000 && cp <= 0x3FFFD);
+    };
     while (i < text.size()) {
         if (text[i] == '\n') {
             flush();
             i++;
             continue;
         }
-        size_t j = text.find_first_of(" \n", i);
-        if (j == std::string::npos) j = text.size();
-        const std::string word = text.substr(i, j - i);
-        const std::string candidate = line.empty() ? word : line + " " + word;
+        // One word: up to the next space or newline, or a single CJK character.
+        const size_t start = i;
+        const uint32_t cp = NextCodepoint(text, i);
+        const bool cjk = isCjk(cp);
+        size_t end = i;
+        if (!cjk) {
+            end = text.find_first_of(" \n", i);
+            if (end == std::string::npos) end = text.size();
+            i = end;
+        }
+        const std::string word = text.substr(start, end - start);
+        const std::string candidate = (cjk || line.empty()) ? line + word : line + " " + word;
         if (!line.empty() && m_font.Measure(candidate, size, face) > r.w) {
             flush();
             line = word;
         } else {
             line = candidate;
         }
-        i = j;
         if (i < text.size() && text[i] == ' ') i++;
     }
     if (!line.empty()) flush();

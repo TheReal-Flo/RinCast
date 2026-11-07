@@ -144,6 +144,11 @@ public class MainActivity extends NativeActivity {
         return getFilesDir().getAbsolutePath();
     }
 
+    /** The system's language as a BCP 47 tag, e.g. "zh-CN", for the UI's "auto" language. */
+    public String getSystemLocale() {
+        return android.content.res.Resources.getSystem().getConfiguration().getLocales().get(0).toLanguageTag();
+    }
+
     public boolean hasMicPermission() {
         return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     }

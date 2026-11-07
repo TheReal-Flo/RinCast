@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "app/strings.h"
+
 namespace rv {
 
 uint64_t Ui::Id(const char* id) const {
@@ -142,7 +144,7 @@ bool Ui::Check(const char* id, const Rect& r, const std::string& label, bool& va
     const bool clicked = Interact(Id(id), r, enabled, hovered, held);
     if (clicked) value = !value;
     if (hovered) m_hotLabel = (m_nextLabel.empty() ? label : m_nextLabel) + (value ? ", on" : ", off");
-    if (clicked) m_speech = value ? "On" : "Off";
+    if (clicked) m_speech = value ? Tr("speech.on") : Tr("speech.off");
     m_nextLabel.clear();
     const std::string key = std::string(id) + "#c";
     const float h = Anim(key.c_str(), hovered ? 1.f : 0.f, 30.f);

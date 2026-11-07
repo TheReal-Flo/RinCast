@@ -1,5 +1,7 @@
 #include "pico_body.h"
 
+#include "app/strings.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -202,22 +204,21 @@ bool PicoBody::LocateWholeBody(XrContext& xr, XrTime time, rc::BodyTrackingPaylo
 std::string PicoBody::Status(XrContext& xr) {
     if (m_trackers) {
         const int n = ConnectedTrackers(xr);
-        if (n == 0) return "Pair Motion Trackers in PICO's tracker app";
-        return std::to_string(n) + (n == 1 ? " Motion Tracker" : " Motion Trackers") +
-               ". Turn it on standing up";
+        if (n == 0) return Tr("device.pico.pairTrackers");
+        return Trf(n == 1 ? "device.pico.trackerOne" : "device.pico.trackerMany", {{"n", std::to_string(n)}});
     }
     if (m_state) {
         XrBodyTrackingStateBD state{XR_TYPE_BODY_TRACKING_STATE_BD};
         if (XR_SUCCEEDED(m_state(xr.Session(), &state))) {
             switch (state.message) {
-                case XR_BODY_TRACKING_MESSAGE_TRACKER_NOT_CALIBRATED_BD: return "The Motion Trackers need calibrating";
-                case XR_BODY_TRACKING_MESSAGE_TRACKER_NUM_NOT_ENOUGH_BD: return "Connect more Motion Trackers";
+                case XR_BODY_TRACKING_MESSAGE_TRACKER_NOT_CALIBRATED_BD: return Tr("device.pico.calibrate");
+                case XR_BODY_TRACKING_MESSAGE_TRACKER_NUM_NOT_ENOUGH_BD: return Tr("device.pico.moreTrackers");
                 default: break;
             }
-            if (state.status == XR_BODY_TRACKING_STATUS_VALID_BD) return "Tracking the whole body";
+            if (state.status == XR_BODY_TRACKING_STATUS_VALID_BD) return Tr("device.pico.trackingBody");
         }
     }
-    return "With PICO Motion Trackers";
+    return Tr("device.pico.bodyHint");
 }
 
 void PicoBody::Calibrate(XrContext& xr) {
