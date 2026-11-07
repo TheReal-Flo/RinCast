@@ -2,6 +2,12 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
+
 ## 1.1.2 - 2026-11-07
 
 Only the Quest 1 APK (`-quest1`) changed; everything else is 1.1.1 with a new version number.

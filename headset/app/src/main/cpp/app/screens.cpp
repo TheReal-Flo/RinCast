@@ -693,6 +693,8 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     }
     c.y += 8;
     changed |= CheckRow(ui, c, "sharp", Tr("desktop.sharpText"), s.sharpLayers, Tr("desktop.sharpHint"));
+    c.y += 8;
+    changed |= CheckRow(ui, c, "desktop-input", Tr("desktop.input"), s.desktopInput, Tr("desktop.inputHint"));
     if (changed) app.UpdateScreenShape(distanceBefore);
     return changed;
 }
