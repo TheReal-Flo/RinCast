@@ -1,24 +1,24 @@
-# RinCast Streamer para macOS
+# RinCast Streamer for macOS
 
-Implementação nativa do streamer RinCast para macOS, permitindo transmitir e controlar todas as telas do seu Mac dentro de headsets de realidade virtual (como Meta Quest 3, Quest 3S, Quest Pro, Quest 2 e PICO 4).
+Native macOS streamer implementation for RinCast, enabling multi-monitor desktop streaming and remote control to VR headsets (such as Meta Quest 3, Quest 3S, Quest Pro, Quest 2, and PICO 4).
 
-## Características
+## Features
 
-- **ScreenCaptureKit:** Captura de tela com zero-copy direto da GPU da Apple e suporte nativo ao cursor do mouse.
-- **VideoToolbox Hardware Encoding:** Codificação em tempo real por hardware em **HEVC (H.265)** e **H.264** com latência mínima (sem B-frames / reordering).
-- **CoreGraphics Input Injection:** Controle remoto completo do mouse (movimento, botões esquerdo/direito/meio, scroll suave) e digitação de teclado do headset para o Mac.
-- **Protocolo RinCast:** Criptografia ponta a ponta (Monocypher), correção antecipada de erros (FEC XOR), adaptação automática e descoberta sem fios na rede local.
+- **ScreenCaptureKit:** High-performance screen capture with zero-copy GPU pipeline and native cursor rendering.
+- **VideoToolbox Hardware Encoding:** Real-time hardware-accelerated encoding in **HEVC (H.265)** and **H.264** with minimal latency (no B-frames / reordering).
+- **CoreGraphics Input Injection:** Full remote mouse control (cursor motion, left/right/middle buttons, smooth scroll) and keyboard text input from the headset to the Mac.
+- **RinCast Protocol:** End-to-end encryption (Monocypher), forward error correction (XOR FEC), adaptive bitrate, and automatic LAN discovery.
 
 ---
 
-## Como Compilar
+## Building from Source
 
-Requisitos:
-- macOS 12.3+ (Apple Silicon ou Intel)
+Requirements:
+- macOS 12.3+ (Apple Silicon or Intel)
 - Xcode Command Line Tools (`xcode-select --install`)
 - CMake 3.22+
 
-Para compilar:
+To build:
 
 ```bash
 mkdir -p build-mac
@@ -27,35 +27,35 @@ cmake -S ../mac -B .
 cmake --build .
 ```
 
-O binário executável será gerado em:
+The resulting executable will be located at:
 `build-mac/rincast-streamer-mac`
 
 ---
 
-## Como Executar
+## Usage
 
-Execute o binário no terminal:
+Run the streamer binary from your terminal:
 
 ```bash
 ./build-mac/rincast-streamer-mac
 ```
 
-### Permissões Necessárias no macOS
+### Required macOS Permissions
 
-Ao executar pela primeira vez, o macOS solicitará duas permissões de sistema:
+On first run, macOS requires two permissions:
 
-1. **Gravação de Tela (Screen Recording):**
-   * Caminho: **Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela** (ou *Screen Recording*).
-   * Marque a caixa para permitir que o Terminal / RinCast capture o vídeo dos seus monitores.
-2. **Acessibilidade (Accessibility):**
-   * Caminho: **Ajustes do Sistema > Privacidade e Segurança > Acessibilidade** (ou *Accessibility*).
-   * Permita o app para que os controladores do headset possam mover o mouse e digitar no seu Mac.
+1. **Screen Recording:**
+   * Path: **System Settings > Privacy & Security > Screen Recording**.
+   * Toggle the switch to allow Terminal (or your app runner) to capture display frames.
+2. **Accessibility:**
+   * Path: **System Settings > Privacy & Security > Accessibility**.
+   * Toggle the switch to allow remote mouse and keyboard events from the headset.
 
 ---
 
-## Conectando pelo Headset
+## Connecting from the Headset
 
-1. Certifique-se de que o Mac e o headset estão conectados à mesma rede Wi-Fi (preferencialmente 5 GHz ou 6 GHz).
-2. Abra o aplicativo **RinCast** no seu headset (no Quest, em *Fontes Desconhecidas*).
-3. Seu Mac aparecerá automaticamente na lista com o nome do computador.
-4. Clique para conectar: todas as suas telas aparecerão no espaço imersivo!
+1. Ensure your Mac and headset are connected to the same local Wi-Fi network (5 GHz or 6 GHz recommended).
+2. Open the **RinCast** app on your headset (on Meta Quest, located under *Unknown Sources*).
+3. Your Mac will appear automatically in the list of available PCs.
+4. Select your Mac to connect: your displays will appear as floating screens in your immersive VR space!
