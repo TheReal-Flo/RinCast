@@ -2,6 +2,17 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.1.2 - 2026-11-07
+
+Only the Quest 1 APK (`-quest1`) changed; everything else is 1.1.1 with a new version number.
+
+### Fixed
+
+- The Quest 1 APK didn't start on a Quest 1. It listed the Quest 3 and 3S among its supported
+  headsets, and the Quest 1's last Horizon OS, older than those, refuses an app with a headset
+  name it doesn't know instead of ignoring it. It now lists only the Quest 1 and Quest 2. The
+  other headsets use the standard APK.
+
 ## 1.1.1 - 2026-11-07
 
 The 1.1.0 headset app doesn't start on any headset: update it. Install both, though; the other

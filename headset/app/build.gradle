@@ -62,7 +62,9 @@ android {
         }
         quest1 {
             dimension "headsets"
-            manifestPlaceholders = [questDevices: "quest|quest2|questpro|quest3|quest3s"]
+            // Only names the Quest 1's last Horizon OS knows: it refuses to start an app that
+            // lists a newer headset (Quest 3 and later) instead of ignoring the name.
+            manifestPlaceholders = [questDevices: "quest|quest2"]
             externalNativeBuild { cmake { arguments "-DRINCAST_QUEST1=ON" } }
         }
     }
