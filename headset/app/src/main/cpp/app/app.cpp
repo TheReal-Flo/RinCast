@@ -1194,14 +1194,16 @@ void App::UpdateInput(const FrameState& frame, float dt) {
     // ---- PC mouse from laser over a monitor ----
     if (m_mode != Mode::Desktop || m_windows.Dragging()) return;
     int mouseHand = -1;
-    for (int h = 1; h >= 0; h--) {
-        const WindowHit& hit = m_hits[h];
-        if (hit.window && hit.window->kind == WindowKind::Video && hit.zone == HitZone::Content) {
-            if (mouseHand < 0 || m_rays[h].triggerDown) mouseHand = h;
+    if (m_settings.desktopInput) {
+        for (int h = 1; h >= 0; h--) {
+            const WindowHit& hit = m_hits[h];
+            if (hit.window && hit.window->kind == WindowKind::Video && hit.zone == HitZone::Content) {
+                if (mouseHand < 0 || m_rays[h].triggerDown) mouseHand = h;
+            }
         }
     }
     if (mouseHand < 0) {
-        // Release anything held when the ray leaves the monitors.
+        // Release anything held when the ray leaves the monitors or input is disabled.
         for (int h = 0; h < 2; h++) {
             if (m_handState[h].trigger) m_client.SendControl({{"type", rc::msg::kMouseButton}, {"button", 0}, {"down", false}});
             m_handState[h].trigger = false;

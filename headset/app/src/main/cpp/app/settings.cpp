@@ -30,6 +30,7 @@ json HeadsetSettings::ToJson() const {
             {"desktopFps", desktopFps},
             {"curvature", curvature},
             {"sharpLayers", sharpLayers},
+            {"desktopInput", desktopInput},
             {"upscaling", upscaling},
             {"frameGeneration", frameGeneration},
             {"bodyTracking", bodyTracking},
@@ -94,6 +95,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("desktopFps", desktopFps);
     get("curvature", curvature);
     get("sharpLayers", sharpLayers);
+    get("desktopInput", desktopInput);
     get("upscaling", upscaling);
     get("frameGeneration", frameGeneration);
     get("bodyTracking", bodyTracking);
