@@ -371,6 +371,8 @@ void App::DisconnectNow() {
     m_xr.DestroySwapchain(m_vrSwapchain);
     m_vrHasFrame = false;
     m_vrState = "idle";
+    // A new connection starts from nothing: nothing was left behind to stay away from.
+    m_vrLeftByUser = false;
     m_serverInfo = json::object();
     m_games.clear();
     m_monitorsLaidOut = false;
@@ -387,8 +389,15 @@ void App::LaunchGame(const std::string& id) {
     EnterMode(Mode::LaunchingVr);
 }
 
-void App::ExitVr() {
+void App::ExitVr(bool byUser) {
     m_client.SendControl({{"type", rc::msg::kStopVr}});
+    // A game that keeps running keeps reporting "running", and a stream restart reports
+    // "waiting" and then "running" whenever it happens; none of that is a reason to pull
+    // the user back in. When the user asks to leave, stay on the desktop until they ask to
+    // go back (the dock's "Back to VR", the Games list and launching SteamVR all go through
+    // EnterMode(LaunchingVr) and undo this). Leaving because the game ended is not a choice
+    // and pins nothing.
+    if (byUser) m_vrLeftByUser = true;
     EnterMode(Mode::Desktop);
 }
 
@@ -587,6 +596,9 @@ void App::EnterMode(Mode m) {
             ShowMonitors(m_monitorsVisible);
             break;
         case Mode::LaunchingVr:
+            // Going back to VR is the user's own doing (deck, Games list, SteamVR): whatever
+            // they left before is no longer a reason to stay on the desktop.
+            m_vrLeftByUser = false;
             // Everything floats away; hyperspace takes over.
             for (auto& w : m_windows.All())
                 if (w->id != "notices") w->visible = false;
@@ -849,8 +861,10 @@ void App::HandleControl(const json& m) {
         m_vrProducer = m.value("producer", "");
         m_vrApp = m.value("app", "");
         if (m.contains("error")) PostNotice(m.value("error", ""), "error");
-        // A VR app started from the PC (or the Games list): jump in.
-        if ((m_vrState == "launching" || m_vrState == "running") && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
+        const bool vrActive = m_vrState == "launching" || m_vrState == "running";
+        // A VR app started from the PC (or the Games list): jump in. But not while one the
+        // user deliberately left is still running there — that kept yanking them back.
+        if (vrActive && !m_vrLeftByUser && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
     } else if (type == rc::msg::kGames) {
         m_gamesAnswered = true;
         std::vector<GameInfo> games;
@@ -1200,14 +1214,16 @@ void App::UpdateInput(const FrameState& frame, float dt) {
     // ---- PC mouse from laser over a monitor ----
     if (m_mode != Mode::Desktop || m_windows.Dragging()) return;
     int mouseHand = -1;
-    for (int h = 1; h >= 0; h--) {
-        const WindowHit& hit = m_hits[h];
-        if (hit.window && hit.window->kind == WindowKind::Video && hit.zone == HitZone::Content) {
-            if (mouseHand < 0 || m_rays[h].triggerDown) mouseHand = h;
+    if (m_settings.desktopInput) {
+        for (int h = 1; h >= 0; h--) {
+            const WindowHit& hit = m_hits[h];
+            if (hit.window && hit.window->kind == WindowKind::Video && hit.zone == HitZone::Content) {
+                if (mouseHand < 0 || m_rays[h].triggerDown) mouseHand = h;
+            }
         }
     }
     if (mouseHand < 0) {
-        // Release anything held when the ray leaves the monitors.
+        // Release anything held when the ray leaves the monitors or input is disabled.
         for (int h = 0; h < 2; h++) {
             if (m_handState[h].trigger) m_client.SendControl({{"type", rc::msg::kMouseButton}, {"button", 0}, {"down", false}});
             m_handState[h].trigger = false;

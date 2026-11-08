@@ -4,6 +4,10 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 
 ## 1.2.0 - unreleased
 
+### Added
+
+- Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
+
 ### Changed
 
 - A new keyboard: a port of [BetterFrame Keyboard](https://github.com/hardwaresteam/BetterFrameKeyboard),

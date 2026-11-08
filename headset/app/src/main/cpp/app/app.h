@@ -93,7 +93,7 @@ class App {
     void Disconnect();  // requests a disconnect; handled at the start of the next frame
     void LaunchSteamVr();
     void LaunchGame(const std::string& id);
-    void ExitVr();
+    void ExitVr(bool byUser = false);
     void Recenter();
     // Applies the curve and distance settings to the screens where they are now.
     void UpdateScreenShape(float previousDistance);
@@ -223,6 +223,10 @@ class App {
     std::deque<Notice> m_notices;
     std::string m_vrState = "idle";
     std::string m_vrProducer, m_vrApp;
+    // Set when the user leaves VR while its app keeps running on the PC: the vrState
+    // updates that keep arriving must not yank them back in. Cleared when the VR app
+    // stops on the PC, so the next one it starts still pulls the headset in.
+    bool m_vrLeftByUser = false;  // the user left VR: stay on the desktop until they return
 
     // Video
     bool m_streamingPerformance = false;

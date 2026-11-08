@@ -43,6 +43,7 @@ struct HeadsetSettings {
     float curvature = 0.35f;            // 0 flat .. 1 strongly curved
     bool sharpLayers = true;            // monitors as compositor layers
     float screenDistance = 1.35f;
+    bool desktopInput = true;           // send pointer and click events to PC monitors
 
     // Audio
     bool streamAudio = true;

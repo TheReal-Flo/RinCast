@@ -162,7 +162,7 @@ class App {
     void Disconnect() {}
     void LaunchSteamVr() {}
     void LaunchGame(const std::string&) {}
-    void ExitVr() {}
+    void ExitVr(bool = false) {}
     void Recenter() {}
     void UpdateScreenShape(float) {}
     const std::string& ConnectionProblem() const { return problem; }
