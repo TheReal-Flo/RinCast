@@ -9,6 +9,7 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 - Native macOS desktop streamer (`mac/`), capturing displays via ScreenCaptureKit,
   encoding video with VideoToolbox hardware acceleration (HEVC / H.264), streaming system
   audio via Opus, and supporting remote mouse and keyboard input.
+- Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
 
 ## 1.1.2 - 2026-11-07
 

@@ -165,6 +165,8 @@ const Entry kEn[] = {
     {"fps.auto", "Automatic"},
     {"desktop.sharpText", "Sharp text"},
     {"desktop.sharpHint", "Small performance cost"},
+    {"desktop.input", "Send mouse input"},
+    {"desktop.inputHint", "Laser pointer moves the PC cursor and clicks"},
 
     {"env.brightness", "Background brightness"},
     {"env.space-violet", "Violet Nebula"},
@@ -1237,6 +1239,8 @@ const Entry kEs[] = {
     {"fps.auto", "Automático"},
     {"desktop.sharpText", "Texto nítido"},
     {"desktop.sharpHint", "Pequeño coste de rendimiento"},
+    {"desktop.input", "Enviar entrada de ratón"},
+    {"desktop.inputHint", "El puntero láser controla el cursor del PC y los clics"},
 
     {"env.brightness", "Brillo del fondo"},
     {"env.space-violet", "Nebulosa violeta"},

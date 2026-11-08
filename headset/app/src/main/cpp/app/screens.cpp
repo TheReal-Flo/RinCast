@@ -693,6 +693,8 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     }
     c.y += 8;
     changed |= CheckRow(ui, c, "sharp", Tr("desktop.sharpText"), s.sharpLayers, Tr("desktop.sharpHint"));
+    c.y += 8;
+    changed |= CheckRow(ui, c, "desktop-input", Tr("desktop.input"), s.desktopInput, Tr("desktop.inputHint"));
     if (changed) app.UpdateScreenShape(distanceBefore);
     return changed;
 }
@@ -1377,7 +1379,7 @@ void BuildLaunch(Ui& ui, const Rect& r) {
     R.TextIn(app.VrStateText(), {r.x + 80, r.y + 18, r.w - 320, 40}, 26, kText, Face::SemiBold);
     R.TextIn(Tr("launch.takeTime"), {r.x + 80, r.y + 58, r.w - 320, 30}, 20, kMuted);
     // SteamVR keeps starting on the PC; this only stops waiting for it here.
-    if (ui.Button("launch-cancel", {r.Right() - 24 - 200, r.y + (r.h - 54) / 2, 200, 54}, Tr("btn.backToDesktop"))) app.ExitVr();
+    if (ui.Button("launch-cancel", {r.Right() - 24 - 200, r.y + (r.h - 54) / 2, 200, 54}, Tr("btn.backToDesktop"))) app.ExitVr(true);
 }
 
 // ---- VR overlay ---------------------------------------------------------------------------
@@ -1400,7 +1402,7 @@ void BuildVrOverlay(Ui& ui, const Rect& r) {
     // Left-aligned with the title, in the order you're likely to need them.
     ButtonRow b{r.x + pad, r.y + 88};
     if (inVr ? b.Add(ui, "desktop", Tr("btn.backToDesktop")) : b.Add(ui, "back-to-vr", app.VrRunning() ? Tr("btn.backToVr") : Tr("btn.startSteamvr"))) {
-        if (inVr) app.ExitVr();
+        if (inVr) app.ExitVr(true);
         else app.LaunchSteamVr();
     }
     if (b.Add(ui, "recenter", Tr("btn.recenter"))) app.Recenter();
