@@ -33,7 +33,7 @@ uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a)
 
 // The most the stream takes of SteamVR's resolution, against the headset's own: the headset's
 // decoder couldn't keep up with more (and the slider on the headset stops there too).
-constexpr double kMaxVrScale = 1.3;
+constexpr double kMaxVrScale = 2.0;
 
 }  // namespace
 

@@ -9,7 +9,7 @@
 
 namespace rv {
 
-inline constexpr float kMinVrScale = 0.5f, kMaxVrScale = 1.3f;
+inline constexpr float kMinVrScale = 0.5f, kMaxVrScale = 2.0f;
 
 struct HeadsetSettings {
     // Environment
