@@ -38,6 +38,10 @@ struct Texture {
 
 // Decodes PNG/JPEG (stb_image). channels: 1 = R8 (SDF atlases), 4 = RGBA8 (sRGB).
 bool LoadImageTexture(const std::vector<uint8_t>& file, int channels, bool srgb, bool mipmaps, Texture& out);
+// The same from pixels already decoded (1 or 4 channels).
+void UploadImageTexture(const uint8_t* pixels, int w, int h, int channels, bool srgb, bool mipmaps, Texture& out);
+// Decodes an image file to pixels (stb_image); empty when it can't.
+std::vector<uint8_t> DecodeImage(const std::vector<uint8_t>& file, int channels, int& w, int& h);
 Texture CreateTexture(int width, int height, GLenum internalFormat, bool mipmaps);
 
 // Offscreen color (+ optional depth) target.

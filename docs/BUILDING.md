@@ -204,6 +204,14 @@ build\pc\bin\Release\assetbaker.exe                          # → assets/ui/tex
 node tools\gen-icons.mjs                                     # → assets/brand/* (logo, tray icon, app icon)
 ```
 
+The keyboard's assets (`assets/keyboard`: languages, icons, emoji, key sounds, word lists and its text
+atlas) come from BetterFrame Keyboard 1.0.0, the Steam Frame keyboard it's a port of, exported by its
+own code. With Docker and the PC build's `assetbaker`, from Git Bash:
+
+```sh
+sh tools/keyboard-assets/build.sh
+```
+
 ## Server
 
 ```sh

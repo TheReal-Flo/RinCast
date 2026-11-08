@@ -656,13 +656,100 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     return changed;
 }
 
+// The keyboard's settings (BetterFrame Keyboard's, from Steam's Settings > Keyboard on the Frame).
+// They apply straight away and are kept with the keyboard's own.
+void KeyboardSettings(Ui& ui, Column& l, Column& c) {
+    App& app = *g_app;
+    kb::Keyboard& kbd = app.Kb();
+    kb::Config& k = kbd.Conf();
+    const kb::Data& data = kb::Data::Get();
+    bool changed = false;
+    Section(ui, l, Tr("kbd.section"));
+    Label(ui, l, Tr("kbd.theme"));
+    const auto& themes = kb::Keyboard::ThemeNames();
+    std::vector<std::string> themeNames;
+    int theme = 0;
+    for (size_t i = 0; i < themes.size(); i++) {
+        themeNames.push_back(Tr(("kbd.theme." + themes[i]).c_str()));
+        if (themes[i] == k.theme) theme = int(i);
+    }
+    if (RadioGrid(ui, l, "kbtheme", Tr("kbd.theme"), themeNames, theme, 2)) {
+        k.theme = themes[theme];
+        changed = true;
+    }
+    l.y += 8;
+    float backdrop = k.backdrop / 100.f;
+    if (BarRow(ui, l, "kbbackdrop", Tr("kbd.backdrop"), backdrop, 0, 1, 0.1f, Percent(backdrop))) {
+        k.backdrop = int(std::round(backdrop * 100));
+        changed = true;
+    }
+    l.y += 8;
+    Label(ui, l, Tr("kbd.bar"));
+    static const char* bars[] = {"top", "bottom", "off"};
+    int bar = k.bar == "bottom" ? 1 : k.bar == "off" ? 2 : 0;
+    if (RadioLine(ui, l, "kbbar", Tr("kbd.bar"), {Tr("kbd.barTop"), Tr("kbd.barBottom"), Tr("kbd.off")}, bar)) {
+        k.bar = bars[bar];
+        changed = true;
+    }
+    Label(ui, l, Tr("kbd.bottom"));
+    int bottom = k.bottom == "laptop" ? 1 : 0;
+    if (RadioLine(ui, l, "kbbottom", Tr("kbd.bottom"), {".?123, Fn, Ctrl", Tr("kbd.bottomLaptop")}, bottom)) {
+        k.bottom = bottom ? "laptop" : "default";
+        changed = true;
+    }
+    changed |= CheckRow(ui, l, "kbtips", Tr("kbd.tips"), k.tips, Tr("kbd.tipsHint"));
+    ButtonRow rb{l.x, l.y};
+    if (rb.Add(ui, "kbreset", Tr("kbd.reset"))) kbd.ResetPlace();
+    l.y += 64;
+
+    Section(ui, c, Tr("kbd.typingSection"));
+    auto picker = [&](const char* id, const char* label, const std::string& value, const char* page) {
+        Label(ui, c, Tr(label));
+        ui.R().Text(value, c.x, c.y + 14, 24, kText, Face::SemiBold);
+        const float bw = ButtonWidth(ui, Tr("kbd.change"));
+        ui.NextLabel(std::string(Tr(label)) + ", " + value);
+        if (ui.Button(id, {c.x + c.w - bw, c.y, bw, 54}, Tr("kbd.change"))) {
+            app.ToggleWindow("keyboard", true);
+            kbd.OpenPicker(page);
+        }
+        c.y += 66;
+    };
+    const kb::Lang& lang = data.Language(k.lang);
+    picker("kblang", "kbd.language", lang.name, "lang");
+    picker("kbfmt", "kbd.layout", k.fmt == "default" || !lang.reformat ? lang.native : data.FormatName(k.fmt), "fmt");
+    changed |= CheckRow(ui, c, "kbwords", Tr("kbd.words"), k.words);
+    changed |= CheckRow(ui, c, "kbpreview", Tr("kbd.preview"), k.preview);
+    c.y += 8;
+    Label(ui, c, Tr("kbd.hold"));
+    int hold = k.hold == "shift" ? 1 : 0;
+    if (RadioLine(ui, c, "kbhold", Tr("kbd.hold"), {Tr("kbd.holdRepeat"), Tr("kbd.holdShift")}, hold)) {
+        k.hold = hold ? "shift" : "repeat";
+        changed = true;
+    }
+    Label(ui, c, Tr("kbd.sound"));
+    static const char* sounds[] = {"deep", "light", "off"};
+    int sound = k.sound == "light" ? 1 : k.sound == "off" ? 2 : 0;
+    if (RadioLine(ui, c, "kbsound", Tr("kbd.sound"), {Tr("kbd.soundDeep"), Tr("kbd.soundLight"), Tr("kbd.off")}, sound)) {
+        k.sound = sounds[sound];
+        changed = true;
+    }
+    if (changed) {
+        kbd.ConfChanged();
+        app.Settings().keyboard = k;
+        app.SaveSettings();
+    }
+}
+
 bool PageDesktop(Ui& ui, const Rect& body) {
     App& app = *g_app;
     HeadsetSettings& s = app.Settings();
     bool changed = false;
     const float gap = 44, w = (body.w - gap) / 2;
     const float distanceBefore = s.screenDistance;
-    Column l{body.x, body.y, w};
+    // The keyboard's settings made the page longer than it is: it scrolls, with the stick (see PageGeneral).
+    static float contentBottom = 0;
+    const float scroll = ui.BeginScroll("desktop", body, std::max(0.f, contentBottom - body.y), false);
+    Column l{body.x, body.y - scroll, w};
     Section(ui, l, Tr("desktop.screensSection"));
     float curve = s.curvature;
     if (BarRow(ui, l, "curve", Tr("desktop.curve"), curve, 0, 1, 0.05f, s.curvature < 0.03f ? Tr("desktop.flat") : Percent(s.curvature))) {
@@ -680,8 +767,9 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     l.y += 8;
     ButtonRow b{l.x, l.y};
     if (b.Add(ui, "arrange", Tr("btn.recenter"))) app.Recenter();
+    l.y += 64;
 
-    Column c{body.x + w + gap, body.y, w};
+    Column c{body.x + w + gap, body.y - scroll, w};
     Section(ui, c, Tr("desktop.qualitySection"));
     Label(ui, c, Tr("desktop.fpsLabel"));
     int fpsI = s.desktopFps == 0 ? 0 : s.desktopFps <= 30 ? 1 : s.desktopFps <= 60 ? 2 : 3;
@@ -693,6 +781,10 @@ bool PageDesktop(Ui& ui, const Rect& body) {
     }
     c.y += 8;
     changed |= CheckRow(ui, c, "sharp", Tr("desktop.sharpText"), s.sharpLayers, Tr("desktop.sharpHint"));
+    l.y = c.y = std::max(l.y, c.y);
+    KeyboardSettings(ui, l, c);
+    contentBottom = std::max(l.y, c.y) + scroll;
+    ui.EndScroll();
     if (changed) app.UpdateScreenShape(distanceBefore);
     return changed;
 }
@@ -1092,202 +1184,6 @@ void BuildDock(Ui& ui, const Rect& r) {
     }
 }
 
-// ---- Keyboard --------------------------------------------------------------------
-
-bool g_shift = false, g_shiftLock = false, g_ctrl = false, g_alt = false, g_win = false;
-bool g_symbols = false;
-
-void BuildKeyboard(Ui& ui, const Rect& window) {
-    App& app = *g_app;
-    UiRenderer& R = ui.R();
-    Background(ui, window);
-    static const char* letters[3] = {"qwertyuiop'", "asdfghjkl", "zxcvbnm,."};
-    static const char* symbols[3] = {"!@#$%^&*()?", "_=+[]{}\\|", ";:\"`~<>,."};
-    const float pad = 22, gap = 8;
-    // What was typed, because the PC's screen may be out of view.
-    static std::string typed;
-    const Rect echo{window.x + pad, window.y + pad - 6, window.w - pad * 2, 50};
-    R.RectBorder(echo, Color(0, 0, 0, 1), kRadius, kEdge, 2.f);
-    // It could be a password: like on a phone, only the last character shows, unless asked.
-    static bool showTyped = false;
-    static float lastTyped = 0;
-    if (!typed.empty() && ui.Time() - lastTyped > 30.f) typed.clear();
-    if (typed.empty()) {
-        R.TextIn(Tr("kb.hint"), {echo.x + 14, echo.y, echo.w - 120, echo.h}, 20, kMuted);
-    } else {
-        const std::string shown = showTyped ? typed : std::string(typed.size() - 1, '*') + typed.back();
-        R.TextIn(shown, {echo.x + 14, echo.y, echo.w - 120, echo.h}, 21, kText, Face::Medium);
-    }
-    if (!typed.empty()) {
-        ui.NextLabel(showTyped ? Tr("a11y.hideTyped") : Tr("a11y.showTyped"));
-        if (ui.Button("echo-show", {echo.Right() - 136, echo.y + 5, 130, echo.h - 10}, showTyped ? Tr("kb.hideText") : Tr("kb.showText"), nullptr, ButtonStyle::Secondary, true, 20)) showTyped = !showTyped;
-    }
-    const std::string typedBefore = typed;
-
-    // Every row is 11 key widths wide, so all of them line up at both ends.
-    const float top = echo.Bottom() + 12;
-    const float keyW = (window.w - pad * 2 - gap * 10) / 11.f, keyH = (window.Bottom() - pad - top - gap * 5) / 6.f;
-    auto span = [&](float units) { return units * keyW + (units - 1) * gap; };
-    auto rowY = [&](int row) { return top + row * (keyH + gap); };
-    auto key = [&](const std::string& id, float x, int row, float units, const std::string& label, const char* icon, bool active, const char* spoken = nullptr, bool quiet = false) {
-        if (spoken) ui.NextLabel(spoken);
-        // Letters as large as a key can take; words like Shift smaller. Keys that aren't for typing are darker.
-        return ui.Button(id.c_str(), {x, rowY(row), span(units), keyH}, label, icon, active ? ButtonStyle::Primary : quiet ? ButtonStyle::Quiet : ButtonStyle::Secondary, true, label.size() == 1 ? 30.f : 21.f);
-    };
-    auto withModifiers = [&](auto fn) {
-        if (g_ctrl) app.SendKey(0x11, true);
-        if (g_alt) app.SendKey(0x12, true);
-        if (g_win) app.SendKey(0x5B, true);
-        if (g_shift) app.SendKey(0x10, true);
-        fn();
-        if (g_shift) app.SendKey(0x10, false);
-        if (g_win) app.SendKey(0x5B, false);
-        if (g_alt) app.SendKey(0x12, false);
-        if (g_ctrl) app.SendKey(0x11, false);
-        g_ctrl = g_alt = g_win = false;
-        if (!g_shiftLock) g_shift = false;
-    };
-    auto tap = [&](uint16_t vk) {
-        withModifiers([&] {
-            app.SendKey(vk, true);
-            app.SendKey(vk, false);
-        });
-    };
-    // Backspace, space and the arrows repeat while held, like on any keyboard: after a
-    // moment, then quickly. True when the key should fire now.
-    auto repeating = [&](const char* id, bool clicked) {
-        static std::string heldId;
-        static float heldSince = 0, lastFired = 0;
-        static bool repeated = false;
-        if (ui.IsHeld(id)) {
-            if (heldId != id) {
-                heldId = id;
-                heldSince = ui.Time();
-                repeated = false;
-            }
-            if (ui.Time() - heldSince > 0.4f && ui.Time() - lastFired > 0.04f) {
-                lastFired = ui.Time();
-                repeated = true;
-                return true;
-            }
-            return false;
-        }
-        if (heldId == id) {
-            heldId.clear();
-            if (repeated) return false;  // it already fired while held
-        }
-        return clicked;
-    };
-    auto typeOrCombo = [&](char c, const std::string& text) {
-        if (g_ctrl || g_alt || g_win) {
-            // Letters and digits are their own key codes; punctuation isn't.
-            uint16_t vk = uint16_t(isalpha(c) ? toupper(c) : c);
-            switch (c) {
-                case '-': vk = 0xBD; break;
-                case '/': vk = 0xBF; break;
-                case ';': vk = 0xBA; break;
-                case '\'': vk = 0xDE; break;
-                case '.': vk = 0xBE; break;
-                case ',': vk = 0xBC; break;
-                case '=': vk = 0xBB; break;
-                case '[': vk = 0xDB; break;
-                case ']': vk = 0xDD; break;
-                case '\\': vk = 0xDC; break;
-                case '`': vk = 0xC0; break;
-                default: break;
-            }
-            tap(vk);
-        } else {
-            app.SendText(text);
-            typed += text;
-            if (typed.size() > 60) typed.erase(0, typed.size() - 60);
-            if (!g_shiftLock) g_shift = false;
-        }
-    };
-
-    // Top row: what a desktop needs next to the letters.
-    float x = window.x + pad;
-    if (key("esc", x, 0, 1.4f, "Esc", nullptr, false, nullptr, true)) tap(0x1B);
-    x += span(1.4f) + gap;
-    if (key("tab", x, 0, 1.4f, "Tab", nullptr, false, nullptr, true)) tap(0x09);
-    x += span(1.4f) + gap;
-    if (key("ctrl", x, 0, 1.4f, "Ctrl", nullptr, g_ctrl, nullptr, true)) g_ctrl = !g_ctrl;
-    x += span(1.4f) + gap;
-    if (key("alt", x, 0, 1.4f, "Alt", nullptr, g_alt, nullptr, true)) g_alt = !g_alt;
-    x += span(1.4f) + gap;
-    if (key("win", x, 0, 1.4f, "Win", nullptr, g_win, nullptr, true)) g_win = !g_win;
-    x += span(1.4f) + gap;
-    static const struct {
-        const char* id;
-        const char* icon;
-        const char* spoken;
-        uint16_t vk;
-    } arrows[] = {{"left", "arrow_back", "a11y.left", 0x25}, {"up", "arrow_upward", "a11y.up", 0x26}, {"down", "arrow_downward", "a11y.down", 0x28}, {"right", "arrow_forward", "a11y.right", 0x27}};
-    for (const auto& a : arrows) {
-        if (repeating(a.id, key(a.id, x, 0, 1.f, "", a.icon, false, Tr(a.spoken), true))) tap(a.vk);
-        x += span(1.f) + gap;
-    }
-
-    // Digits, always there.
-    x = window.x + pad;
-    for (int i = 0; i < 10; i++) {
-        const char c = "1234567890"[i];
-        if (key("d" + std::to_string(i), x, 1, 1.f, std::string(1, c), nullptr, false)) typeOrCombo(c, std::string(1, c));
-        x += span(1.f) + gap;
-    }
-    if (repeating("back", key("back", x, 1, 1.f, "", "backspace", false, Tr("a11y.backspace")))) {
-        const bool combo = g_ctrl || g_alt || g_win;
-        tap(0x08);
-        if (!combo && !typed.empty()) typed.pop_back();
-    }
-
-    // The letters, or the symbols.
-    const char* const* rows = g_symbols ? symbols : letters;
-    for (int row = 0; row < 3; row++) {
-        const char* chars = rows[row];
-        const int n = int(strlen(chars));
-        x = window.x + pad + (row == 1 ? 0.5f * (keyW + gap) : 0.f);
-        if (row == 2) {
-            if (key("shift", x, 4, 2.f, g_shiftLock ? "Caps" : "Shift", nullptr, g_shift, nullptr, true)) {
-                static float lastShift = -100;
-                if (g_shiftLock) {
-                    g_shiftLock = g_shift = false;
-                } else if (g_shift && ui.Time() - lastShift < 0.5f) {
-                    g_shiftLock = true;
-                } else {
-                    g_shift = !g_shift;
-                }
-                lastShift = ui.Time();
-            }
-            x += span(2.f) + gap;
-        }
-        for (int i = 0; i < n; i++) {
-            std::string ch(1, chars[i]);
-            if (g_shift && !g_symbols) ch[0] = char(toupper(ch[0]));
-            if (key("k" + std::to_string(row) + "_" + std::to_string(i), x, row + 2, 1.f, ch, nullptr, false)) typeOrCombo(chars[i], ch);
-            x += span(1.f) + gap;
-        }
-        if (row == 1 && key("enter", x, 3, 1.5f, "", "keyboard_return", false, Tr("a11y.enter"))) {
-            tap(0x0D);
-            typed.clear();
-        }
-    }
-
-    // Bottom row.
-    x = window.x + pad;
-    if (key("sym", x, 5, 2.f, g_symbols ? "ABC" : "#+=", nullptr, false, nullptr, true)) g_symbols = !g_symbols;
-    x += span(2.f) + gap;
-    if (key("slash", x, 5, 1.f, "/", nullptr, false)) typeOrCombo('/', "/");
-    x += span(1.f) + gap;
-    if (repeating("space", key("space", x, 5, 7.f, "", "space_bar", false, Tr("a11y.space")))) {
-        const bool combo = g_ctrl || g_alt || g_win;
-        tap(0x20);
-        if (!combo) typed += ' ';
-    }
-    x += span(7.f) + gap;
-    if (key("dash", x, 5, 1.f, "-", nullptr, false)) typeOrCombo('-', "-");
-    if (typed != typedBefore) lastTyped = ui.Time();
-}
 
 // ---- Stats ---------------------------------------------------------------------------
 
@@ -1444,7 +1340,13 @@ void Build(App& app, WindowManager& wm) {
     make("home", 1240, 860, 1.34f, true, BuildMain)->visible = true;
     Window* dock = make("dock", 1000, 112, 0.84f, false, BuildDock);
     dock->showChrome = true;
-    make("keyboard", 1100, 560, 0.66f, true, BuildKeyboard);
+    // The keyboard (keyboard/keyboard.h) sizes, draws and points for itself: both hands at once,
+    // its own handles, and the clear space around it lets the ray through.
+    Window* kb = make("keyboard", 1600, 700, 0.6f, true, nullptr);
+    kb->build = [kb](Ui& ui, const Rect&) { g_app->Kb().Build(ui.R(), *kb, ui.Time()); };
+    kb->zoneAt = [](Vec2 p) { return g_app->Kb().ZoneAt(p); };
+    kb->twoHands = true;
+    kb->showChrome = false;
     Window* stats = make("stats", 380, 600, 0.30f, false, BuildStats);
     stats->showChrome = true;
     Window* notices = make("notices", 800, 104, 0.68f, false, BuildNotices);

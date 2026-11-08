@@ -5,6 +5,7 @@
 #include <cmath>
 #include <string>
 
+#include "keyboard/kb_config.h"
 #include "nlohmann/json.hpp"
 
 namespace rv {
@@ -59,6 +60,7 @@ struct HeadsetSettings {
     bool uiSounds = true;
     bool readAloud = false;             // speak what the pointer is on
     int vrMenuHints = 0;                // times the "how to open the menu" hint was shown
+    kb::Config keyboard;                // the keyboard's own settings
 
     // Account
     std::string cloudServer = "https://rincast.com";

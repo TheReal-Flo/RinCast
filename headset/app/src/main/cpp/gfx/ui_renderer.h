@@ -33,7 +33,9 @@ struct Rect {
     float Bottom() const { return y + h; }
 };
 
-enum class Face { Medium = 0, SemiBold = 1 };
+// Keys: the keyboard's own face (Noto Sans Medium and its script fonts, assets/keyboard/text.*),
+// measured like Pillow measures text: size is the em size, and there's no kerning.
+enum class Face { Medium = 0, SemiBold = 1, Keys = 2 };
 enum class Align { Left, Center, Right };
 
 struct GlyphInfo {
@@ -45,21 +47,22 @@ class Font {
     bool Load(Assets& assets);
     float Measure(const std::string& text, float size, Face face) const;
     float Ascent(float size, Face face) const;
+    float Descent(float size, Face face) const;  // negative: below the baseline
     const GlyphInfo* Glyph(uint32_t codepoint, Face face) const;
     const GlyphInfo* Icon(const std::string& name) const;
     float Kerning(uint32_t a, uint32_t b, Face face) const;
-    float BakeSize() const { return m_size; }
+    float BakeSize(Face face = Face::Medium) const { return face == Face::Keys ? m_keysSize : m_size; }
     float IconBakeSize() const { return m_iconSize; }
     float Padding() const { return m_padding; }
-    Texture& TextAtlas() { return m_text; }
+    Texture& TextAtlas(Face face = Face::Medium) { return face == Face::Keys && m_keys.id ? m_keys : m_text; }
     Texture& IconAtlas() { return m_icons; }
 
    private:
-    Texture m_text, m_icons;
-    float m_size = 56, m_iconSize = 64, m_padding = 8;
-    float m_ascent[2] = {}, m_descent[2] = {};
-    std::map<uint32_t, GlyphInfo> m_glyphs[2];
-    std::map<uint32_t, float> m_kerning[2];
+    Texture m_text, m_icons, m_keys;
+    float m_size = 56, m_iconSize = 64, m_padding = 8, m_keysSize = 56;
+    float m_ascent[3] = {}, m_descent[3] = {};
+    std::map<uint32_t, GlyphInfo> m_glyphs[3];
+    std::map<uint32_t, float> m_kerning[3];
     std::map<std::string, GlyphInfo> m_iconMap;
 };
 
@@ -88,6 +91,9 @@ class UiRenderer {
                    Align align = Align::Left);
     void Icon(const std::string& name, float cx, float cy, float size, const Color& c);
     void Image(GLuint texture, const Rect& r, float radius, const Color& tint = {});
+    // Part of an image (uv 0..1), tinted: icons and emoji from a sheet.
+    void ImageRegion(GLuint texture, const Rect& r, float u0, float v0, float u1, float v1, const Color& tint = {});
+    const Font& Fonts() const { return m_font; }
     void Circle(float cx, float cy, float radius, const Color& c) { RectFill({cx - radius, cy - radius, radius * 2, radius * 2}, c, radius); }
     void Arc(float cx, float cy, float radius, float thickness, float start, float sweep, const Color& c);
 

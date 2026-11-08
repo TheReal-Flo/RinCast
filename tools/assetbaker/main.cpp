@@ -5,6 +5,13 @@
 //
 //   assetbaker <fonts dir> <material symbols ttf> <codepoints file> <out dir> [charset file]
 //
+// And one face on its own, for the keyboard (assets/keyboard/text.*):
+//
+//   assetbaker --face <out dir> <charset file> <font> [fallback font...]
+//
+// It's measured like Pillow measures text, which the keyboard it's a port of was drawn with: sizes
+// are em sizes, and there's no kerning. Each character comes from the first font that has it.
+//
 // The optional charset file is UTF-8 text; every character in it that Inter doesn't
 // already cover is baked from NotoSansSC-{Medium,SemiBold}.ttf in the fonts dir. It holds
 // the non-ASCII characters the UI's translations use (app/strings.cpp), so Chinese and
@@ -91,10 +98,9 @@ static bool Pack(std::vector<Glyph*>& glyphs, int width, int height) {
     return true;
 }
 
-static Glyph Bake(const stbtt_fontinfo& font, int codepoint, float pixelHeight, int padding, int key) {
+static Glyph BakeScaled(const stbtt_fontinfo& font, int codepoint, float scale, int padding, int key) {
     Glyph g{};
     g.key = key;
-    const float scale = stbtt_ScaleForPixelHeight(&font, pixelHeight);
     int advance, lsb;
     stbtt_GetCodepointHMetrics(&font, codepoint, &advance, &lsb);
     g.advance = advance * scale;
@@ -107,20 +113,81 @@ static Glyph Bake(const stbtt_fontinfo& font, int codepoint, float pixelHeight, 
     return g;
 }
 
+static Glyph Bake(const stbtt_fontinfo& font, int codepoint, float pixelHeight, int padding, int key) {
+    return BakeScaled(font, codepoint, stbtt_ScaleForPixelHeight(&font, pixelHeight), padding, key);
+}
+
 static void WriteAtlas(std::vector<Glyph>& glyphs, const std::string& png, int size) {
     std::vector<Glyph*> ptrs;
     for (auto& g : glyphs)
         if (!g.sdf.empty()) ptrs.push_back(&g);
-    while (!Pack(ptrs, size, size)) size *= 2;
-    std::vector<unsigned char> pixels(size_t(size) * size, 0);
+    // Twice as tall before twice as wide: a square only just too small doesn't make four times the pixels.
+    int w = size, h = size;
+    while (!Pack(ptrs, w, h)) {
+        if (h == w) h *= 2;
+        else w *= 2;
+    }
+    std::vector<unsigned char> pixels(size_t(w) * h, 0);
     for (Glyph* g : ptrs)
         for (int y = 0; y < g->h; y++)
-            std::copy_n(&g->sdf[size_t(y) * g->w], g->w, &pixels[size_t(g->y + y) * size + g->x]);
-    stbi_write_png(png.c_str(), size, size, 1, pixels.data(), size);
-    std::printf("%s: %dx%d, %zu glyphs\n", png.c_str(), size, size, ptrs.size());
+            std::copy_n(&g->sdf[size_t(y) * g->w], g->w, &pixels[size_t(g->y + y) * w + g->x]);
+    stbi_write_png(png.c_str(), w, h, 1, pixels.data(), w);
+    std::printf("%s: %dx%d, %zu glyphs\n", png.c_str(), w, h, ptrs.size());
+}
+
+static int BakeFace(int argc, char** argv) {
+    if (argc < 5) {
+        std::printf("usage: assetbaker --face <out dir> <charset file> <font> [fallback font...]\n");
+        return 1;
+    }
+    const std::string outDir = argv[2];
+    constexpr float kEm = 56.f;
+    constexpr int kPad = 8;
+    std::vector<std::vector<unsigned char>> data;
+    std::vector<stbtt_fontinfo> fonts;
+    for (int i = 4; i < argc; i++) data.push_back(ReadFile(argv[i]));
+    for (auto& d : data) {
+        stbtt_fontinfo info{};
+        if (d.empty() || !stbtt_InitFont(&info, d.data(), stbtt_GetFontOffsetForIndex(d.data(), 0))) {
+            std::printf("can't read a font\n");
+            return 1;
+        }
+        fonts.push_back(info);
+    }
+    std::vector<int> codepoints;
+    for (int c = 32; c < 127; c++) codepoints.push_back(c);
+    const std::vector<unsigned char> raw = ReadFile(argv[3]);
+    const std::string charset(raw.begin(), raw.end());
+    for (size_t i = 0; i < charset.size();) {
+        const int cp = int(NextCodepoint(charset, i));
+        if (cp >= 32 && std::find(codepoints.begin(), codepoints.end(), cp) == codepoints.end()) codepoints.push_back(cp);
+    }
+    std::vector<Glyph> glyphs;
+    std::string missing;
+    for (int cp : codepoints) {
+        size_t f = 0;
+        while (f < fonts.size() && !stbtt_FindGlyphIndex(&fonts[f], cp)) f++;
+        if (f == fonts.size()) {
+            missing += " U+" + [&] { char b[8]; std::snprintf(b, sizeof b, "%04X", cp); return std::string(b); }();
+            continue;
+        }
+        glyphs.push_back(BakeScaled(fonts[f], cp, stbtt_ScaleForMappingEmToPixels(&fonts[f], kEm), kPad, cp));
+    }
+    if (!missing.empty()) std::printf("not in any font:%s\n", missing.c_str());
+    int ascent, descent, gap;
+    stbtt_GetFontVMetrics(&fonts[0], &ascent, &descent, &gap);
+    const float scale = stbtt_ScaleForMappingEmToPixels(&fonts[0], kEm);
+    WriteAtlas(glyphs, outDir + "/text.png", 1024);
+    json out{{"size", kEm}, {"padding", kPad}, {"ascent", ascent * scale}, {"descent", descent * scale}};
+    json map = json::object();
+    for (const auto& g : glyphs) map[std::to_string(g.key)] = {g.x, g.y, g.w, g.h, g.xoff, g.yoff, g.advance};
+    out["glyphs"] = map;
+    std::ofstream(outDir + "/text.json") << out.dump();
+    return 0;
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--face") return BakeFace(argc, argv);
     if (argc < 5) {
         std::printf("usage: assetbaker <inter ttf dir> <MaterialSymbols.ttf> <codepoints> <out dir> [charset file]\n");
         return 1;

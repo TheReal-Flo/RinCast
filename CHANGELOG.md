@@ -2,6 +2,30 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.2.0 - unreleased
+
+### Changed
+
+- A new keyboard: a port of [BetterFrame Keyboard](https://github.com/hardwaresteam/BetterFrameKeyboard),
+  the Steam Frame keyboard, that looks and types the same.
+  - Three layouts from the top bar: Minimal (big keys, like a phone), Standard (with F keys and
+    arrows) and Full (with the editing keys and a number pad).
+  - Undo, Cut, Copy, Paste and Select all in the top bar.
+  - Swipe typing, word suggestions, and an emoji page with Recent, Favorites (hold an emoji) and
+    skin tones.
+  - 47 languages with their own keyboards, and QWERTY, QWERTZ, AZERTY, Dvorak, Colemak and
+    Colemak-DH. Japanese types kana (by kana, romaji or flick), without kanji conversion; Korean
+    and Vietnamese compose in the app being typed into; Chinese isn't there, as its input methods
+    need BetterFrame's dictionaries.
+  - Both hands at once: hold Shift with one and type with the other. Holding a key repeats it or
+    types its capital; a double tap locks Shift, Ctrl, Alt and Fn.
+  - Its own handles: the bar under it moves it, the corners resize and tilt it.
+  - 10 colour themes, a see-through backdrop, a curved or flat shape, and two key sounds. They're
+    under Desktop > Keyboard, with the language, key layout, top bar and bottom row.
+
+  Not ported: voice typing, Steam's emoticons and Steam Controller typing. Not tested on a headset
+  yet.
+
 ## 1.1.2 - 2026-11-07
 
 Only the Quest 1 APK (`-quest1`) changed; everything else is 1.1.1 with a new version number.

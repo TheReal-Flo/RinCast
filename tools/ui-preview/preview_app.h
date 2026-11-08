@@ -12,6 +12,7 @@
 #include "platform/jni_bridge.h"
 #include "gfx/sky.h"
 #include "gfx/ui_renderer.h"
+#include "keyboard/keyboard.h"
 #include "nlohmann/json.hpp"
 #include "ui/window.h"
 
@@ -120,6 +121,8 @@ class XrInput {
 class App {
    public:
     HeadsetSettings settings;
+    kb::Keyboard kb;
+    kb::Keyboard& Kb() { return kb; }
     Mode mode = Mode::Home;
     Discovery lan;
     Cloud account;
