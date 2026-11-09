@@ -15,6 +15,9 @@ namespace input {
 static CGPoint g_lastMousePos = CGPointZero;
 static bool g_mouseButtonsDown[5] = {false, false, false, false, false};
 static std::set<CGKeyCode> g_keysDown;
+// Caps Lock is a toggle, not a held modifier. Track the latch ourselves: otherwise
+// the key-up event clears AlphaShift and macOS immediately undoes the toggle.
+static bool g_capsLock = false;
 
 // CGEventCreateKeyboardEvent(nullptr, ...) copies the system's *current* modifier
 // flags into the event. If a Bluetooth key-up is dropped, Command stays latched in
@@ -26,7 +29,7 @@ static CGEventFlags TrackedFlags() {
     if (g_keysDown.count(kVK_Shift) || g_keysDown.count(kVK_RightShift)) f |= kCGEventFlagMaskShift;
     if (g_keysDown.count(kVK_Option) || g_keysDown.count(kVK_RightOption)) f |= kCGEventFlagMaskAlternate;
     if (g_keysDown.count(kVK_Control) || g_keysDown.count(kVK_RightControl)) f |= kCGEventFlagMaskControl;
-    if (g_keysDown.count(kVK_CapsLock)) f |= kCGEventFlagMaskAlphaShift;
+    if (g_capsLock) f |= kCGEventFlagMaskAlphaShift;
     return f;
 }
 
@@ -232,6 +235,19 @@ void Key(uint16_t winVk, bool down) {
     CGKeyCode macCode = WinVkToMac(winVk);
     if (macCode == 0xFFFF) return;
 
+    if (macCode == kVK_CapsLock) {
+        // Toggle on the press, then keep the resulting latch on the release too.
+        // Both events carry the same AlphaShift state, so macOS doesn't undo it.
+        if (down) {
+            g_capsLock = !g_capsLock;
+            g_keysDown.insert(macCode);
+        } else {
+            g_keysDown.erase(macCode);
+        }
+        PostKey(macCode, down);
+        return;
+    }
+
     if (down)
         g_keysDown.insert(macCode);
     else
@@ -268,9 +284,11 @@ void ReleaseAll() {
     // in macOS's global modifier state (CGEvent key-downs persist until a key-up is
     // posted). A key-up for a key that isn't down is harmless, so clear every modifier
     // unconditionally: this is what stops a later 'e', 'd' or 'f' from becoming Cmd+E/D/F.
+    // Caps Lock is a toggle, not a held key: posting an unconditional key-up for it
+    // here would switch the user's Caps Lock off on session close/startup.
     static const CGKeyCode kModifiers[] = {
         kVK_Command, kVK_RightCommand, kVK_Shift, kVK_RightShift,
-        kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl, kVK_CapsLock,
+        kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl,
     };
     for (CGKeyCode code : kModifiers) {
         PostKey(code, false);
