@@ -89,8 +89,10 @@ void main(uint3 id : SV_DispatchThreadID) {
             for (int y = 0; y < 4; y++)
                 for (int x = 0; x < 4; x++)
                     sad += abs(cur.Load(int3(corner + int2(x, y), 0)) - prev.Load(int3(corner + int2(x + o.x, y + o.y), 0)));
-            // Short vectors win ties: flat areas shouldn't move.
-            sad += 0.002 * (abs(dx) + abs(dy));
+            // Short vectors win ties, and by enough to matter on flat areas: their SAD is
+            // nearly the same everywhere, so without this a block of plain wall matched a
+            // hundred pixels away and the frame generation bent the picture by it.
+            sad += 0.5 * (abs(dx) + abs(dy));
             if (sad < best) {
                 best = sad;
                 bestOffset = o;
@@ -146,6 +148,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     // Moving only counts if it clearly matches better than staying: this ignores noise,
     // compression and flat areas, where a wrong vector would bend the picture for nothing.
     if (best > zero * 0.8 - 0.02) bestOffset = base;
+    // More than 32 px of content motion in one frame (2880 px/s) is either a wrong match or
+    // more than a held frame can be bent into: keep what the head turn alone explains.
+    if (abs(bestOffset.x - base.x) > 8 || abs(bestOffset.y - base.y) > 8) bestOffset = base;
     dst[id.xy] = float2(base - bestOffset) * 4.0;
 }
 )";

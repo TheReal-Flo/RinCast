@@ -34,6 +34,17 @@ class Headset {
     // Where the user allows permissions, for hints: "Quest settings".
     virtual const char* SettingsName() const { return "the headset's settings"; }
 
+    // The panel's pixels per eye: what 100% of the VR resolution means. False where the
+    // headset isn't known; then it's the runtime's recommended size, which is well below the
+    // panel on a Quest (1440x1584 against 1832x1920 on a Quest 2).
+    virtual bool PanelSize(uint32_t& width, uint32_t& height) const { return false; }
+    // 100% of the VR resolution: the panel, or the recommended size where that isn't known.
+    void FullResolution(const XrContext& xr, uint32_t& width, uint32_t& height) const {
+        if (PanelSize(width, height)) return;
+        width = xr.RecommendedWidth();
+        height = xr.RecommendedHeight();
+    }
+
     // Controllers, in order of preference. Every family has the Khronos simple profile too.
     virtual std::vector<ControllerProfile> Controllers() const;
 
@@ -76,6 +87,9 @@ class Headset {
     virtual std::vector<std::string> BodyPermissions() const { return {}; }
     virtual std::vector<std::string> FacePermissions() const { return {}; }
 };
+
+// An Android system property ("ro.product.device"); empty elsewhere.
+std::string SystemProperty(const char* name);
 
 std::unique_ptr<Headset> CreateQuestHeadset();
 std::unique_ptr<Headset> CreatePicoHeadset(XrContext& xr);

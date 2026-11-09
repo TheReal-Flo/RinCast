@@ -31,9 +31,11 @@ float QualityScale(const std::string& q) {
 
 uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a); }
 
-// The most the stream takes of SteamVR's resolution, against the headset's own: the headset's
-// decoder couldn't keep up with more (and the slider on the headset stops there too).
-constexpr double kMaxVrScale = 1.3;
+// The most the stream takes of SteamVR's resolution, against the headset's panel (the slider on
+// the headset stops there too): Virtual Desktop's highest. Headsets before 1.2.0 send their
+// runtime's recommended size instead, smaller, and get less. A codec or decoder that can't take
+// the size still brings it down below.
+constexpr double kMaxVrScale = 1.5;
 
 }  // namespace
 
@@ -368,10 +370,7 @@ void ClientSession::HandleMessage(const json& m) {
                                   before.frameGeneration != after.frameGeneration || before.refreshRate != after.refreshRate ||
                                   before.vrBitrateMbps != after.vrBitrateMbps ||
                                   before.adaptiveBitrate != after.adaptiveBitrate;
-        if (videoChanged) {
-            StopVr();
-            StartVr();
-        }
+        if (videoChanged) RestartVr();
         if (before.codec != after.codec || before.tenBit != after.tenBit || before.desktopFps != after.desktopFps ||
             before.desktopBitrateMbps != after.desktopBitrateMbps) {
             json monitors = json::array();
@@ -790,7 +789,15 @@ void ClientSession::StartVr() {
 }
 
 // Matching SteamVR's resolution: once SteamVR renders at another size (its resolution setting
-// changed, or a game has its own) and stays there for a second, the stream restarts at it.
+// changed, or a game has its own) and stays there, the stream restarts at it.
+//
+// A restart is expensive: the encoder, the shared textures (SteamVR waits for the driver to
+// reopen them, and the game with it) and the headset's decoder all start over, and the
+// picture stops until the next keyframe arrives. A game that changes its size as it goes
+// (dynamic resolution, or several sizes while it loads) used to restart the stream every
+// couple of seconds: an endless freeze, with the game's audio breaking up on the PC. So a
+// size has to differ by more than a few percent and hold for 3 s, and the stream follows
+// at most every 20 s; in between it keeps scaling what SteamVR renders.
 void ClientSession::FollowSteamVrResolution() {
     bool match;
     {
@@ -799,19 +806,38 @@ void ClientSession::FollowSteamVrResolution() {
     }
     uint32_t w = 0, h = 0;
     if (!match || !App::Get().Bridge().SteamVrEyeSize(w, h)) return;
-    const auto similar = [](uint32_t a, uint32_t b) { return a > b ? a - b <= 16 : b - a <= 16; };
+    const auto similar = [](uint32_t a, uint32_t b) {
+        const uint32_t d = a > b ? a - b : b - a;
+        return d <= std::max<uint32_t>(16, std::max(a, b) / 20);
+    };
     if (similar(w, m_vrMatchedWidth) && similar(h, m_vrMatchedHeight)) {
         m_vrSeenWidth = m_vrSeenHeight = 0;
+        m_vrSeenTicks = 0;
         return;
     }
     if (!similar(w, m_vrSeenWidth) || !similar(h, m_vrSeenHeight)) {
         m_vrSeenWidth = w;
         m_vrSeenHeight = h;
+        m_vrSeenTicks = 0;
         return;
     }
+    constexpr int kHoldTicks = 3;                          // ticks are 1 s apart
+    constexpr int64_t kMinFollowNs = 20'000'000'000LL;  // between restarts
+    if (++m_vrSeenTicks < kHoldTicks) return;
+    const int64_t now = rc::NowNs();
+    if (m_vrFollowedNs && now - m_vrFollowedNs < kMinFollowNs) return;
+    m_vrFollowedNs = now;
     RC_LOGI("SteamVR now renders %ux%u per eye; restarting the VR stream at that size", w, h);
+    RestartVr();
+}
+
+// A new VR stream with the current settings. One the headset had paused (it is on the
+// desktop) stays paused: restarting is no reason to start sending VR video again.
+void ClientSession::RestartVr() {
+    const bool paused = m_vr && m_vr->Paused();
     StopVr();
     StartVr();
+    if (paused && m_vr) m_vr->SetPaused(true);
 }
 
 void ClientSession::StopVr() {

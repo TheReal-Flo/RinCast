@@ -43,6 +43,7 @@ class DesktopCapture {
     ComPtr<ID3D11DeviceContext> m_ctx;
     ComPtr<IDXGIOutputDuplication> m_dup;
     DXGI_OUTDUPL_DESC m_dupDesc{};
+    UINT m_frameWidth = 0, m_frameHeight = 0;  // the duplicated frames' size (unrotated)
     QuadRenderer m_quad;
 
     ComPtr<ID3D11Texture2D> m_desktop;  // last full desktop image (source orientation)

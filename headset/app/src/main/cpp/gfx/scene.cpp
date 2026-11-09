@@ -523,6 +523,27 @@ void SceneRenderer::UploadMotion(const int8_t* grid, int width, int height) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
+// The same, faded: premultiplied canvas times `alpha` over cleared black, for a window that is
+// a compositor layer while it fades in or out.
+void SceneRenderer::Blit2DAlpha(GLuint texture, int width, int height, float alpha) {
+    glViewport(0, 0, width, height);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendColor(0, 0, 0, alpha);
+    glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+    m_blit2D.Use();
+    glUniform4f(m_blit2D.Uniform("uRect"), 0, 0, 1, 1);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(m_blit2D.Uniform("uTex"), 0);
+    glBindVertexArray(EmptyVao());
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_BLEND);
+}
+
 void SceneRenderer::Blit2D(GLuint texture, int width, int height, float u0, float v0, float u1, float v1) {
     glViewport(0, 0, width, height);
     glDisable(GL_BLEND);

@@ -224,9 +224,12 @@ class App {
     std::string m_vrState = "idle";
     std::string m_vrProducer, m_vrApp;
     // Set when the user leaves VR while its app keeps running on the PC: the vrState
-    // updates that keep arriving must not yank them back in. Cleared when the VR app
-    // stops on the PC, so the next one it starts still pulls the headset in.
+    // updates that keep arriving must not yank them back in. Cleared when VR has been
+    // inactive on the PC for a while, so the next app it starts still pulls the headset in.
     bool m_vrLeftByUser = false;  // the user left VR: stay on the desktop until they return
+    // When the PC last reported VR as launching or running (m_time), to tell a VR app that
+    // just started from the same one coming back after a stream restart.
+    float m_vrLastActive = -1e9f;
 
     // Video
     bool m_streamingPerformance = false;
@@ -240,6 +243,7 @@ class App {
     bool m_gamesAnswered = false;
     float m_noPcsSince = -1;
     float m_abHeld = 0;
+    float m_gripsHeld = 0;  // both grips, for the keyboard
     std::string m_spokenProblem;
     Vec3 m_smoothDir[2];
     void ReconnectTick();
@@ -276,9 +280,13 @@ class App {
     std::vector<int8_t> m_motionGrid;
     int m_motionWidth = 0, m_motionHeight = 0, m_motionBlock = 0;
     int64_t m_motionFrameNs = 0;   // time between the two frames it compares
+    double m_motionIntervalSmoothNs = 0;  // that interval, smoothed, for how far a generated frame may reach
+    float m_lastGenCap = 0;
     bool m_motionMoves = false;    // something moves: generating a frame would change the picture
+    bool m_motionConsistent = true;  // ...and as one motion, not rotation or deformation
+    int m_motionGateMoving = 0, m_motionGateMean = 0, m_motionGateSpread = 0, m_motionGateFar = 0;
     bool m_vrLatched = false;      // this display got a new VR frame
-    uint32_t m_generatedFrames = 0;
+    uint32_t m_generatedFrames = 0, m_generatedSkipped = 0;
     int64_t m_generatedLogNs = 0;
     uint32_t m_vrFrames = 0;
 

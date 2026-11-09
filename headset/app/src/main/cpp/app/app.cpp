@@ -150,6 +150,15 @@ void App::Init() {
         return;
     }
     RC_LOGI("Headset family: %s", m_headset->Family());
+    // The resolution used to count from the runtime's recommended size; it counts from the
+    // panel now. The same pixels as before, at the new percentage.
+    if (!m_settings.vrScaleOfPanel) {
+        uint32_t fullW = 0, fullH = 0;
+        m_headset->FullResolution(m_xr, fullW, fullH);
+        m_settings.SetVrScale(m_settings.vrScale * float(m_xr.RecommendedWidth()) / float(std::max(1u, fullW)));
+        m_settings.vrScaleOfPanel = true;
+        SaveSettings();
+    }
     Platform::RequestPermissions(m_headset->StartupPermissions());
     m_input.Init(m_xr, m_headset->Controllers());
     m_sky.Init(m_assets);
@@ -242,7 +251,7 @@ void App::SendHello() {
     // (The display description is also sent in client.info once connected.)
 }
 
-static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState* frame) {
+static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettings& s, const FrameState* frame) {
     json fov = json::array();
     float ipd = 0.063f;
     if (frame) {
@@ -258,13 +267,16 @@ static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState*
     static const DecoderCaps dec = VideoDecoder::Capabilities();
     json rates = json::array();
     for (float r : xr.RefreshRates()) rates.push_back(r);
+    // The size the PC scales the resolution setting by, and tells SteamVR is its 100%.
+    uint32_t eyeW = 0, eyeH = 0;
+    headset.FullResolution(xr, eyeW, eyeH);
     return {{"deviceId", Platform::DeviceId()},
             {"deviceName", Platform::DeviceModel()},
             {"model", Platform::DeviceModel()},
             {"appVersion", kVersion},
             {"display",
-             {{"eyeWidth", xr.RecommendedWidth()},
-              {"eyeHeight", xr.RecommendedHeight()},
+             {{"eyeWidth", eyeW},
+              {"eyeHeight", eyeH},
               {"refreshRates", rates},
               {"ipd", ipd},
               {"fov", fov}}},
@@ -290,7 +302,7 @@ void App::ConnectLan(const DiscoveredPc& pc) {
     // A link-local address means nothing on another day or cable.
     if (!pc.viaUsb) m_settings.lastPcAddress = pc.address.IpString();
     SaveSettings();
-    m_client.Connect(t, HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+    m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     EnterMode(Mode::Connecting);
 }
 
@@ -373,6 +385,7 @@ void App::DisconnectNow() {
     m_vrState = "idle";
     // A new connection starts from nothing: nothing was left behind to stay away from.
     m_vrLeftByUser = false;
+    m_vrLastActive = -1e9f;
     m_serverInfo = json::object();
     m_games.clear();
     m_monitorsLaidOut = false;
@@ -693,7 +706,7 @@ void App::UpdateMode(float dt) {
         case Mode::Connecting:
             if (clientState == StreamClient::State::Connected) {
                 // Introduce ourselves, then show the desktop.
-                json info = HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
+                json info = HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
                 info["type"] = rc::msg::kClientInfo;
                 m_client.SendControl(info);
                 Platform::SetStreamingLocks(true);
@@ -840,7 +853,7 @@ void App::HandleControl(const json& m) {
         };
         endpoints(m.value("rendezvous", json::array()), t.rendezvous);
         endpoints(m.value("locals", json::array()), t.pcLocalAddrs);
-        m_client.Connect(t, HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+        m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     } else if (type == "_haptic") {
         m_input.Vibrate(m.value("hand", 0), m.value("amplitude", 0.f), std::max(0.02f, m.value("duration", 0.05f)),
                         m.value("frequency", 0.f) > 0 ? m.value("frequency", 0.f) : XR_FREQUENCY_UNSPECIFIED);
@@ -857,14 +870,24 @@ void App::HandleControl(const json& m) {
         else if (!m.value("streams", json::array()).empty())
             ConfigureVrStream(m["streams"][0]);
     } else if (type == rc::msg::kVrState) {
+        const bool wasActive = m_vrState == "launching" || m_vrState == "running";
         m_vrState = m.value("state", "idle");
         m_vrProducer = m.value("producer", "");
         m_vrApp = m.value("app", "");
         if (m.contains("error")) PostNotice(m.value("error", ""), "error");
         const bool vrActive = m_vrState == "launching" || m_vrState == "running";
-        // A VR app started from the PC (or the Games list): jump in. But not while one the
-        // user deliberately left is still running there — that kept yanking them back.
-        if (vrActive && !m_vrLeftByUser && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
+        // A VR app started from the PC: jump in. Only one that starts after VR has been
+        // inactive for a while is new; the PC restarts the VR stream whenever a video setting
+        // changes (every step of a slider) or SteamVR's resolution moves, and that reports
+        // "waiting" and then "running" again within a second or two. Taking those for a new
+        // game pulled the user out of the settings and into VR on every change.
+        constexpr float kNewVrAppAfter = 10.f;
+        const bool newVrApp = vrActive && !wasActive && m_time - m_vrLastActive > kNewVrAppAfter;
+        if (vrActive || wasActive) m_vrLastActive = m_time;
+        // A new one also ends a deliberate leave: that app is gone.
+        if (newVrApp) m_vrLeftByUser = false;
+        // Never while one the user deliberately left is still running there.
+        if (newVrApp && !m_vrLeftByUser && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
     } else if (type == rc::msg::kGames) {
         m_gamesAnswered = true;
         std::vector<GameInfo> games;
@@ -1016,15 +1039,25 @@ void App::LayoutMonitors(bool force) {
     const float distance = m_settings.screenDistance;
     const float width = 1.45f * distance / 1.35f;
     const float gapM = 0.06f;
-    const float angleStep = (width + gapM) / distance;  // radians per monitor along the arc
-    const float start = -angleStep * (float(order.size()) - 1) / 2;
+    // A portrait monitor is a landscape one turned on its side: as tall as the others are
+    // wide, not as wide (that made a 16:10 one 2.3 m tall).
+    std::vector<float> widths(order.size(), width);
+    float total = gapM * (float(order.size()) - 1);
+    for (size_t i = 0; i < order.size(); i++) {
+        if (Window* w = m_windows.Find("monitor-" + std::to_string(order[i])); w && w->aspect > 1.f)
+            widths[i] = width / w->aspect;
+        total += widths[i];
+    }
+    float along = -total / 2;  // metres along the arc, left edge of the next monitor
     for (size_t i = 0; i < order.size(); i++) {
         Window* w = m_windows.Find("monitor-" + std::to_string(order[i]));
+        const float centre = along + widths[i] / 2;
+        along += widths[i] + gapM;
         if (!w) continue;
-        w->widthM = width;
+        w->widthM = widths[i];
         w->curveRadius = m_settings.curvature > 0.02f ? distance / std::max(0.05f, m_settings.curvature) : 0.f;
         w->layerBacked = m_settings.sharpLayers && (w->curveRadius == 0 || m_xr.CylinderLayers());
-        w->pose = WindowManager::PlaceInFront(m_head, distance, (start + angleStep * float(i)) * 180.f / kPi, 0.05f);
+        w->pose = WindowManager::PlaceInFront(m_head, distance, centre / distance * 180.f / kPi, 0.05f);
     }
     if (Window* dock = m_windows.Find("dock")) {
         dock->pose = WindowManager::PlaceInFront(m_head, 0.9f, 0, -0.50f, 0);
@@ -1184,6 +1217,15 @@ void App::UpdateInput(const FrameState& frame, float dt) {
             m_lastMenuPressNs = now;
         }
         m_handState[h].menu = in.menu;
+    }
+    // Both grips held: the keyboard, without hunting for the dock's button first.
+    {
+        const HandInput& left = m_input.Hand(0);
+        const HandInput& right = m_input.Hand(1);
+        const bool both = left.active && right.active && left.squeeze > 0.7f && right.squeeze > 0.7f;
+        const float before = m_gripsHeld;
+        m_gripsHeld = both ? m_gripsHeld + dt : 0.f;
+        if (before < 0.5f && m_gripsHeld >= 0.5f && m_mode == Mode::Desktop) ToggleWindow("keyboard", !IsVisible("keyboard"));
     }
     // One-handed route to the same menu for the right hand: hold A and B.
     {
@@ -1459,6 +1501,50 @@ void App::UpdateFace(const FrameState& frame) {
     if (m_headset->ReadFace(m_xr, frame.predictedDisplayTime, f)) m_client.SendFace(f);
 }
 
+// Whether the motion field is worth warping a picture by. A block's motion is one
+// translation, so warping only looks right when the picture mostly moves as one: a pan or a
+// translate. Judging that:
+//   - matches that jumped further than a fast pan (repeating text, fences, flat areas) are not
+//     motion: they are dropped before anything is counted.
+//   - rotation and zoom spread the vectors in every direction, so few of them stay close to
+//     the field's own mean; a pan keeps them together.
+// The counts go to the log, so a gate that skips too much can be seen for what it is.
+struct MotionGate {
+    bool worth = false;
+    int moving = 0;  // blocks with any motion left
+    int mean = 0;    // the field's mean vector, in units
+    int spread = 0;  // blocks far from that mean
+    int far = 0;     // matches dropped as too far to be motion
+};
+static MotionGate JudgeMotionField(std::vector<int8_t>& grid, int w, int h) {
+    MotionGate g;
+    if (w < 1 || h < 1 || grid.size() < size_t(w) * size_t(h) * 2) return g;
+    const auto mag = [](int v) { return v < 0 ? -v : v; };
+    constexpr int kFarUnits = 12;  // 48 px in one frame: a wrong match, not motion
+    for (size_t i = 0; i < grid.size(); i += 2) {
+        if (mag(grid[i]) > kFarUnits || mag(grid[i + 1]) > kFarUnits) {
+            g.far++;
+            grid[i] = grid[i + 1] = 0;
+        }
+    }
+    long sx = 0, sy = 0;
+    for (size_t i = 0; i < grid.size(); i += 2) {
+        if (!grid[i] && !grid[i + 1]) continue;
+        g.moving++;
+        sx += grid[i];
+        sy += grid[i + 1];
+    }
+    if (g.moving < 2) return g;
+    const int mx = int(sx / g.moving), my = int(sy / g.moving);
+    g.mean = mag(mx) + mag(my);
+    for (size_t i = 0; i < grid.size(); i += 2) {
+        if (!grid[i] && !grid[i + 1]) continue;
+        if (mag(grid[i] - mx) + mag(grid[i + 1] - my) > 2 + g.mean / 2) g.spread++;
+    }
+    g.worth = g.spread <= g.moving * 3 / 4;
+    return g;
+}
+
 void App::ReadMotion(const std::vector<uint8_t>& metadata) {
     m_motionMoves = false;
     // After the frame's metadata, and its foveation's.
@@ -1473,6 +1559,18 @@ void App::ReadMotion(const std::vector<uint8_t>& metadata) {
     m_motionHeight = h.gridHeight;
     m_motionBlock = h.blockSize;
     m_motionFrameNs = int64_t(m_vrMeta.trackingTimestampNs - h.previousTimestampNs);
+    // Smoothed, for how far a generated frame may reach: the interval jitters, and the cap
+    // should follow what the stream does, not each frame's noise.
+    m_motionIntervalSmoothNs = m_motionIntervalSmoothNs > 0 ? m_motionIntervalSmoothNs * 0.8 + double(m_motionFrameNs) * 0.2
+                                                           : double(m_motionFrameNs);
+    // Before anything is counted or uploaded: far matches dropped, so the picture is warped by
+    // motion only.
+    const MotionGate gate = JudgeMotionField(m_motionGrid, m_motionWidth, m_motionHeight);
+    m_motionConsistent = gate.worth;
+    m_motionGateMoving = gate.moving;
+    m_motionGateMean = gate.mean;
+    m_motionGateSpread = gate.spread;
+    m_motionGateFar = gate.far;
     m_motionMoves = std::any_of(m_motionGrid.begin(), m_motionGrid.end(), [](int8_t v) { return v != 0; });
     if (m_motionMoves) m_scene.UploadMotion(m_motionGrid.data(), m_motionWidth, m_motionHeight);
 }
@@ -1480,22 +1578,43 @@ void App::ReadMotion(const std::vector<uint8_t>& metadata) {
 // No new frame for this display: move the moving things on from the last picture. The layer
 // keeps the last frame's pose, so the compositor still turns it with the head.
 void App::GenerateFrame(const FrameState& frame) {
-    if (!m_motionMoves || !m_vrHasFrame || !m_vrSwapchain.handle || m_motionFrameNs <= 0) return;
+    if (!m_motionMoves || !m_motionConsistent || !m_vrHasFrame || !m_vrSwapchain.handle || m_motionFrameNs <= 0) {
+        if (m_motionMoves && !m_motionConsistent) m_generatedSkipped++;
+        return;
+    }
     const int64_t sinceFrame = m_xr.ToMonotonicNs(frame.predictedDisplayTime) - int64_t(m_vrMeta.trackingTimestampNs);
     const float amount = float(double(sinceFrame) / double(m_motionFrameNs));
-    // Further out than this the guess gets worse than a held picture.
-    if (amount <= 0.05f || amount > 1.25f) return;
+    // How many displays one stream frame has to cover decides how far a generated one may reach:
+    // at half the display rate every other display has no frame, at a third, two in three. The
+    // cap follows that ratio (smoothed), within limits: past a few frames the motion field can't
+    // say where things went, and a stall would otherwise ask for exactly that.
+    const double displayNs = frame.period > 0 ? double(frame.period) : 1e9 / 90.0;
+    const double cap = std::clamp(m_motionIntervalSmoothNs > 0 ? m_motionIntervalSmoothNs / displayNs + 0.3 : 1.2, 1.0, 2.5);
+    m_lastGenCap = float(cap);
+    if (amount <= 0.05f || amount > cap) return;
     const GLuint fbo = m_xr.AcquireImage(m_vrSwapchain);
-    const float perPixel = amount * 127.f * rc::kMotionUnitPixels;
-    m_scene.DrawKeptMoved(fbo, m_vrSwapchain.width, m_vrSwapchain.height, perPixel / (m_vrEyeWidth * 2), perPixel / m_vrEyeHeight,
-                          float(m_vrEyeWidth * 2) / float(m_motionWidth * m_motionBlock),
-                          float(m_vrEyeHeight) / float(m_motionHeight * m_motionBlock));
+    // The field is in the picture's own pixels, which can be larger than what is shown
+    // (SteamVR supersampling above the stream's cap, foveated encoding): scale against the
+    // picture and sample the whole field. Pushing a little less than asked undershoots
+    // instead of overshooting, which reads as steady rather than wobbly.
+    const float fieldW = float(m_motionWidth * m_motionBlock);
+    const float fieldH = float(m_motionHeight * m_motionBlock);
+    const float perPixel = amount * 0.85f * 127.f * rc::kMotionUnitPixels;
+    m_scene.DrawKeptMoved(fbo, m_vrSwapchain.width, m_vrSwapchain.height, perPixel / fieldW, perPixel / fieldH, 1.f, 1.f);
     m_xr.ReleaseImage(m_vrSwapchain);
     m_generatedFrames++;
     const int64_t now = rc::NowNs();
     if (now - m_generatedLogNs > 5'000'000'000LL) {
-        RC_LOGI("Frame generation: %u frames in the last %.0f s", m_generatedFrames, double(now - m_generatedLogNs) / 1e9);
+        const double secs = double(now - m_generatedLogNs) / 1e9;
+        double streamFps = 0;
+        if (m_serverStats.contains("vr")) streamFps = m_serverStats["vr"].value("fps", 0.0);
+        RC_LOGI("Frame generation: %.0f/s generated, %.0f/s shown of %.0f Hz, stream %.0f fps, %.0f%% skipped "
+                "(cap %.1f, field: %d moving, mean %d, spread %d, far %d)",
+                m_generatedFrames / secs, m_stats.fps, m_xr.RefreshRate(), streamFps,
+                m_generatedFrames + m_generatedSkipped ? 100.0 * m_generatedSkipped / double(m_generatedFrames + m_generatedSkipped) : 0.0,
+                m_lastGenCap, m_motionGateMoving, m_motionGateMean, m_motionGateSpread, m_motionGateFar);
         m_generatedFrames = 0;
+        m_generatedSkipped = 0;
         m_generatedLogNs = now;
     }
 }
@@ -1792,7 +1911,9 @@ void App::UpdateUiLayers() {
         Window& w = *wp;
         if (w.kind != WindowKind::Ui) continue;
         // While it fades in or out, it's drawn into the eye images as before.
-        const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.995f &&
+        // Layered from the first frame it is visible: drawn into the eye images while it faded,
+        // a window was soft until it became a layer, then popped sharp. The fade is the layer's.
+        const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.01f &&
                            w.curveRadius == 0 && w.rt.fbo && used < kMaxUiLayers;
         w.layerBacked = false;
         if (!layer) continue;
@@ -1800,12 +1921,19 @@ void App::UpdateUiLayers() {
         const int width = w.rt.color.width, height = w.rt.color.height;
         if (sc.handle && (sc.width != width || sc.height != height)) m_xr.DestroySwapchain(sc);
         if (!sc.handle && !m_xr.CreateSwapchain(width, height, GL_SRGB8_ALPHA8, 1, false, sc)) continue;
-        // Pixel for pixel: the canvas was just drawn at this size.
+        // Pixel for pixel: the canvas was just drawn at this size. While it fades in or out, the
+        // canvas goes in at that opacity instead, so the window is sharp from its first frame.
         const GLuint fbo = m_xr.AcquireImage(sc);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, w.rt.fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (w.appear < 0.995f) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            m_scene.Blit2DAlpha(w.rt.color.id, width, height, w.appear);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        } else {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, w.rt.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
         m_xr.ReleaseImage(sc);
         w.layerBacked = true;
         used++;

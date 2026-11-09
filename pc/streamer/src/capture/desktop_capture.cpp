@@ -76,10 +76,17 @@ bool DesktopCapture::CreateDuplication() {
     }
     m_dup->GetDesc(&m_dupDesc);
     m_dupFailures = 0;
+    // ModeDesc is the desktop's size as it appears, rotated, but the frames come unrotated: a
+    // portrait monitor (rotated 90 or 270) sends them landscape. Comparing against ModeDesc
+    // turned every frame of one away, and the monitor never showed.
+    const bool sideways =
+        m_dupDesc.Rotation == DXGI_MODE_ROTATION_ROTATE90 || m_dupDesc.Rotation == DXGI_MODE_ROTATION_ROTATE270;
+    m_frameWidth = sideways ? m_dupDesc.ModeDesc.Height : m_dupDesc.ModeDesc.Width;
+    m_frameHeight = sideways ? m_dupDesc.ModeDesc.Width : m_dupDesc.ModeDesc.Height;
 
     D3D11_TEXTURE2D_DESC td{};
-    td.Width = m_dupDesc.ModeDesc.Width;
-    td.Height = m_dupDesc.ModeDesc.Height;
+    td.Width = m_frameWidth;
+    td.Height = m_frameHeight;
     td.MipLevels = 1;
     td.ArraySize = 1;
     td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -119,15 +126,14 @@ DesktopCapture::Result DesktopCapture::Capture(UINT timeoutMs) {
         if (SUCCEEDED(resource.As(&frame))) {
             D3D11_TEXTURE2D_DESC fd;
             frame->GetDesc(&fd);
-            if (fd.Format == DXGI_FORMAT_B8G8R8A8_UNORM && fd.Width == m_dupDesc.ModeDesc.Width &&
-                fd.Height == m_dupDesc.ModeDesc.Height) {
+            if (fd.Format == DXGI_FORMAT_B8G8R8A8_UNORM && fd.Width == m_frameWidth && fd.Height == m_frameHeight) {
                 m_ctx->CopyResource(m_desktop.Get(), frame.Get());
                 if (!m_haveDesktop) RC_LOGI("Capturing %s (%ux%u)", m_monitor.id.c_str(), fd.Width, fd.Height);
                 m_haveDesktop = true;
                 changed = true;
             } else if (!m_haveDesktop) {
-                RC_LOGW("Unexpected desktop frame %ux%u format %d (mode %ux%u)", fd.Width, fd.Height, int(fd.Format),
-                        m_dupDesc.ModeDesc.Width, m_dupDesc.ModeDesc.Height);
+                RC_LOGW("Unexpected desktop frame %ux%u format %d (expected %ux%u)", fd.Width, fd.Height, int(fd.Format),
+                        m_frameWidth, m_frameHeight);
             }
         }
     }
@@ -224,8 +230,10 @@ void DesktopCapture::UpdateCursorShape(const DXGI_OUTDUPL_FRAME_INFO& info) {
 
 void DesktopCapture::Compose() {
     if (!m_haveDesktop) return;
+    // Turning the frame back: a monitor rotated 90 degrees has its top-left in the frame's
+    // bottom-left corner, which the quad's UVs reach turned the other way (270), and so on.
     m_quad.Draw(m_ctx.Get(), m_desktopSrv.Get(), m_outputRtv.Get(), m_outWidth, m_outHeight, 0, 0, float(m_outWidth),
-                float(m_outHeight), QuadRenderer::Blend::Opaque, m_monitor.rotation);
+                float(m_outHeight), QuadRenderer::Blend::Opaque, (360 - m_monitor.rotation) % 360);
     if (m_cursorVisible && m_cursorColor) {
         // Cursor coordinates are in logical (rotated) monitor space.
         const float sx = float(m_outWidth) / float(m_monitor.width);

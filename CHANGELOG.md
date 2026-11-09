@@ -2,17 +2,49 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
-## 1.2.0 - unreleased
+## Unreleased
 
 ### Added
 
 - Native macOS desktop streamer (`mac/`), capturing displays via ScreenCaptureKit,
   encoding video with VideoToolbox hardware acceleration (HEVC / H.264), streaming system
   audio via Opus, and supporting remote mouse and keyboard input.
+- CI builds the macOS streamer and runs the core tests on every push and pull request.
+  Release builds publish a universal (Apple Silicon + Intel)
+  `RinCast-<version>-macos-universal.zip` alongside the Windows package, with its checksum
+  in `SHA256SUMS.txt`.
+
+### Fixed
+
+- Caps Lock did nothing on the macOS streamer: the injected key-up cleared the AlphaShift
+  flag, so macOS undid the toggle immediately. The streamer now keeps the latch, so Caps
+  Lock stays on until it is pressed again.
+- Punctuation and accent keys were dropped on the Mac, and a dropped Bluetooth key-up
+  could leave Command latched and turn every letter into Cmd+letter. OEM virtual keys are
+  now mapped, held keys are tracked and released, and injected events carry only the
+  modifiers the streamer knows are down.
+- The macOS release binary keeps its macOS 12.3 deployment target: ScreenCaptureKit's
+  macOS 13 audio properties are now guarded, so video streaming still works on Monterey
+  without the audio path calling an unavailable selector.
+
+## 1.2.0 - 2026-11-09
+
+Update both the headset app and the PC: the new resolution range and most fixes need both.
+
+### Added
+
 - Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
+- Holding both grips for half a second opens or closes the keyboard on the desktop, besides the
+  dock's button.
 
 ### Changed
 
+- The VR resolution counts from the headset's panel now: 100% is the panel's pixels per eye
+  (1832x1920 on a Quest 2, 2064x2208 on a Quest 3), not the smaller size its runtime recommends.
+  It goes up to 150%, Virtual Desktop's highest, from what was about the panel's own pixels;
+  "Match SteamVR resolution" gives SteamVR the panel as its 100% and stops there too. A saved
+  resolution keeps its pixels at the new percentage. The codec and the headset's decoder still
+  bring it down where they can't take the size (H.264: 2048 wide per eye).
 - A new keyboard: a port of [BetterFrame Keyboard](https://github.com/hardwaresteam/BetterFrameKeyboard),
   the Steam Frame keyboard, that looks and types the same.
   - Three layouts from the top bar: Minimal (big keys, like a phone), Standard (with F keys and
@@ -35,13 +67,26 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 
 ### Fixed
 
-- Caps Lock did nothing on the macOS streamer: the injected key-up cleared the AlphaShift
-  flag, so macOS undid the toggle immediately. The streamer now keeps the latch, so Caps
-  Lock stays on until it is pressed again.
-- Punctuation and accent keys were dropped on the Mac, and a dropped Bluetooth key-up
-  could leave Command latched and turn every letter into Cmd+letter. OEM virtual keys are
-  now mapped, held keys are tracked and released, and injected events carry only the
-  modifiers the streamer knows are down.
+- Changing a video setting on the headset's desktop (every step of a slider) no longer pulls you
+  into VR while SteamVR is running ([#10](https://github.com/TheReal-Flo/RinCast/issues/10)). The
+  PC restarts the VR stream for such a change, and the headset took that for a newly started
+  game. The restarted stream also stays paused while you're on the desktop.
+- Leaving VR while its app keeps running no longer pulls you back in a moment later.
+- Monitors turned to portrait now show on the headset's desktop. Their picture comes from
+  Windows unrotated, and the PC turned every frame of one away as the wrong size. They are also
+  turned the right way up now, and laid out as tall as the others are wide instead of 2.3 m tall.
+- Games that change their render size as they go (dynamic resolution, or while loading) no
+  longer freeze VR: the PC restarted the stream every couple of seconds to follow SteamVR's
+  resolution, which also made the game's audio break up. It now follows a new size once it has
+  held for 3 s, at most every 20 s.
+- The headset also holds a high-performance Wi-Fi lock while streaming, for headsets where the
+  low-latency one doesn't take effect.
+- Frame generation no longer makes the picture wobble like jelly. Flat walls and repeated text
+  were matched far away and taken for motion; now only motion the picture makes as a whole is
+  used, a generated frame reaches as far as the stream's frame rate needs (1 to 2.5 frames),
+  and it extrapolates a little less than asked.
+- Menus are sharp from their first frame, instead of fading in soft and snapping sharp at the
+  end.
 
 ## 1.1.2 - 2026-11-07
 

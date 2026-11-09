@@ -29,7 +29,7 @@ struct ClientCaps {
     bool h264 = true, hevc = true, hevc10 = false, av1 = false, av110 = false;
     uint32_t maxDecodeWidth = 4096, maxDecodeHeight = 4096;
     std::vector<float> refreshRates{72, 90};
-    uint32_t recommendedEyeWidth = 1832, recommendedEyeHeight = 1920;
+    uint32_t recommendedEyeWidth = 1832, recommendedEyeHeight = 1920;  // 100% of the resolution: the panel (the runtime's recommended size before 1.2.0)
     float fovTan[2][4] = {{1.0f, 0.9f, 0.95f, 1.1f}, {0.9f, 1.0f, 0.95f, 1.1f}};
     float ipd = 0.063f;
 };
@@ -99,6 +99,7 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     void StopDesktop();
     void StartVr();
     void StopVr();
+    void RestartVr();
     void LaunchSteamVr();
     void UpdateAudio();
     void ApplyClientInfo(const json& m);
@@ -134,10 +135,13 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     std::string m_vrProducer;
     std::string m_vrApp;
     int64_t m_steamVrLaunchNs = 0;
-    // Matching SteamVR's resolution: the size the VR stream was started for, and a new one
-    // SteamVR has rendered at since (it has to hold for a second before the stream follows).
+    // Matching SteamVR's resolution: the size the VR stream was started for, a new one
+    // SteamVR has rendered at since, for how many ticks (s) it held, and when the stream
+    // last restarted to follow one.
     uint32_t m_vrMatchedWidth = 0, m_vrMatchedHeight = 0;
     uint32_t m_vrSeenWidth = 0, m_vrSeenHeight = 0;
+    int m_vrSeenTicks = 0;
+    int64_t m_vrFollowedNs = 0;
     void FollowSteamVrResolution();
     int64_t m_connectedAtNs = 0;
     json m_clientStats;

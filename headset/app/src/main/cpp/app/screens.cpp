@@ -559,11 +559,13 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     const float gap = 44, w = (body.w - gap) / 2;
     Column l{body.x, body.y, w};
     Section(ui, l, Tr("vr.imageSection"));
-    // Pixels per eye, against the headset's own. Each change restarts the stream (and may ask
+    // Pixels per eye, against the headset's panel. Each change restarts the stream (and may ask
     // for a SteamVR restart), so it's applied when the handle is let go.
     static float dragScale = -1;
     float scale = dragScale >= 0 ? dragScale : s.vrScale;
-    const std::string pixels = PixelSize(int(app.Xr().RecommendedWidth() * scale), int(app.Xr().RecommendedHeight() * scale));
+    uint32_t fullW = 0, fullH = 0;
+    app.Device().FullResolution(app.Xr(), fullW, fullH);
+    const std::string pixels = PixelSize(int(fullW * scale), int(fullH * scale));
     if (BarRow(ui, l, "resolution", Tr("vr.resolution"), scale, kMinVrScale, kMaxVrScale, 0.05f,
                s.matchSteamVr ? std::string(Tr("vr.sameAsSteamVr")) : Percent(scale) + ", " + pixels, !s.matchSteamVr, 1.f))
         dragScale = scale;

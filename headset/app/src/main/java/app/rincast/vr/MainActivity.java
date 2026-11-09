@@ -39,6 +39,7 @@ public class MainActivity extends NativeActivity {
     }
 
     private WifiManager.WifiLock wifiLock;
+    private WifiManager.WifiLock wifiHighPerfLock;
     private WifiManager.MulticastLock multicastLock;
     private PowerManager.WakeLock wakeLock;
 
@@ -166,6 +167,13 @@ public class MainActivity extends NativeActivity {
                 wifiLock = wifi.createWifiLock(mode, "rincast:stream");
                 wifiLock.acquire();
             }
+            // The low-latency lock only counts while Android sees the app in the foreground
+            // with the screen on, which headsets don't all report while it's in VR. Holding the
+            // high-performance one as well keeps the radio out of power save there too.
+            if (wifiHighPerfLock == null && wifi != null && Build.VERSION.SDK_INT >= 29) {
+                wifiHighPerfLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "rincast:stream-hp");
+                wifiHighPerfLock.acquire();
+            }
             if (multicastLock == null && wifi != null) {
                 multicastLock = wifi.createMulticastLock("rincast:discovery");
                 multicastLock.acquire();
@@ -177,6 +185,7 @@ public class MainActivity extends NativeActivity {
             }
         } else {
             if (wifiLock != null) { wifiLock.release(); wifiLock = null; }
+            if (wifiHighPerfLock != null) { wifiHighPerfLock.release(); wifiHighPerfLock = null; }
             if (multicastLock != null) { multicastLock.release(); multicastLock = null; }
             if (wakeLock != null) { wakeLock.release(); wakeLock = null; }
         }

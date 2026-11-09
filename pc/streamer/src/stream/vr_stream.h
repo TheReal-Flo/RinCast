@@ -54,6 +54,7 @@ class VrStream {
     void SetPaused(bool paused) {
         if (m_paused.exchange(paused) && !paused) m_sender.RequestKeyframe();
     }
+    bool Paused() const { return m_paused; }
     void OnFeedback(const rc::VideoFeedbackPayload& fb) { m_sender.OnFeedback(fb); }
     // Where the eyes look, as the headset tracked it (foveated encoding).
     void SetGaze(const rc::GazePayload& gaze) {

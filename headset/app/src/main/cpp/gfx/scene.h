@@ -58,6 +58,8 @@ class SceneRenderer {
     void DrawKeptMoved(GLuint dstFbo, int dstW, int dstH, float scaleX, float scaleY, float fieldU, float fieldV);
     void UploadMotion(const int8_t* grid, int width, int height);
     void Blit2D(GLuint texture, int width, int height, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
+    // As Blit2D, scaled by `alpha` over cleared black: a window fading in or out as a layer.
+    void Blit2DAlpha(GLuint texture, int width, int height, float alpha);
 
    private:
     Program m_panel2D, m_panelExt, m_beam, m_dot, m_blitExt, m_blit2D, m_blitExtGamma, m_gsr, m_kept, m_keptMoved;

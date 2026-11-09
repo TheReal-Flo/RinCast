@@ -15,6 +15,16 @@ class QuestHeadset : public Headset {
     const char* Family() const override { return "Quest"; }
     const char* SettingsName() const override { return Tr("device.quest.settings"); }
 
+    bool PanelSize(uint32_t& width, uint32_t& height) const override {
+        const std::string device = SystemProperty("ro.product.device");
+        if (device == "monterey") width = 1440, height = 1600;                       // Quest 1
+        else if (device == "hollywood" || device == "panther") width = 1832, height = 1920;  // Quest 2, 3S
+        else if (device == "seacliff") width = 1800, height = 1920;                  // Quest Pro
+        else if (device == "eureka") width = 2064, height = 2208;                    // Quest 3
+        else return false;
+        return true;
+    }
+
     std::vector<ControllerProfile> Controllers() const override {
         return {{"/interaction_profiles/oculus/touch_controller", nullptr, true, true}};
     }
