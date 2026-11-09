@@ -233,6 +233,7 @@ class App {
     bool m_gamesAnswered = false;
     float m_noPcsSince = -1;
     float m_abHeld = 0;
+    float m_gripsHeld = 0;  // both grips, for the keyboard
     std::string m_spokenProblem;
     Vec3 m_smoothDir[2];
     void ReconnectTick();
