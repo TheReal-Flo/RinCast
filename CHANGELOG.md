@@ -2,6 +2,31 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- Native macOS desktop streamer (`mac/`), capturing displays via ScreenCaptureKit,
+  encoding video with VideoToolbox hardware acceleration (HEVC / H.264), streaming system
+  audio via Opus, and supporting remote mouse and keyboard input.
+- CI builds and packages the macOS streamer on every push and pull request.
+  Release builds publish a universal (Apple Silicon + Intel)
+  `RinCast-<version>-macos-universal.zip` alongside the Windows package, with its checksum
+  in `SHA256SUMS.txt`.
+
+### Fixed
+
+- Caps Lock did nothing on the macOS streamer: the injected key-up cleared the AlphaShift
+  flag, so macOS undid the toggle immediately. The streamer now keeps the latch, so Caps
+  Lock stays on until it is pressed again.
+- Punctuation and accent keys were dropped on the Mac, and a dropped Bluetooth key-up
+  could leave Command latched and turn every letter into Cmd+letter. OEM virtual keys are
+  now mapped, held keys are tracked and released, and injected events carry only the
+  modifiers the streamer knows are down.
+- The macOS release binary keeps its macOS 12.3 deployment target: ScreenCaptureKit's
+  macOS 13 audio properties are now guarded, so video streaming still works on Monterey
+  without the audio path calling an unavailable selector.
+
 ## 1.2.0 - 2026-11-09
 
 Update both the headset app and the PC: the new resolution range and most fixes need both.

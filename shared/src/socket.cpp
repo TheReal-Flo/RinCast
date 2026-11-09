@@ -27,6 +27,11 @@ using socklen_t = int;
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#ifndef IPV6_ADD_MEMBERSHIP
+#ifdef IPV6_JOIN_GROUP
+#define IPV6_ADD_MEMBERSHIP IPV6_JOIN_GROUP
+#endif
+#endif
 #endif
 #ifdef __ANDROID__
 #include <android/multinetwork.h>
@@ -370,7 +375,7 @@ std::vector<NetInterfaceV6> ListInterfacesV6() {
     if (getifaddrs(&list) != 0) return out;
     for (auto* it = list; it; it = it->ifa_next) {
         if (!it->ifa_addr || it->ifa_addr->sa_family != AF_INET6) continue;
-        if (!(it->ifa_flags & IFF_UP) || (it->ifa_flags & IFF_LOOPBACK)) continue;
+        if (!(it->ifa_flags & IFF_UP) || (it->ifa_flags & IFF_LOOPBACK) || (it->ifa_flags & IFF_POINTOPOINT)) continue;
         const uint32_t index = if_nametoindex(it->ifa_name);
         bool seen = false;
         for (const auto& o : out) seen = seen || o.index == index;
