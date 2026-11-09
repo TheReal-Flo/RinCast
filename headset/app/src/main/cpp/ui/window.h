@@ -13,7 +13,7 @@
 namespace rv {
 
 enum class WindowKind { Ui, Video };
-enum class HitZone { None, Content, Handle, ResizeLeft, ResizeRight, Close };
+enum class HitZone { None, Content, Handle, ResizeLeft, ResizeRight, Close, Tilt };
 
 struct Window {
     std::string id;
@@ -33,6 +33,13 @@ struct Window {
     bool layerBacked = false;   // content shown by a compositor layer (hole punched)
     bool canvasLayer = false;   // UI drawn by the app into a compositor layer of its own, not the eye images
     bool removed = false;       // Remove() was called; freed at the next Update()
+    // A window that does its own pointing (the keyboard): it gets both hands every frame, so one
+    // can hold Shift while the other types, and says what each part of its canvas is. None lets
+    // the ray through; Handle, ResizeRight and Tilt move, size and turn it like its chrome would.
+    bool twoHands = false;
+    PointerState hands[2];
+    std::function<HitZone(Vec2 canvasPx)> zoneAt;
+    float roll = 0;             // radians, turned around the way it faces (the keyboard's tilt handle)
 
     // UI content (kind == Ui)
     int canvasW = 900, canvasH = 680;
@@ -131,6 +138,7 @@ class WindowManager {
         Vec3 offsetLocal;     // window centre relative to the grab point, in window space
         float startWidth = 1;
         float startSpan = 1;
+        float angle0 = 0, roll0 = 0;  // tilting
     } m_drag;
     bool m_hapticPending = false;
     int m_hapticHand = 1;

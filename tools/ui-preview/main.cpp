@@ -171,7 +171,29 @@ const std::vector<Scene>& Scenes() {
         {"high-contrast", "home", 2, [](App& a) { theme::SetHighContrast(true); a.settings.highContrast = true; }},
         {"dock", "dock", 0, Live},
         {"dock-hover", "dock", 0, Live, 500, 56},
+        // The keyboard: BetterFrame Keyboard's layouts (compare with its own pictures)
         {"keyboard", "keyboard", 0, Live},
+        {"keyboard-standard", "keyboard", 0, [](App& a) { a.kb.Conf().layout = "full"; }},
+        {"keyboard-full", "keyboard", 0, [](App& a) { a.kb.Conf().layout = "advanced"; }},
+        {"keyboard-123", "keyboard", 0, [](App& a) { a.kb.PreviewState().page = "123"; }},
+        {"keyboard-sym", "keyboard", 0, [](App& a) { a.kb.PreviewState().page = "sym"; }},
+        {"keyboard-standard-123", "keyboard", 0, [](App& a) { a.kb.Conf().layout = "full"; a.kb.PreviewState().page = "123"; }},
+        {"keyboard-shift", "keyboard", 0, [](App& a) { a.kb.PreviewState().shift = true; }},
+        {"keyboard-emoji", "keyboard", 0, [](App& a) { a.kb.PreviewState().page = "emoji"; }},
+        {"keyboard-standard-emoji", "keyboard", 0, [](App& a) { a.kb.Conf().layout = "full"; a.kb.PreviewState().page = "emoji"; }},
+        {"keyboard-words", "keyboard", 0, [](App& a) { a.kb.Conf().words = true; }},
+        {"keyboard-standard-de", "keyboard", 0, [](App& a) { a.kb.Conf().layout = "full"; a.kb.Conf().lang = "de-DE"; }},
+        {"keyboard-de", "keyboard", 0, [](App& a) { a.kb.Conf().lang = "de-DE"; }},
+        {"keyboard-fr", "keyboard", 0, [](App& a) { a.kb.Conf().lang = "fr-FR"; }},
+        {"keyboard-ru", "keyboard", 0, [](App& a) { a.kb.Conf().lang = "ru-RU"; }},
+        {"keyboard-ar", "keyboard", 0, [](App& a) { a.kb.Conf().lang = "ar"; }},
+        {"keyboard-ja", "keyboard", 0, [](App& a) { a.kb.Conf().lang = "ja-JP"; }},
+        {"keyboard-light", "keyboard", 0, [](App& a) { a.kb.Conf().theme = "light"; }},
+        {"keyboard-contrast", "keyboard", 0, [](App& a) { a.kb.Conf().theme = "contrast"; }},
+        {"keyboard-hover", "keyboard", 0, [](App&) {}, 640, 560},
+        {"keyboard-lang", "keyboard", 0, [](App& a) { a.kb.PreviewState().page = "lang"; }},
+        {"keyboard-fmt", "keyboard", 0, [](App& a) { a.kb.PreviewState().page = "fmt"; }},
+        {"keyboard-tip", "keyboard", 0, [](App&) {}, 1040, 255},
         {"stats", "stats", 0, Live},
         {"notice-error", "notices", 0, [](App& a) { a.notices.push_back({"Couldn't start Half-Life: Alyx. Check that Steam is running on your PC.", "error", "", 0, 3600}); }},
         {"notice-action", "notices", 0, [](App& a) { a.notices.push_back({"SteamVR needs a restart to use the new resolution. The running game closes.", "warning", "vr.restartSteamVR", 0, 15}); }},
@@ -231,11 +253,22 @@ int main(int argc, char** argv) {
         WindowManager wm;
         wm.Init(&renderer, nullptr);
         App app;
-        s.setup(app);
+        app.kb.Init(assets, {[](uint16_t, bool) {}, [](const std::string&) {}, [] {}, [] {}, [] {}});
+        if (s.window == std::string("keyboard")) {
+            s.setup(app);
+            const kb::State st = app.kb.PreviewState();
+            app.kb.ConfChanged();
+            app.kb.PreviewState().page = st.page;
+            app.kb.PreviewState().shift = st.shift;
+            app.kb.SetVisible(true);
+        } else {
+            s.setup(app);
+        }
         screens::Build(app, wm);
         screens::SetPage(s.page);
         Window* w = wm.Find(s.window);
         if (!w) continue;
+        if (s.window == std::string("keyboard")) app.kb.Size(*w);
         const int rw = int(w->canvasW * kScale), rh = int(w->canvasH * kScale);
         RenderTarget rt;
         rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, false);
@@ -250,6 +283,7 @@ int main(int argc, char** argv) {
             if (s.click && frame == 2) p.pressed = p.down = true;
             if (s.click && frame == 3) p.released = true;
             p.pos = {s.hoverX, s.hoverY};
+            w->hands[1] = p;
             Ui& ui = wm.UiContext();
             ui.Begin(w->id, p, 0.05f, 12.f);
             w->build(ui, Rect{0, 0, float(w->canvasW), float(w->canvasH)});

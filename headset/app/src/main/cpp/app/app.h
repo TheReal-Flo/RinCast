@@ -21,6 +21,7 @@
 #include "../platform/jni_bridge.h"
 #include "../ui/window.h"
 #include "../headsets/headset.h"
+#include "../keyboard/keyboard.h"
 #include "../xr/xr_context.h"
 #include "../xr/xr_input.h"
 #include "rc/motion_field.h"
@@ -74,6 +75,7 @@ class App {
 
     // ---- used by the UI builders (screens.cpp) ----
     HeadsetSettings& Settings() { return m_settings; }
+    kb::Keyboard& Kb() { return m_keyboard; }
     void SaveSettings();
     void ApplyStreamSettings();      // pushes streaming settings to the PC
     Mode CurrentMode() const { return m_mode; }
@@ -194,6 +196,7 @@ class App {
     StreamClient m_client;
     AudioPlayer m_audio;
     MusicPlayer m_music;
+    kb::Keyboard m_keyboard;
     MicCapture m_mic;
     bool m_micReleased = false;  // stopped in the background; taken again in front
     void ReleaseMicInBackground();

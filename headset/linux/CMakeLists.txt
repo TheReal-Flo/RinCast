@@ -35,6 +35,10 @@ add_executable(rincast-frame
   ${RC_APP}/platform/linux/assets_linux.cpp
   ${RC_APP}/ui/ui.cpp
   ${RC_APP}/ui/window.cpp
+  ${RC_APP}/keyboard/keyboard.cpp
+  ${RC_APP}/keyboard/kb_layout.cpp
+  ${RC_APP}/keyboard/kb_swipe.cpp
+  ${RC_APP}/keyboard/kb_sound.cpp
   ${RC_APP}/xr/xr_context.cpp
   ${RC_APP}/xr/xr_input.cpp
   ${RC_APP}/xr/xr_loader.cpp

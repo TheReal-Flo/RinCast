@@ -58,7 +58,8 @@ json HeadsetSettings::ToJson() const {
             {"cloudRefreshToken", cloudRefreshToken},
             {"cloudUserName", cloudUserName},
             {"lastPc", lastPc},
-            {"lastPcAddress", lastPcAddress}};
+            {"lastPcAddress", lastPcAddress},
+            {"keyboard", keyboard.ToJson()}};
 }
 
 void HeadsetSettings::FromJson(const json& j) {
@@ -125,6 +126,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("cloudUserName", cloudUserName);
     get("lastPc", lastPc);
     get("lastPcAddress", lastPcAddress);
+    if (j.contains("keyboard")) keyboard.FromJson(j["keyboard"]);
 }
 
 json HeadsetSettings::StreamSettingsJson() const {

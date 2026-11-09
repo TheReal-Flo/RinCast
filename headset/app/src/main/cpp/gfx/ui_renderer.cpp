@@ -45,6 +45,15 @@ bool Font::Load(Assets& assets) {
             const int face = key >= 0x110000 ? 1 : 0;
             m_glyphs[face][key % 0x110000] = {v[0], v[1], v[2], v[3], v[4], v[5], v[6]};
         }
+        // The keyboard's face, when it's there (a missing one falls back to Medium).
+        if (assets.Read("keyboard/text.png", png) && LoadImageTexture(png, 1, false, true, m_keys)) {
+            const auto keys = nlohmann::json::parse(assets.ReadText("keyboard/text.json"));
+            m_keysSize = keys.value("size", 56.f);
+            m_ascent[2] = keys.value("ascent", m_keysSize);
+            m_descent[2] = keys.value("descent", -m_keysSize * 0.3f);
+            for (auto& [k, v] : keys["glyphs"].items())
+                m_glyphs[2][uint32_t(std::stoul(k))] = {v[0], v[1], v[2], v[3], v[4], v[5], v[6]};
+        }
         const auto icons = nlohmann::json::parse(assets.ReadText("ui/icons.json"));
         m_iconSize = icons.value("size", 64.f);
         for (auto& [k, v] : icons["icons"].items()) m_iconMap[k] = {v[0], v[1], v[2], v[3], v[4], v[5], v[6]};
@@ -56,8 +65,10 @@ bool Font::Load(Assets& assets) {
 }
 
 const GlyphInfo* Font::Glyph(uint32_t cp, Face face) const {
+    if (face == Face::Keys && m_glyphs[2].empty()) face = Face::Medium;
     const auto& map = m_glyphs[int(face)];
     auto it = map.find(cp);
+    if (it == map.end() && face == Face::Keys) return nullptr;  // (variation selectors and joiners: nothing)
     if (it == map.end()) it = map.find('?');
     return it == map.end() ? nullptr : &it->second;
 }
@@ -74,10 +85,18 @@ float Font::Kerning(uint32_t a, uint32_t b, Face face) const {
     return it == map.end() ? 0 : it->second;
 }
 
-float Font::Ascent(float size, Face face) const { return m_ascent[int(face)] * size / m_size; }
+float Font::Ascent(float size, Face face) const {
+    if (face == Face::Keys && m_glyphs[2].empty()) face = Face::Medium;
+    return m_ascent[int(face)] * size / BakeSize(face);
+}
+
+float Font::Descent(float size, Face face) const {
+    if (face == Face::Keys && m_glyphs[2].empty()) face = Face::Medium;
+    return m_descent[int(face)] * size / BakeSize(face);
+}
 
 float Font::Measure(const std::string& text, float size, Face face) const {
-    const float scale = size / m_size;
+    const float scale = size / BakeSize(face);
     float w = 0;
     uint32_t prev = 0;
     for (size_t i = 0; i < text.size();) {
@@ -296,14 +315,14 @@ void UiRenderer::Arc(float cx, float cy, float radius, float thickness, float st
 }
 
 void UiRenderer::Text(const std::string& text, float x, float y, float size, const Color& c, Face face, Align align) {
-    SetTexture(m_font.TextAtlas().id);
-    const float scale = size / m_font.BakeSize();
+    SetTexture(m_font.TextAtlas(face).id);
+    const float scale = size / m_font.BakeSize(face);
     if (align != Align::Left) {
         const float w = m_font.Measure(text, size, face);
         x -= align == Align::Center ? w / 2 : w;
     }
     const float baseline = y + m_font.Ascent(size, face);
-    const float aw = float(m_font.TextAtlas().width), ah = float(m_font.TextAtlas().height);
+    const float aw = float(m_font.TextAtlas(face).width), ah = float(m_font.TextAtlas(face).height);
     float pen = x;
     uint32_t prev = 0;
     for (size_t i = 0; i < text.size();) {
@@ -403,6 +422,11 @@ void UiRenderer::Icon(const std::string& name, float cx, float cy, float size, c
 void UiRenderer::Image(GLuint texture, const Rect& r, float radius, const Color& tint) {
     SetTexture(texture);
     Quad(r, 0, 0, 1, 1, 3, tint, tint, radius, 0, 0);
+}
+
+void UiRenderer::ImageRegion(GLuint texture, const Rect& r, float u0, float v0, float u1, float v1, const Color& tint) {
+    SetTexture(texture);
+    Quad(r, u0, v0, u1, v1, 3, tint, tint, 0, 0, 0);
 }
 
 void UiRenderer::PushClip(const Rect& r) {

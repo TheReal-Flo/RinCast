@@ -155,6 +155,22 @@ void App::Init() {
     m_sky.Init(m_assets);
     m_music.Load(m_assets);
     m_ui.Init(m_assets);
+    m_keyboard.Conf() = m_settings.keyboard;
+    kb::Keyboard::Output kbOut;
+    kbOut.key = [this](uint16_t vk, bool down) { SendKey(vk, down); };
+    kbOut.text = [this](const std::string& t) { SendText(t); };
+    kbOut.hide = [this] { ToggleWindow("keyboard", false); };
+    kbOut.recenter = [this] {  // back to its spot in front of you, level again
+        if (Window* w = m_windows.Find("keyboard")) {
+            w->roll = 0;
+            w->pose = m_keyboard.PlaceInFront(m_head);
+        }
+    };
+    kbOut.saved = [this] {
+        m_settings.keyboard = m_keyboard.Conf();
+        SaveSettings();
+    };
+    if (!m_keyboard.Init(m_assets, kbOut)) RC_LOGE("Keyboard: its assets are missing");
     m_scene.Init();
     m_windows.Init(&m_ui, &m_scene);
     m_xr.SetRefreshRate(m_settings.refreshRate);
@@ -437,7 +453,7 @@ float App::TimeOnHomeWithoutPcs(bool noPcs) {
 void App::ApplyAccessibility() {
     theme::SetHighContrast(m_settings.highContrast);
     for (const auto& w : m_windows.All()) {
-        if (w->kind == WindowKind::Ui) {
+        if (w->kind == WindowKind::Ui && !w->twoHands) {  // (the keyboard has its own size, from its resize corner)
             if (w->baseWidthM <= 0) w->baseWidthM = w->widthM;
             w->widthM = w->baseWidthM * std::min(m_settings.uiScale, 1.3f);
             w->needsRedraw = true;
@@ -516,8 +532,10 @@ void App::ToggleWindow(const std::string& id, bool show) {
         // overlays keep their own slot so they never stack on top of each other.
         const bool transient = id == "home" || id == "keyboard" || id == "vr-overlay" || id == "notices" || id == "launch";
         if (transient || !m_placed.count(id) || Dot(toWin, m_head.Forward()) < 0.3f) {
-            if (id == "keyboard")
-                w->pose = WindowManager::PlaceInFront(m_head, 0.75f, 0, -0.13f, 0);
+            if (id == "keyboard") {
+                w->roll = 0;
+                w->pose = m_keyboard.PlaceInFront(m_head);
+            }
             else if (id == "dock")
                 w->pose = WindowManager::PlaceInFront(m_head, 0.9f, 0, -0.50f, 0);
             else if (id == "stats")
@@ -1098,6 +1116,8 @@ void App::Frame() {
     const bool statsLayer = vrClear && statsShown && stats->visible && stats->appear > 0.98f;
     UpdateStatsLayer(stats, statsLayer, dt);
     const bool uiLayer = !(vrClear && (!statsShown || statsLayer));
+    m_keyboard.SetVisible(IsVisible("keyboard"));
+    if (Window* kbw = m_windows.Find("keyboard"); kbw && kbw->visible) m_keyboard.Size(*kbw);
     m_windows.RenderCanvases(dt, m_time);
     UpdateUiLayers();
     if (frame.shouldRender && uiLayer) RenderEyes(frame, dt);
