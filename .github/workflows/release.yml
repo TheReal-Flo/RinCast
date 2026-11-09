@@ -47,8 +47,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Read the version
         run: echo "RC_VERSION=$(head -n 1 VERSION | tr -d '[:space:]')" >> "$GITHUB_ENV"
-      - name: Build, test and package
-        run: bash scripts/build-mac.sh --test
+      - name: Build and package
+        run: bash scripts/build-mac.sh
       - uses: actions/upload-artifact@v4
         with:
           name: rincast-macos

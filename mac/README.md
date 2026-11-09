@@ -63,16 +63,19 @@ The resulting executable will be located at:
 ### Packaged build and CI
 
 `scripts/build-mac.sh` builds the universal binary with the same 12.3 deployment
-target, runs the shared core tests with `--test`, and writes the release zip to `dist/`:
+target and writes the release zip to `dist/`. Add `--test` to also run the shared
+core tests:
 
 ```bash
 scripts/build-mac.sh --test
 ```
 
-CI (`.github/workflows/ci.yml`) and the release workflow run this script on a macOS
-runner. No Apple Developer certificate or secret is involved: the ScreenCaptureKit
-headers come with the macOS SDK. A headless runner can't grant the TCC consents, so
-CI covers build/link and the core tests, not capture or input injection.
+CI (`.github/workflows/ci.yml`) and the release workflow run the script without
+`--test` on a macOS runner. No Apple Developer certificate or secret is involved:
+the ScreenCaptureKit headers come with the macOS SDK. A headless runner can't grant
+the TCC consents, and hosted runners drop IPv6 link-local multicast (which the core
+tests' discovery check needs), so CI covers build, link and packaging; capture, input
+injection and the core tests are left to a local `--test` run.
 
 ---
 

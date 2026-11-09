@@ -13,6 +13,10 @@
 # a plain command-line executable, and Screen Recording / Accessibility are runtime
 # TCC grants made by the user, not signing entitlements (see mac/README.md).
 #
+# CI and the release workflow call this without --test: hosted runners drop IPv6
+# link-local multicast, so the discovery test in the shared core suite can't pass
+# there. It does pass on a normal Mac.
+#
 # Requirements: macOS with Xcode Command Line Tools and CMake >= 3.22.
 set -euo pipefail
 
@@ -20,7 +24,8 @@ usage() {
     cat <<'EOF'
 Usage: scripts/build-mac.sh [options]
 
-  --test               also run the shared core tests
+  --test               also run the shared core tests (needs IPv6 link-local
+                       multicast, which hosted CI runners drop; use locally)
   --no-package         build only, don't write a zip
   --arch ARCH          universal (default), arm64 or x86_64
   --config CONFIG      Release (default) or Debug

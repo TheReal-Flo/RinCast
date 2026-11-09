@@ -9,7 +9,7 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 - Native macOS desktop streamer (`mac/`), capturing displays via ScreenCaptureKit,
   encoding video with VideoToolbox hardware acceleration (HEVC / H.264), streaming system
   audio via Opus, and supporting remote mouse and keyboard input.
-- CI builds the macOS streamer and runs the core tests on every push and pull request.
+- CI builds and packages the macOS streamer on every push and pull request.
   Release builds publish a universal (Apple Silicon + Intel)
   `RinCast-<version>-macos-universal.zip` alongside the Windows package, with its checksum
   in `SHA256SUMS.txt`.

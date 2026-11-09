@@ -229,8 +229,13 @@ deployable image.
 `scripts/build-mac.sh` builds `mac/` into `build-mac/` and packs the release zip:
 
 ```sh
-scripts/build-mac.sh --test       # also runs the shared core tests
+scripts/build-mac.sh               # build + zip
+scripts/build-mac.sh --test        # also runs the shared core tests
 ```
+
+CI and the release workflow call it without `--test`: hosted runners drop IPv6
+link-local multicast, which the core tests' discovery check needs. On a normal Mac
+`--test` passes.
 
 The output is `dist/RinCast-<version>-macos-universal.zip`, holding one `RinCast/`
 folder with a universal binary (`arm64` + `x86_64`), `README.md`, `VERSION`,
@@ -286,7 +291,7 @@ for the version or still says "unreleased", or if the APK signing secrets are mi
 **Allow a debug-signed APK** is ticked). The Android version code comes from `VERSION` too.
 
 `.github/workflows/ci.yml` builds and tests every commit on every branch and every pull request,
-including the macOS streamer and the shared core tests on a macOS runner.
+including a macOS build and release package on a macOS runner.
 
 To build the same files locally, run `build-all.ps1 -Package`. It writes
 `RinCast-<version>-windows-x64.zip`, `RinCast-<version>.apk`, the versioned server
