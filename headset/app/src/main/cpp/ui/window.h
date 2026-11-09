@@ -74,7 +74,8 @@ class WindowManager {
     // Places a window in front of the head at `distance`, offset in head-yaw space.
     static Pose PlaceInFront(const Pose& head, float distance, float yawOffsetDeg = 0, float heightOffset = 0,
                              float pitchDeg = 0);
-    static Quat FaceTowards(const Vec3& position, const Vec3& target);
+    // `headOrientation` is used when the window is right above or below the head.
+    static Quat FaceTowards(const Vec3& position, const Vec3& target, const Quat* headOrientation = nullptr);
 
     WindowHit Raycast(const Vec3& origin, const Vec3& dir);
 
