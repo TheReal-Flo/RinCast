@@ -6,6 +6,7 @@
 #import <Foundation/Foundation.h>
 
 #include <algorithm>
+#include <set>
 #include <vector>
 
 namespace rcm {
@@ -13,6 +14,30 @@ namespace input {
 
 static CGPoint g_lastMousePos = CGPointZero;
 static bool g_mouseButtonsDown[5] = {false, false, false, false, false};
+static std::set<CGKeyCode> g_keysDown;
+
+// CGEventCreateKeyboardEvent(nullptr, ...) copies the system's *current* modifier
+// flags into the event. If a Bluetooth key-up is dropped, Command stays latched in
+// macOS and every injected letter inherits it: 'e', 'd' and 'f' become Cmd+E/D/F.
+// Drive the flags from the keys we actually know are down instead.
+static CGEventFlags TrackedFlags() {
+    CGEventFlags f = 0;
+    if (g_keysDown.count(kVK_Command) || g_keysDown.count(kVK_RightCommand)) f |= kCGEventFlagMaskCommand;
+    if (g_keysDown.count(kVK_Shift) || g_keysDown.count(kVK_RightShift)) f |= kCGEventFlagMaskShift;
+    if (g_keysDown.count(kVK_Option) || g_keysDown.count(kVK_RightOption)) f |= kCGEventFlagMaskAlternate;
+    if (g_keysDown.count(kVK_Control) || g_keysDown.count(kVK_RightControl)) f |= kCGEventFlagMaskControl;
+    if (g_keysDown.count(kVK_CapsLock)) f |= kCGEventFlagMaskAlphaShift;
+    return f;
+}
+
+static void PostKey(CGKeyCode code, bool down) {
+    CGEventRef ev = CGEventCreateKeyboardEvent(nullptr, code, down);
+    if (ev) {
+        CGEventSetFlags(ev, TrackedFlags());
+        CGEventPost(kCGHIDEventTap, ev);
+        CFRelease(ev);
+    }
+}
 
 void MoveMouse(const MacMonitorInfo& monitor, float u, float v) {
     u = std::clamp(u, 0.0f, 1.0f);
@@ -156,7 +181,47 @@ static CGKeyCode WinVkToMac(uint16_t vk) {
 
         // Win key -> Mac Command
         case 0x5B: return kVK_Command;
-        case 0x5C: return kVK_Command;
+        case 0x5C: return kVK_RightCommand;
+
+        // OEM keys. These are physical US-layout positions: the Mac's own input layout
+        // decides the character, so on ABNT2 they produce the accent dead keys. Dropping
+        // them (as 0xFFFF) made every punctuation/accent key do nothing on the Mac.
+        case 0xBA: return kVK_ANSI_Semicolon;   // ; / Ç on ABNT2
+        case 0xBB: return kVK_ANSI_Equal;
+        case 0xBC: return kVK_ANSI_Comma;
+        case 0xBD: return kVK_ANSI_Minus;
+        case 0xBE: return kVK_ANSI_Period;
+        case 0xBF: return kVK_ANSI_Slash;
+        case 0xC0: return kVK_ANSI_Grave;
+        case 0xDB: return kVK_ANSI_LeftBracket;   // [ / ´ on ABNT2
+        case 0xDC: return kVK_ANSI_Backslash;     // \ / ] on ABNT2
+        case 0xDD: return kVK_ANSI_RightBracket;
+        case 0xDE: return kVK_ANSI_Quote;         // ' / ~ on ABNT2
+        case 0xE2: return kVK_ISO_Section;        // the extra 102nd ABNT2/ISO key
+
+        // Navigation keys
+        case 0x21: return kVK_PageUp;
+        case 0x22: return kVK_PageDown;
+        case 0x23: return kVK_End;
+        case 0x24: return kVK_Home;
+        case 0x2D: return kVK_Help;              // Insert
+
+        // Numpad
+        case 0x60: return kVK_ANSI_Keypad0;
+        case 0x61: return kVK_ANSI_Keypad1;
+        case 0x62: return kVK_ANSI_Keypad2;
+        case 0x63: return kVK_ANSI_Keypad3;
+        case 0x64: return kVK_ANSI_Keypad4;
+        case 0x65: return kVK_ANSI_Keypad5;
+        case 0x66: return kVK_ANSI_Keypad6;
+        case 0x67: return kVK_ANSI_Keypad7;
+        case 0x68: return kVK_ANSI_Keypad8;
+        case 0x69: return kVK_ANSI_Keypad9;
+        case 0x6A: return kVK_ANSI_KeypadMultiply;
+        case 0x6B: return kVK_ANSI_KeypadPlus;
+        case 0x6D: return kVK_ANSI_KeypadMinus;
+        case 0x6E: return kVK_ANSI_KeypadDecimal;
+        case 0x6F: return kVK_ANSI_KeypadDivide;
 
         default:
             return 0xFFFF;
@@ -167,11 +232,11 @@ void Key(uint16_t winVk, bool down) {
     CGKeyCode macCode = WinVkToMac(winVk);
     if (macCode == 0xFFFF) return;
 
-    CGEventRef ev = CGEventCreateKeyboardEvent(nullptr, macCode, down);
-    if (ev) {
-        CGEventPost(kCGHIDEventTap, ev);
-        CFRelease(ev);
-    }
+    if (down)
+        g_keysDown.insert(macCode);
+    else
+        g_keysDown.erase(macCode);
+    PostKey(macCode, down);
 }
 
 void Text(const std::string& utf8Text) {
@@ -182,15 +247,35 @@ void Text(const std::string& utf8Text) {
     std::vector<UniChar> buffer(len);
     [nsText getCharacters:buffer.data() range:NSMakeRange(0, len)];
 
-    CGEventRef ev = CGEventCreateKeyboardEvent(nullptr, 0, true);
-    if (ev) {
-        CGEventKeyboardSetUnicodeString(ev, len, buffer.data());
-        CGEventPost(kCGHIDEventTap, ev);
-        CFRelease(ev);
+    CGEventRef down = CGEventCreateKeyboardEvent(nullptr, 0, true);
+    if (down) {
+        CGEventSetFlags(down, 0);  // text is already composed; never apply a stuck modifier
+        CGEventKeyboardSetUnicodeString(down, len, buffer.data());
+        CGEventPost(kCGHIDEventTap, down);
+        CFRelease(down);
     }
+    // The old code left a key-down with no key-up, which latches a key in macOS.
+    PostKey(0, false);
 }
 
 void ReleaseAll() {
+    for (CGKeyCode code : g_keysDown) {
+        PostKey(code, false);
+    }
+    g_keysDown.clear();
+
+    // A dropped Bluetooth key-up, or a streamer killed mid-key, leaves Command latched
+    // in macOS's global modifier state (CGEvent key-downs persist until a key-up is
+    // posted). A key-up for a key that isn't down is harmless, so clear every modifier
+    // unconditionally: this is what stops a later 'e', 'd' or 'f' from becoming Cmd+E/D/F.
+    static const CGKeyCode kModifiers[] = {
+        kVK_Command, kVK_RightCommand, kVK_Shift, kVK_RightShift,
+        kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl, kVK_CapsLock,
+    };
+    for (CGKeyCode code : kModifiers) {
+        PostKey(code, false);
+    }
+
     for (int i = 0; i < 5; ++i) {
         if (g_mouseButtonsDown[i]) {
             MouseButton(i, false);

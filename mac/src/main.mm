@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "capture/mac_monitors.h"
+#include "input/mac_input.h"
 #include "rc/platform.h"
 #include "server/mac_stream_server.h"
 
@@ -55,6 +56,11 @@ int main(int argc, const char* argv[]) {
                       << " (" << mon.width << "x" << mon.height << " @ " << mon.refreshHz << "Hz)"
                       << (mon.primary ? " [Primary]" : "") << std::endl;
         }
+
+        // A previous run may have been killed while a modifier was still down. CGEvent
+        // key-downs stay latched in macOS until a key-up is posted, so clear them before
+        // the first headset connects.
+        rcm::input::ReleaseAll();
 
         // Host name
         char hostname[256];
