@@ -1218,6 +1218,15 @@ void App::UpdateInput(const FrameState& frame, float dt) {
         }
         m_handState[h].menu = in.menu;
     }
+    // Both grips held: the keyboard, without hunting for the dock's button first.
+    {
+        const HandInput& left = m_input.Hand(0);
+        const HandInput& right = m_input.Hand(1);
+        const bool both = left.active && right.active && left.squeeze > 0.7f && right.squeeze > 0.7f;
+        const float before = m_gripsHeld;
+        m_gripsHeld = both ? m_gripsHeld + dt : 0.f;
+        if (before < 0.5f && m_gripsHeld >= 0.5f && m_mode == Mode::Desktop) ToggleWindow("keyboard", !IsVisible("keyboard"));
+    }
     // One-handed route to the same menu for the right hand: hold A and B.
     {
         const HandInput& right = m_input.Hand(1);
