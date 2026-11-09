@@ -11,6 +11,16 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   audio via Opus, and supporting remote mouse and keyboard input.
 - Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
 
+### Fixed
+
+- Caps Lock did nothing on the macOS streamer: the injected key-up cleared the AlphaShift
+  flag, so macOS undid the toggle immediately. The streamer now keeps the latch, so Caps
+  Lock stays on until it is pressed again.
+- Punctuation and accent keys were dropped on the Mac, and a dropped Bluetooth key-up
+  could leave Command latched and turn every letter into Cmd+letter. OEM virtual keys are
+  now mapped, held keys are tracked and released, and injected events carry only the
+  modifiers the streamer knows are down.
+
 ## 1.1.2 - 2026-11-07
 
 Only the Quest 1 APK (`-quest1`) changed; everything else is 1.1.1 with a new version number.
