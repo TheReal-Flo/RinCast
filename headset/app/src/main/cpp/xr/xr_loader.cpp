@@ -67,13 +67,13 @@ bool Get(XrInstance instance, const char* name, T& out) {
            product == "Phoenix" || product == "Phoenix Pro";
 }
 
+}  // namespace
+
 // Meta's loader on the Quest 1, whose Horizon OS stopped before the standard loader worked there.
-[[maybe_unused]] bool IsQuest1() {
+bool IsQuest1() {
     return strcasecmp(Property("ro.product.manufacturer").c_str(), "oculus") == 0 &&
            Property("ro.product.device") == "monterey";
 }
-
-}  // namespace
 
 bool Load() {
     if (xrGetInstanceProcAddr) return true;

@@ -88,5 +88,7 @@ bool Load();
 bool LoadInstance(XrInstance instance);
 // Which loader is in use, for the log.
 const char* Name();
+// The original Quest hardware, regardless of which APK flavor was installed.
+bool IsQuest1();
 
 }  // namespace rv::xrloader
