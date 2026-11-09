@@ -2,11 +2,15 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
-## 1.2.0 - unreleased
+## 1.2.0 - 2026-11-09
+
+Update both the headset app and the PC: the new resolution range and most fixes need both.
 
 ### Added
 
 - Desktop: "Send mouse input" toggle under Desktop, allowing users to view PC monitors without passing laser pointer movements, clicks or scrolls to the computer.
+- Holding both grips for half a second opens or closes the keyboard on the desktop, besides the
+  dock's button.
 
 ### Changed
 
@@ -52,6 +56,12 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   held for 3 s, at most every 20 s.
 - The headset also holds a high-performance Wi-Fi lock while streaming, for headsets where the
   low-latency one doesn't take effect.
+- Frame generation no longer makes the picture wobble like jelly. Flat walls and repeated text
+  were matched far away and taken for motion; now only motion the picture makes as a whole is
+  used, a generated frame reaches as far as the stream's frame rate needs (1 to 2.5 frames),
+  and it extrapolates a little less than asked.
+- Menus are sharp from their first frame, instead of fading in soft and snapping sharp at the
+  end.
 
 ## 1.1.2 - 2026-11-07
 
