@@ -1756,7 +1756,9 @@ void App::UpdateUiLayers() {
         Window& w = *wp;
         if (w.kind != WindowKind::Ui) continue;
         // While it fades in or out, it's drawn into the eye images as before.
-        const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.995f &&
+        // Layered from the first frame it is visible: drawn into the eye images while it faded,
+        // a window was soft until it became a layer, then popped sharp. The fade is the layer's.
+        const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.01f &&
                            w.curveRadius == 0 && w.rt.fbo && used < kMaxUiLayers;
         w.layerBacked = false;
         if (!layer) continue;
@@ -1764,12 +1766,19 @@ void App::UpdateUiLayers() {
         const int width = w.rt.color.width, height = w.rt.color.height;
         if (sc.handle && (sc.width != width || sc.height != height)) m_xr.DestroySwapchain(sc);
         if (!sc.handle && !m_xr.CreateSwapchain(width, height, GL_SRGB8_ALPHA8, 1, false, sc)) continue;
-        // Pixel for pixel: the canvas was just drawn at this size.
+        // Pixel for pixel: the canvas was just drawn at this size. While it fades in or out, the
+        // canvas goes in at that opacity instead, so the window is sharp from its first frame.
         const GLuint fbo = m_xr.AcquireImage(sc);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, w.rt.fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (w.appear < 0.995f) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            m_scene.Blit2DAlpha(w.rt.color.id, width, height, w.appear);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        } else {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, w.rt.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
         m_xr.ReleaseImage(sc);
         w.layerBacked = true;
         used++;
