@@ -224,9 +224,12 @@ class App {
     std::string m_vrState = "idle";
     std::string m_vrProducer, m_vrApp;
     // Set when the user leaves VR while its app keeps running on the PC: the vrState
-    // updates that keep arriving must not yank them back in. Cleared when the VR app
-    // stops on the PC, so the next one it starts still pulls the headset in.
+    // updates that keep arriving must not yank them back in. Cleared when VR has been
+    // inactive on the PC for a while, so the next app it starts still pulls the headset in.
     bool m_vrLeftByUser = false;  // the user left VR: stay on the desktop until they return
+    // When the PC last reported VR as launching or running (m_time), to tell a VR app that
+    // just started from the same one coming back after a stream restart.
+    float m_vrLastActive = -1e9f;
 
     // Video
     bool m_streamingPerformance = false;

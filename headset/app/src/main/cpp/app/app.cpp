@@ -150,6 +150,15 @@ void App::Init() {
         return;
     }
     RC_LOGI("Headset family: %s", m_headset->Family());
+    // The resolution used to count from the runtime's recommended size; it counts from the
+    // panel now. The same pixels as before, at the new percentage.
+    if (!m_settings.vrScaleOfPanel) {
+        uint32_t fullW = 0, fullH = 0;
+        m_headset->FullResolution(m_xr, fullW, fullH);
+        m_settings.SetVrScale(m_settings.vrScale * float(m_xr.RecommendedWidth()) / float(std::max(1u, fullW)));
+        m_settings.vrScaleOfPanel = true;
+        SaveSettings();
+    }
     Platform::RequestPermissions(m_headset->StartupPermissions());
     m_input.Init(m_xr, m_headset->Controllers());
     m_sky.Init(m_assets);
@@ -242,7 +251,7 @@ void App::SendHello() {
     // (The display description is also sent in client.info once connected.)
 }
 
-static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState* frame) {
+static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettings& s, const FrameState* frame) {
     json fov = json::array();
     float ipd = 0.063f;
     if (frame) {
@@ -258,13 +267,16 @@ static json HelloJson(XrContext& xr, const HeadsetSettings& s, const FrameState*
     static const DecoderCaps dec = VideoDecoder::Capabilities();
     json rates = json::array();
     for (float r : xr.RefreshRates()) rates.push_back(r);
+    // The size the PC scales the resolution setting by, and tells SteamVR is its 100%.
+    uint32_t eyeW = 0, eyeH = 0;
+    headset.FullResolution(xr, eyeW, eyeH);
     return {{"deviceId", Platform::DeviceId()},
             {"deviceName", Platform::DeviceModel()},
             {"model", Platform::DeviceModel()},
             {"appVersion", kVersion},
             {"display",
-             {{"eyeWidth", xr.RecommendedWidth()},
-              {"eyeHeight", xr.RecommendedHeight()},
+             {{"eyeWidth", eyeW},
+              {"eyeHeight", eyeH},
               {"refreshRates", rates},
               {"ipd", ipd},
               {"fov", fov}}},
@@ -290,7 +302,7 @@ void App::ConnectLan(const DiscoveredPc& pc) {
     // A link-local address means nothing on another day or cable.
     if (!pc.viaUsb) m_settings.lastPcAddress = pc.address.IpString();
     SaveSettings();
-    m_client.Connect(t, HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+    m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     EnterMode(Mode::Connecting);
 }
 
@@ -373,6 +385,7 @@ void App::DisconnectNow() {
     m_vrState = "idle";
     // A new connection starts from nothing: nothing was left behind to stay away from.
     m_vrLeftByUser = false;
+    m_vrLastActive = -1e9f;
     m_serverInfo = json::object();
     m_games.clear();
     m_monitorsLaidOut = false;
@@ -693,7 +706,7 @@ void App::UpdateMode(float dt) {
         case Mode::Connecting:
             if (clientState == StreamClient::State::Connected) {
                 // Introduce ourselves, then show the desktop.
-                json info = HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
+                json info = HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
                 info["type"] = rc::msg::kClientInfo;
                 m_client.SendControl(info);
                 Platform::SetStreamingLocks(true);
@@ -840,7 +853,7 @@ void App::HandleControl(const json& m) {
         };
         endpoints(m.value("rendezvous", json::array()), t.rendezvous);
         endpoints(m.value("locals", json::array()), t.pcLocalAddrs);
-        m_client.Connect(t, HelloJson(m_xr, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+        m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     } else if (type == "_haptic") {
         m_input.Vibrate(m.value("hand", 0), m.value("amplitude", 0.f), std::max(0.02f, m.value("duration", 0.05f)),
                         m.value("frequency", 0.f) > 0 ? m.value("frequency", 0.f) : XR_FREQUENCY_UNSPECIFIED);
@@ -857,14 +870,24 @@ void App::HandleControl(const json& m) {
         else if (!m.value("streams", json::array()).empty())
             ConfigureVrStream(m["streams"][0]);
     } else if (type == rc::msg::kVrState) {
+        const bool wasActive = m_vrState == "launching" || m_vrState == "running";
         m_vrState = m.value("state", "idle");
         m_vrProducer = m.value("producer", "");
         m_vrApp = m.value("app", "");
         if (m.contains("error")) PostNotice(m.value("error", ""), "error");
         const bool vrActive = m_vrState == "launching" || m_vrState == "running";
-        // A VR app started from the PC (or the Games list): jump in. But not while one the
-        // user deliberately left is still running there — that kept yanking them back.
-        if (vrActive && !m_vrLeftByUser && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
+        // A VR app started from the PC: jump in. Only one that starts after VR has been
+        // inactive for a while is new; the PC restarts the VR stream whenever a video setting
+        // changes (every step of a slider) or SteamVR's resolution moves, and that reports
+        // "waiting" and then "running" again within a second or two. Taking those for a new
+        // game pulled the user out of the settings and into VR on every change.
+        constexpr float kNewVrAppAfter = 10.f;
+        const bool newVrApp = vrActive && !wasActive && m_time - m_vrLastActive > kNewVrAppAfter;
+        if (vrActive || wasActive) m_vrLastActive = m_time;
+        // A new one also ends a deliberate leave: that app is gone.
+        if (newVrApp) m_vrLeftByUser = false;
+        // Never while one the user deliberately left is still running there.
+        if (newVrApp && !m_vrLeftByUser && m_mode == Mode::Desktop) EnterMode(Mode::LaunchingVr);
     } else if (type == rc::msg::kGames) {
         m_gamesAnswered = true;
         std::vector<GameInfo> games;
@@ -1016,15 +1039,25 @@ void App::LayoutMonitors(bool force) {
     const float distance = m_settings.screenDistance;
     const float width = 1.45f * distance / 1.35f;
     const float gapM = 0.06f;
-    const float angleStep = (width + gapM) / distance;  // radians per monitor along the arc
-    const float start = -angleStep * (float(order.size()) - 1) / 2;
+    // A portrait monitor is a landscape one turned on its side: as tall as the others are
+    // wide, not as wide (that made a 16:10 one 2.3 m tall).
+    std::vector<float> widths(order.size(), width);
+    float total = gapM * (float(order.size()) - 1);
+    for (size_t i = 0; i < order.size(); i++) {
+        if (Window* w = m_windows.Find("monitor-" + std::to_string(order[i])); w && w->aspect > 1.f)
+            widths[i] = width / w->aspect;
+        total += widths[i];
+    }
+    float along = -total / 2;  // metres along the arc, left edge of the next monitor
     for (size_t i = 0; i < order.size(); i++) {
         Window* w = m_windows.Find("monitor-" + std::to_string(order[i]));
+        const float centre = along + widths[i] / 2;
+        along += widths[i] + gapM;
         if (!w) continue;
-        w->widthM = width;
+        w->widthM = widths[i];
         w->curveRadius = m_settings.curvature > 0.02f ? distance / std::max(0.05f, m_settings.curvature) : 0.f;
         w->layerBacked = m_settings.sharpLayers && (w->curveRadius == 0 || m_xr.CylinderLayers());
-        w->pose = WindowManager::PlaceInFront(m_head, distance, (start + angleStep * float(i)) * 180.f / kPi, 0.05f);
+        w->pose = WindowManager::PlaceInFront(m_head, distance, centre / distance * 180.f / kPi, 0.05f);
     }
     if (Window* dock = m_windows.Find("dock")) {
         dock->pose = WindowManager::PlaceInFront(m_head, 0.9f, 0, -0.50f, 0);

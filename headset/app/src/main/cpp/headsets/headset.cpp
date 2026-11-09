@@ -1,5 +1,9 @@
 #include "headset.h"
 
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 
@@ -7,6 +11,17 @@
 #include "rc/platform.h"
 
 namespace rv {
+
+std::string SystemProperty(const char* name) {
+#ifdef __ANDROID__
+    char value[PROP_VALUE_MAX] = {};
+    __system_property_get(name, value);
+    return value;
+#else
+    (void)name;
+    return {};
+#endif
+}
 
 std::vector<const char*> Headset::Extensions() {
     return {

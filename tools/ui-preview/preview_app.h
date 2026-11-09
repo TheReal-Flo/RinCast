@@ -102,6 +102,10 @@ class Headset {
     bool pico = false;
     const char* SettingsName() const { return pico ? Tr("device.pico.settings") : Tr("device.quest.settings"); }
     bool PreferStageSpace() const { return pico; }
+    void FullResolution(const XrContext&, uint32_t& width, uint32_t& height) const {  // Quest 3 or PICO 4
+        width = pico ? 2160 : 2064;
+        height = pico ? 2160 : 2208;
+    }
     bool BodySupported(const XrContext&) const { return true; }
     const char* BodyHint() const { return pico ? Tr("device.pico.bodyHint") : nullptr; }
     std::string BodyStatus() const { return pico ? Trf("device.pico.trackerMany", {{"n", "3"}}) : ""; }
