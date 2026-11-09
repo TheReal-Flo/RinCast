@@ -7,6 +7,7 @@
 | Component | Needs |
 |---|---|
 | PC (streamer, SteamVR driver, tools) | Visual Studio 2022 with the C++ desktop workload, CMake ≥ 3.22 |
+| macOS streamer | macOS 12.3+ (13+ for system audio), Xcode Command Line Tools, CMake ≥ 3.22 |
 | Audio driver | the above plus the WDK. `scripts\fetch-deps.ps1` fetches it as a NuGet package, so no WDK install is required. |
 | Headset app | Android Studio (bundled JBR 17+), Android SDK 34, NDK 27.3.13750724, CMake 3.22.1 |
 | Server | Go ≥ 1.26 (see `server/go.mod`) |
@@ -223,6 +224,29 @@ Point the streamer's **Account → Server** setting and the headset setting
 (`cloudServer` in `settings.json`) at that URL. `server/Dockerfile` builds a
 deployable image.
 
+## macOS streamer
+
+`scripts/build-mac.sh` builds `mac/` into `build-mac/` and packs the release zip:
+
+```sh
+scripts/build-mac.sh --test       # also runs the shared core tests
+```
+
+The output is `dist/RinCast-<version>-macos-universal.zip`, holding one `RinCast/`
+folder with a universal binary (`arm64` + `x86_64`), `README.md`, `VERSION`,
+`LICENSE` and `THIRD_PARTY_NOTICES.md`. The deployment target is macOS 12.3; system
+audio capture needs macOS 13+. For a plain build without the zip, use CMake directly:
+
+```sh
+cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=12.3
+cmake --build build-mac --parallel
+```
+
+The binary isn't code-signed or notarised: no Apple Developer certificate is needed
+to build it. See [mac/README.md](../mac/README.md) for the Gatekeeper workaround and
+the Screen Recording / Accessibility consents the user grants at runtime.
+
 ## Installing on a PC
 
 `dist\RinCast-<version>-Setup.exe` is the installer most people use: the package folder packed
@@ -250,13 +274,22 @@ the folder contains the `.rincast-install` marker the installer leaves there.
    can run it. It builds everything, tags the commit `v<version>` and publishes the release.
    Tick **draft** to check it on GitHub before publishing.
 
+The Windows package is built on `windows-2022` and the universal macOS zip on a `macos-15`
+runner; the macOS job passes its zip to the release job as an artifact, so both are published
+together with the APKs, the server binaries and `SHA256SUMS.txt`. The macOS build needs no
+secrets: the streamer is a command-line program whose permissions are runtime TCC grants,
+not signing entitlements. Notarising a Gatekeeper-friendly download would need a Developer ID
+certificate and `notarytool` credentials. If either build fails, no release is published.
+
 The workflow stops before building if the tag already exists, if `CHANGELOG.md` has no section
 for the version or still says "unreleased", or if the APK signing secrets are missing (unless
 **Allow a debug-signed APK** is ticked). The Android version code comes from `VERSION` too.
 
-`.github/workflows/ci.yml` builds and tests every commit on every branch and every pull request.
+`.github/workflows/ci.yml` builds and tests every commit on every branch and every pull request,
+including the macOS streamer and the shared core tests on a macOS runner.
 
 To build the same files locally, run `build-all.ps1 -Package`. It writes
 `RinCast-<version>-windows-x64.zip`, `RinCast-<version>.apk`, the versioned server
 binaries and `SHA256SUMS.txt` to `dist`. It needs the signing variables above, or
-`-DebugApk` for a test build.
+`-DebugApk` for a test build. On a Mac, `scripts/build-mac.sh` writes
+`RinCast-<version>-macos-universal.zip` to the same `dist` folder.

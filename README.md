@@ -13,6 +13,9 @@ through SteamVR. There's no subscription and no store purchase.
 ## Requirements
 
 - Windows 10 or 11, 64-bit, with an NVIDIA, AMD or Intel GPU that can encode video.
+- Or a Mac with macOS 12.3+ (13+ for system audio). The macOS streamer is a Terminal
+  app for desktop streaming only: there's no PC VR / SteamVR driver on macOS. See
+  [mac/README.md](mac/README.md).
 - [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (already included with Windows 11 and most Windows 10 PCs).
 - Meta Quest 3, Quest 3S, Quest Pro or Quest 2, with [developer mode](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) on to install the app.
   PICO 4 and PICO 4 Ultra work with the same app (not tested on a PICO yet): turn on USB debugging
@@ -44,6 +47,13 @@ Installed apps** in Windows.
 
 The release isn't code-signed yet, so Windows SmartScreen may warn you about the
 files.
+
+**On a Mac:** download `RinCast-<version>-macos-universal.zip` and the same headset APK,
+unzip the Mac package and run `RinCast/rincast-streamer-mac` from Terminal. There's no
+installer; grant Screen Recording and Accessibility in **System Settings > Privacy &
+Security** when macOS asks. The zip is unsigned and not notarised, so macOS may need
+`xattr -d com.apple.quarantine` on the binary first. Details in
+[mac/README.md](mac/README.md).
 
 ## Audio
 

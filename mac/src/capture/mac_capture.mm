@@ -27,9 +27,12 @@
         if (self.frameCallback) {
             self.frameCallback(pixelBuffer, timestampNs);
         }
-    } else if (type == SCStreamOutputTypeAudio) {
-        if (self.audioCallback) {
-            self.audioCallback(sampleBuffer);
+    } else if (@available(macOS 13.0, *)) {
+        // The audio output type only exists from macOS 13; video still works on 12.3.
+        if (type == SCStreamOutputTypeAudio) {
+            if (self.audioCallback) {
+                self.audioCallback(sampleBuffer);
+            }
         }
     }
 }
@@ -104,11 +107,15 @@ bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, u
     config.showsCursor = YES;
     config.queueDepth = 3;
 
-    // Enable system audio capture if audio callback was provided
-    if (onAudio && [config respondsToSelector:@selector(setCapturesAudio:)]) {
-        config.capturesAudio = YES;
-        config.sampleRate = 48000;
-        config.channelCount = 2;
+    // ScreenCaptureKit system audio arrived in macOS 13. Keep the 12.3 deployment
+    // target for video-only streaming: on Monterey these selectors don't exist, and
+    // @available keeps the compiler from emitting unguarded calls to them.
+    if (@available(macOS 13.0, *)) {
+        if (onAudio) {
+            config.capturesAudio = YES;
+            config.sampleRate = 48000;
+            config.channelCount = 2;
+        }
     }
 
     m_impl->handler = [[RinStreamOutputHandler alloc] init];
@@ -128,12 +135,14 @@ bool MacDesktopCapture::Init(const MacMonitorInfo& monitor, uint32_t outWidth, u
         return false;
     }
 
-    if (m_impl->handler.audioCallback) {
-        NSError* audioErr = nil;
-        if (![m_impl->stream addStreamOutput:m_impl->handler type:SCStreamOutputTypeAudio sampleHandlerQueue:m_impl->queue error:&audioErr]) {
-            RC_LOGW("Failed to add audio stream output: %s", audioErr.localizedDescription.UTF8String);
-        } else {
-            RC_LOGI("ScreenCaptureKit audio output enabled");
+    if (@available(macOS 13.0, *)) {
+        if (m_impl->handler.audioCallback) {
+            NSError* audioErr = nil;
+            if (![m_impl->stream addStreamOutput:m_impl->handler type:SCStreamOutputTypeAudio sampleHandlerQueue:m_impl->queue error:&audioErr]) {
+                RC_LOGW("Failed to add audio stream output: %s", audioErr.localizedDescription.UTF8String);
+            } else {
+                RC_LOGI("ScreenCaptureKit audio output enabled");
+            }
         }
     }
 

@@ -8,6 +8,12 @@ name: Release
 # Repository secrets for a signed APK: RINCAST_KEYSTORE_BASE64, RINCAST_KEYSTORE_PASSWORD,
 # RINCAST_KEY_ALIAS, RINCAST_KEY_PASSWORD (see docs/BUILDING.md). Without them the release
 # stops, unless "Allow a debug-signed APK" is ticked.
+#
+# The Windows package is built on Windows and the universal macOS zip on a macOS runner;
+# the macOS job hands its zip to the release job as an artifact. No Apple certificate is
+# needed: the streamer is a command-line program, and Screen Recording / Accessibility are
+# runtime TCC grants, not signing entitlements. Notarising a Gatekeeper-friendly download
+# would need a Developer ID certificate and notarytool credentials (see mac/README.md).
 on:
   workflow_dispatch:
     inputs:
@@ -28,7 +34,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  macos:
+    name: macOS streamer package
+    if: github.actor == github.repository_owner
+    runs-on: macos-15
+    steps:
+      - name: Check where it runs from
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are made from main, not $GITHUB_REF."
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Read the version
+        run: echo "RC_VERSION=$(head -n 1 VERSION | tr -d '[:space:]')" >> "$GITHUB_ENV"
+      - name: Build, test and package
+        run: bash scripts/build-mac.sh --test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rincast-macos
+          path: dist/RinCast-${{ env.RC_VERSION }}-macos-universal.zip
+          if-no-files-found: error
+          retention-days: 1
+
   release:
+    needs: macos
     if: github.actor == github.repository_owner
     runs-on: windows-2022
     steps:
@@ -121,11 +150,21 @@ jobs:
           $path = Join-Path $env:RUNNER_TEMP 'rincast-release.keystore'
           if (Test-Path $path) { Remove-Item $path -Force }
 
+      # Built on the macOS runner above; the Windows job publishes every asset in one go.
+      - name: Download the macOS package
+        uses: actions/download-artifact@v4
+        with:
+          name: rincast-macos
+          path: dist
+
       - name: Check what gets published
         run: |
           # Nothing secret may be among the uploads.
           $leaks = Get-ChildItem dist -Recurse -File | Where-Object { $_.Extension -in '.keystore', '.jks', '.p12', '.pfx' }
           if ($leaks) { throw "Signing material in dist: $($leaks.Name -join ', ')" }
+          # The universal macOS zip comes from the other runner, with the version in its name.
+          $mac = @(Get-ChildItem "dist\RinCast-$env:RC_VERSION-macos-*.zip")
+          if ($mac.Count -ne 1) { throw "Expected one macOS package in dist, found $($mac.Count)." }
           # A signed release must really be signed with the release key, not Android's debug key.
           if ($env:APK_SIGNED -eq 'true') {
             $apksigner = Get-ChildItem "$env:ANDROID_HOME\build-tools" -Directory | Sort-Object Name | Select-Object -Last 1
@@ -137,6 +176,13 @@ jobs:
               "$name"; $certs | Select-String 'certificate DN|SHA-256'
             }
           }
+
+      # build-all.ps1 writes SHA256SUMS.txt for the Windows assets; add the macOS zip
+      # so the checksum file covers everything in the release.
+      - name: Add the macOS package to SHA256SUMS.txt
+        run: |
+          $mac = Get-Item "dist\RinCast-$env:RC_VERSION-macos-*.zip"
+          Add-Content dist\SHA256SUMS.txt "$((Get-FileHash $mac.FullName -Algorithm SHA256).Hash.ToLower())  $($mac.Name)" -Encoding Ascii
 
       - name: Tag the commit and create the release
         env:

@@ -75,3 +75,20 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --console=plain
+
+  macos:
+    name: macOS streamer, core tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # Build-only: ScreenCaptureKit capture and CGEvent input injection need TCC
+      # consents that a headless runner can't grant, but they link against the SDK
+      # without a certificate. --test also exercises the shared core on macOS.
+      - name: Build, test and package
+        run: bash scripts/build-mac.sh --test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RinCast-macos-universal
+          path: dist/RinCast-*-macos-*.zip
+          if-no-files-found: error
+          retention-days: 7
