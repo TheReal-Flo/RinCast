@@ -67,6 +67,34 @@ Hello and Welcome both carry a random nonce. Session keys are derived as
 
 Stream id 0 carries VR. Ids 1–15 are desktop monitors.
 
+### Controller identity and aiming
+
+`Hello` and `client.info` may include `controllerProfiles`, an array of two OpenXR
+interaction profile paths (left, right). An empty string means that no active profile
+is available. Updated headsets refresh this while tracking with reliable control:
+
+```json
+{"type":"controller.profiles","controllerProfiles":["/interaction_profiles/bytedance/pico4_controller","/interaction_profiles/bytedance/pico4_controller"]}
+```
+
+The PC uses these reported profiles for native controller identity; it does not infer
+them from `model`. Unknown or missing profiles are not substituted. Explicit Touch
+compatibility is a PC-side choice. Native mode requires an updated headset app.
+
+Tracking datagrams retain the existing `TrackingPayload` prefix. They can append
+`GazePayload` (28 bytes), followed by `ControllerAimPayload` (60 bytes):
+
+```
+validMask u32 | left aim Pose (28 B) | right aim Pose (28 B)
+```
+
+Bits 0 and 1 mark valid left/right aim poses, located in the same app space and at
+the same predicted time as the grip poses in the prefix. Each pose contains quaternion
+`x,y,z,w` followed by position `x,y,z` (all float32). The gaze block is always present
+before aim; its flags are zero when gaze is unavailable. Older receivers can ignore
+the extra suffix, and newer receivers accept old packets without aim. Truncated or
+non-finite aim data is not used for calibration. The wire protocol remains version 3.
+
 ### Loss recovery
 Frames are predicted from earlier frames, so the headset stops feeding the decoder at
 the first missing frame. It keeps showing the last good picture and sends

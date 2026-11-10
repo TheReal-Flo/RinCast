@@ -6,9 +6,11 @@
 #include <cstring>
 #include <random>
 #include <thread>
+#include <limits>
 
 #include "rc/audio_codec.h"
 #include "rc/connection.h"
+#include "rc/controller_tracking.h"
 #include "rc/discovery.h"
 #include "rc/hand_skeleton.h"
 #include "rc/handshake.h"
@@ -581,7 +583,42 @@ static void TestLinkLocalDiscovery() {
     CHECK(tried == 0 || heard > 0);
 }
 
+static void TestControllerTrackingExtensions() {
+    constexpr size_t offset = sizeof(TrackingPayload) + sizeof(GazePayload);
+    std::vector<uint8_t> packet(offset + sizeof(ControllerAimPayload) + 1);
+    ControllerAimPayload source{}, decoded{};
+    source.validMask = 0xff;
+    source.poses[0].orientation[3] = 1;
+    source.poses[1].orientation[3] = 2;
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(!ReadControllerAimExtension(packet.data(), sizeof(TrackingPayload), decoded));
+    CHECK(decoded.validMask == 0);
+    CHECK(!ReadControllerAimExtension(packet.data(), offset, decoded));
+    CHECK(!ReadControllerAimExtension(packet.data(), offset + sizeof(source) - 1, decoded));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 3);
+    CHECK(decoded.poses[1].orientation[3] == 1);
+    source.poses[0].orientation[0] = std::numeric_limits<float>::quiet_NaN();
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 2);
+    source.poses[1].position[0] = std::numeric_limits<float>::infinity();
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 0);
+    CHECK(!ReadControllerAimExtension(nullptr, packet.size(), decoded));
+    CHECK(IsControllerProfilePath("/interaction_profiles/bytedance/pico4_controller"));
+    CHECK(IsControllerProfilePath(""));
+    CHECK(!IsControllerProfilePath("pico4"));
+    std::string embeddedNull = "/interaction_profiles/x";
+    embeddedNull.push_back('\0');
+    embeddedNull += "junk";
+    CHECK(!IsControllerProfilePath(embeddedNull));
+    CHECK(!IsControllerProfilePath("/interaction_profiles/" + std::string(256, 'x')));
+}
+
 int main() {
+    TestControllerTrackingExtensions();
     TestLinkLocalDiscovery();
     TestMusic();
     TestMotionRuns();

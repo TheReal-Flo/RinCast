@@ -251,7 +251,7 @@ void App::SendHello() {
     // (The display description is also sent in client.info once connected.)
 }
 
-static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettings& s, const FrameState* frame) {
+static json HelloJson(XrContext& xr, const Headset& headset, const XrInput& input, const HeadsetSettings& s, const FrameState* frame) {
     json fov = json::array();
     float ipd = 0.063f;
     if (frame) {
@@ -273,16 +273,17 @@ static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettin
     return {{"deviceId", Platform::DeviceId()},
             {"deviceName", Platform::DeviceModel()},
             {"model", Platform::DeviceModel()},
+            {"controllerProfiles", {input.ControllerProfilePath(0), input.ControllerProfilePath(1)}},
             {"appVersion", kVersion},
-            {"display",
-             {{"eyeWidth", eyeW},
-              {"eyeHeight", eyeH},
-              {"refreshRates", rates},
-              {"ipd", ipd},
-              {"fov", fov}}},
+            {"display", {{"eyeWidth", eyeW}, {"eyeHeight", eyeH}, {"refreshRates", rates}, {"ipd", ipd}, {"fov", fov}}},
             {"decoders",
-             {{"h264", dec.h264}, {"hevc", dec.hevc}, {"hevc10", dec.hevc10}, {"av1", dec.av1}, {"av110", dec.av110},
-              {"maxWidth", dec.maxWidth}, {"maxHeight", dec.maxHeight}}},
+             {{"h264", dec.h264},
+              {"hevc", dec.hevc},
+              {"hevc10", dec.hevc10},
+              {"av1", dec.av1},
+              {"av110", dec.av110},
+              {"maxWidth", dec.maxWidth},
+              {"maxHeight", dec.maxHeight}}},
             {"settings", s.StreamSettingsJson()}};
 }
 
@@ -302,7 +303,7 @@ void App::ConnectLan(const DiscoveredPc& pc) {
     // A link-local address means nothing on another day or cable.
     if (!pc.viaUsb) m_settings.lastPcAddress = pc.address.IpString();
     SaveSettings();
-    m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+    m_client.Connect(t, HelloJson(m_xr, *m_headset, m_input, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     EnterMode(Mode::Connecting);
 }
 
@@ -706,7 +707,7 @@ void App::UpdateMode(float dt) {
         case Mode::Connecting:
             if (clientState == StreamClient::State::Connected) {
                 // Introduce ourselves, then show the desktop.
-                json info = HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
+                json info = HelloJson(m_xr, *m_headset, m_input, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
                 info["type"] = rc::msg::kClientInfo;
                 m_client.SendControl(info);
                 Platform::SetStreamingLocks(true);
@@ -853,7 +854,7 @@ void App::HandleControl(const json& m) {
         };
         endpoints(m.value("rendezvous", json::array()), t.rendezvous);
         endpoints(m.value("locals", json::array()), t.pcLocalAddrs);
-        m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+        m_client.Connect(t, HelloJson(m_xr, *m_headset, m_input, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
     } else if (type == "_haptic") {
         m_input.Vibrate(m.value("hand", 0), m.value("amplitude", 0.f), std::max(0.02f, m.value("duration", 0.05f)),
                         m.value("frequency", 0.f) > 0 ? m.value("frequency", 0.f) : XR_FREQUENCY_UNSPECIFIED);
@@ -1348,6 +1349,13 @@ void App::UpdateInput(const FrameState& frame, float dt) {
 }
 
 void App::UpdateTracking(const FrameState& frame) {
+    static int64_t lastProfilesNs = 0;
+    const int64_t now = rc::NowNs();
+    if (now - lastProfilesNs > 1'000'000'000LL) {
+        lastProfilesNs = now;
+        m_client.SendControl({{"type", rc::msg::kControllerProfiles},
+                              {"controllerProfiles", {m_input.ControllerProfilePath(0), m_input.ControllerProfilePath(1)}}});
+    }
     // Predict to when the PC's frame for this pose will reach the display.
     const XrTime target = frame.predictedDisplayTime + XrTime(m_pipelineLatencyMs * 1e6);
     rc::TrackingPayload t{};
@@ -1453,7 +1461,16 @@ void App::UpdateTracking(const FrameState& frame) {
         m_gazePermissionAsked = true;
         Platform::RequestPermissions(m_headset->GazePermissions());
     }
-    m_client.SendTracking(t, foveate && ReadGaze(frame.predictedDisplayTime, gaze) ? &gaze : nullptr);
+    rc::ControllerAimPayload aim{};
+    for (int h = 0; h < 2; h++) {
+        if (!m_input.Hand(h).active || !predicted[h].aimValid || !(t.controllers[h].flags & rc::kCtrlPoseValid) ||
+            (t.controllers[h].flags & rc::kCtrlHandTracked))
+            continue;
+        aim.validMask |= 1u << h;
+        const auto& p = predicted[h].aim;
+        aim.poses[h] = {{p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w}, {p.position.x, p.position.y, p.position.z}};
+    }
+    m_client.SendTracking(t, foveate && ReadGaze(frame.predictedDisplayTime, gaze) ? &gaze : nullptr, &aim);
     m_trackingSent[t.targetDisplayTimeNs] = int64_t(t.sampleTimeNs);
     while (m_trackingSent.size() > 512) m_trackingSent.erase(m_trackingSent.begin());
     UpdateBody(frame);

@@ -283,6 +283,14 @@ struct GazePayload {
 };
 static_assert(sizeof(GazePayload) == 28);
 
+// Optional tracking extension, after TrackingPayload and GazePayload. Old peers
+// can ignore it; old packets without it retain model-based controller aiming.
+struct ControllerAimPayload {
+    uint32_t validMask;  // bit per controller; poses share the tracking prediction time
+    Pose poses[2];
+};
+static_assert(sizeof(ControllerAimPayload) == 60);
+
 // --- Tracked hands in games -------------------------------------------------
 inline constexpr int kHandJointCount = 26;  // XR_EXT_hand_tracking
 inline constexpr int kHandBoneCount = 31;   // SteamVR's hand skeleton
@@ -369,6 +377,7 @@ constexpr uint32_t kAudioSampleRate = 48000;
 namespace msg {
 // headset -> PC
 inline constexpr const char* kClientInfo = "client.info";           // device caps, display, codecs
+inline constexpr const char* kControllerProfiles = "controller.profiles";
 inline constexpr const char* kRequestSettings = "settings.get";
 inline constexpr const char* kUpdateSettings = "settings.set";
 inline constexpr const char* kStartDesktop = "desktop.start";

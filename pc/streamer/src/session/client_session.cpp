@@ -16,6 +16,7 @@
 #include "../vr/steamvr.h"
 #include "../vr/vr_bridge_host.h"
 #include "rc/platform.h"
+#include "rc/controller_tracking.h"
 
 namespace rcs {
 
@@ -183,6 +184,18 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
             if (size < sizeof(rc::TrackingPayload)) return;
             rc::TrackingPayload t;
             std::memcpy(&t, payload, sizeof(t));
+            if (!(t.flags & rc::kTrackHmdValid) || !rc::NormalizeTrackingPose(t.hmd)) {
+                t.flags &= ~rc::kTrackHmdValid;
+                t.hmd = {};
+                t.hmd.orientation[3] = 1;
+            }
+            for (auto& controller : t.controllers) {
+                if (!(controller.flags & rc::kCtrlPoseValid) || !rc::NormalizeTrackingPose(controller.pose)) {
+                    controller.flags &= ~rc::kCtrlPoseValid;
+                    controller.pose = {};
+                    controller.pose.orientation[3] = 1;
+                }
+            }
             rcvr::TrackingSnapshot s{};
             static std::atomic<uint64_t> seq{0};
             s.sequence = ++seq;
@@ -209,6 +222,18 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
                 std::memcpy(d.pose.position, c.pose.position, sizeof(float) * 3);
                 std::memcpy(d.pose.linearVelocity, c.linearVelocity, sizeof(float) * 3);
                 std::memcpy(d.pose.angularVelocity, c.angularVelocity, sizeof(float) * 3);
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!std::isfinite(d.pose.linearVelocity[axis])) d.pose.linearVelocity[axis] = 0;
+                    if (!std::isfinite(d.pose.angularVelocity[axis])) d.pose.angularVelocity[axis] = 0;
+                }
+            }
+            rc::ControllerAimPayload aim{};
+            if (rc::ReadControllerAimExtension(payload, size, aim)) {
+                for (int h = 0; h < 2; h++) {
+                    s.controllers[h].aimValid = ((aim.validMask >> h) & 1) && (s.controllers[h].flags & 7) == 3;
+                    std::memcpy(s.controllers[h].aim.orientation, aim.poses[h].orientation, sizeof(float) * 4);
+                    std::memcpy(s.controllers[h].aim.position, aim.poses[h].position, sizeof(float) * 3);
+                }
             }
             App::Get().Bridge().PublishTracking(s);
             // Where the eyes look comes after the poses, from headsets doing foveated encoding.
@@ -351,6 +376,12 @@ void ClientSession::HandleMessage(const json& m) {
         return;
     }
     if (type == "_monitors") return SendMonitors();
+    if (type == rc::msg::kControllerProfiles) {
+        ApplyClientInfo(m);
+        const auto caps = Caps();
+        App::Get().Bridge().SetControllerProfiles(caps.controllerProfiles[0], caps.controllerProfiles[1]);
+        return;
+    }
     if (type == "_audio") return UpdateAudio();
     if (type == rc::msg::kClientInfo) {
         ApplyClientInfo(m);
@@ -454,6 +485,16 @@ void ClientSession::HandleMessage(const json& m) {
 
 void ClientSession::ApplyClientInfo(const json& m) {
     std::lock_guard lock(m_mutex);
+    if (m.contains("controllerProfiles")) {
+        const auto& profiles = m["controllerProfiles"];
+        if (profiles.is_array() && profiles.size() == 2 && profiles[0].is_string() && profiles[1].is_string()) {
+            const auto left = profiles[0].get<std::string>(), right = profiles[1].get<std::string>();
+            if (rc::IsControllerProfilePath(left) && rc::IsControllerProfilePath(right)) {
+                m_caps.controllerProfiles[0] = left;
+                m_caps.controllerProfiles[1] = right;
+            }
+        }
+    }
     if (m.contains("display")) {
         const auto& d = m["display"];
         m_caps.recommendedEyeWidth = d.value("eyeWidth", m_caps.recommendedEyeWidth);
@@ -738,6 +779,7 @@ void ClientSession::StartVr() {
     dc.ipd = caps.ipd;
     std::memcpy(dc.fovTan, caps.fovTan, sizeof(dc.fovTan));
     strncpy_s(dc.headsetModel, m_hello.model.empty() ? "Quest" : m_hello.model.c_str(), _TRUNCATE);
+    for (int hand = 0; hand < 2; ++hand) strncpy_s(dc.controllerProfiles[hand], caps.controllerProfiles[hand].c_str(), _TRUNCATE);
     strncpy_s(dc.headsetSerial, m_hello.deviceId.c_str(), _TRUNCATE);
     dc.renderEyeWidth = renderW;
     dc.renderEyeHeight = renderH;

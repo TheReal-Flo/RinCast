@@ -276,10 +276,16 @@ void StreamClient::SendHandSkeleton(const rc::HandSkeletonPayload& h) {
     if (m_connection) m_connection->Send(rc::PacketType::HandSkeleton, &h, sizeof(h));
 }
 
-void StreamClient::SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze) {
+void StreamClient::SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze, const rc::ControllerAimPayload* aim) {
     std::lock_guard lock(m_mutex);
     if (!m_connection) return;
-    if (gaze) m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), gaze, sizeof(*gaze));
+    if (aim) {
+        uint8_t extension[sizeof(rc::GazePayload) + sizeof(rc::ControllerAimPayload)]{};
+        if (gaze) std::memcpy(extension, gaze, sizeof(*gaze));
+        std::memcpy(extension + sizeof(rc::GazePayload), aim, sizeof(*aim));
+        m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), extension, sizeof(extension));
+    } else if (gaze)
+        m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), gaze, sizeof(*gaze));
     else m_connection->Send(rc::PacketType::Tracking, &t, sizeof(t));
 }
 

@@ -116,7 +116,7 @@ class StreamClient {
     // Thread-safe senders (no-ops when not connected).
     void SendControl(const json& message);
     // With where the eyes look appended, for foveated encoding.
-    void SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze = nullptr);
+    void SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze = nullptr, const rc::ControllerAimPayload* aim = nullptr);
     void SendBody(const rc::BodyTrackingPayload& b);
     void SendFace(const rc::FaceTrackingPayload& f);
     void SendHandSkeleton(const rc::HandSkeletonPayload& h);

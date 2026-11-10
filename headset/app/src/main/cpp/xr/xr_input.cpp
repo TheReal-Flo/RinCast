@@ -206,6 +206,16 @@ static float GetFloat(XrSession s, XrAction a, XrPath sub) {
     return XR_SUCCEEDED(xrGetActionStateFloat(s, &gi, &st)) && st.isActive ? st.currentState : 0.f;
 }
 
+std::string XrInput::ControllerProfilePath(int hand) const {
+    if (!m_xr || hand < 0 || hand > 1) return {};
+    XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_FAILED(xrGetCurrentInteractionProfile(m_xr->Session(), m_handPath[hand], &state)) || !state.interactionProfile) return {};
+    char path[XR_MAX_PATH_LENGTH]{};
+    uint32_t length = 0;
+    if (XR_FAILED(xrPathToString(m_xr->Instance(), state.interactionProfile, sizeof(path), &length, path))) return {};
+    return path;
+}
+
 void XrInput::Update(XrTime time) {
     XrActiveActionSet active{m_set, XR_NULL_PATH};
     XrActionsSyncInfo si{XR_TYPE_ACTIONS_SYNC_INFO};
@@ -216,6 +226,11 @@ void XrInput::Update(XrTime time) {
     const XrSession s = m_xr->Session();
     for (int i = 0; i < 2; i++) {
         HandInput& h = m_hands[i];
+        const auto profile = ControllerProfilePath(i);
+        if (profile != m_reportedProfiles[i]) {
+            m_reportedProfiles[i] = profile;
+            RC_LOGI("Runtime controller profile (%s): %s", i == 0 ? "left" : "right", profile.c_str());
+        }
         const XrPath sub = m_handPath[i];
         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
         gi.action = m_aimPose;

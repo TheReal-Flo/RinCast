@@ -22,6 +22,9 @@ class VrBridgeHost {
     // Applies a headset display configuration. Recreates textures when the
     // resolution changes. Returns true if SteamVR needs a restart to apply.
     bool Configure(const rcvr::DisplayConfig& config);
+    // Takes effect when SteamVR next creates its controller devices.
+    void SetTouchControllers(bool touch);
+    void SetControllerProfiles(const std::string& left, const std::string& right);
     void SetHeadsetConnected(bool connected);
     void PublishTracking(const rcvr::TrackingSnapshot& snapshot);
     void PublishBody(const rcvr::BodySnapshot& snapshot);

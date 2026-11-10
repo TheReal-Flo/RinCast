@@ -39,6 +39,7 @@ class XrInput {
     // Locate grip poses at another time (used for the stream's predicted poses).
     void Locate(XrTime time, HandInput hands[2]);
     const HandInput& Hand(int i) const { return m_hands[i]; }
+    std::string ControllerProfilePath(int hand) const;
     // A tracked hand's joints at `time`, in app space. False if the hand isn't tracked then.
     bool LocateHandJoints(int hand, XrTime time, rc::Pose joints[rc::kHandJointCount]) const;
     // Tracks hands and controllers together. The Quest's runtime fails if body tracking is
@@ -57,6 +58,7 @@ class XrInput {
     XrContext* m_xr = nullptr;
     XrActionSet m_set = XR_NULL_HANDLE;
     XrPath m_handPath[2] = {};
+    std::string m_reportedProfiles[2];
     XrAction m_aimPose = XR_NULL_HANDLE, m_gripPose = XR_NULL_HANDLE;
     XrAction m_trigger = XR_NULL_HANDLE, m_squeeze = XR_NULL_HANDLE, m_stick = XR_NULL_HANDLE;
     XrAction m_stickClick = XR_NULL_HANDLE, m_primary = XR_NULL_HANDLE, m_secondary = XR_NULL_HANDLE,

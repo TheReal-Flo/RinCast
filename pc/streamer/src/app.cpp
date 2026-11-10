@@ -300,6 +300,7 @@ std::string App::ApplySettingSideEffects(const json& changed) {
         SettingsStore::Get().Update([](Settings& s) { s.startWithWindows = !s.startWithWindows; });
     }
     if (changed.contains("pcName") || changed.contains("allowRemote") || changed.contains("cloudUrl")) m_cloud.Wake();
+    if (changed.contains("controllerMode")) m_bridge.SetTouchControllers(SettingsStore::Get().Snapshot().controllerMode == "touch");
     if (auto session = m_server.ActiveSession()) session->OnSettingsChanged();
     return error;
 }
