@@ -90,12 +90,27 @@ bool Connection::SendRaw(PacketType type, const void* a, size_t aSize, const voi
     return ok;
 }
 
+size_t Connection::SendQueueChunks() const {
+    std::lock_guard lock(m_controlMutex);
+    return m_sendQueue.size();
+}
+
 void Connection::SendControl(const std::string& json) {
     const size_t chunkData = MaxPayload() - sizeof(ControlChunkHeader);
     const size_t count = std::max<size_t>(1, (json.size() + chunkData - 1) / chunkData);
     if (count > 0xFFFF) {
         RC_LOGE("Control message too large: %zu bytes", json.size());
         return;
+    }
+    {
+        std::lock_guard lock(m_controlMutex);
+        // Last-resort cap: a stalled link plus repeated screenshot bursts would
+        // otherwise grow the queue without bound (each screenshot is ~6000 chunks).
+        if (m_sendQueue.size() > 32768) {
+            RC_LOGW("Control: %u chunks still queued, dropping a %zu-byte message",
+                    unsigned(m_sendQueue.size()), json.size());
+            return;
+        }
     }
     std::lock_guard lock(m_controlMutex);
     const uint32_t messageId = m_nextMessageId++;

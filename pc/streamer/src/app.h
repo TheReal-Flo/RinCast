@@ -8,6 +8,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "net/firewall.h"
 #include "cloud/cloud_client.h"
@@ -21,6 +22,12 @@
 namespace rcs {
 
 class ClientSession;
+
+struct ScreenshotEntry {
+    std::string name;
+    std::string path;
+    int64_t when = 0;  // file-clock ticks, ordering only
+};
 
 class App {
    public:
@@ -38,6 +45,11 @@ class App {
     const EncoderCaps& Caps() const { return m_caps; }
     std::string Version() const;
 
+    // Recent headset screenshots, newest first (the General page's card).
+    void ScanScreenshots();  // what's already in the folder, at startup
+    void AddScreenshot(const std::string& path);
+    json ScreenshotsJson() const;
+
     // Events from services (any thread)
     void OnSessionStarted(ClientSession* session);
     void OnSessionEnded(ClientSession* session, const std::string& reason);
@@ -54,6 +66,10 @@ class App {
     // Requests the window to show itself (approval prompts).
     std::function<void()> ShowWindowRequest;
 
+    // Opens the native folder picker (main.cpp owns the window). Returns the picked
+    // path, or "" when cancelled.
+    std::function<std::string(const std::string&)> FolderPicker;
+
    private:
     std::string ApplySettingSideEffects(const json& changed);  // what went wrong, if anything
     void RunAsync(std::function<void()> fn);
@@ -67,6 +83,8 @@ class App {
     std::atomic<bool> m_firewallChecking{false};
     int m_firewallTicks = 0;
     void CheckFirewall();
+    mutable std::mutex m_screenshotsMutex;
+    std::vector<ScreenshotEntry> m_screenshots;
     GameLibrary m_games;
     GpuInfo m_gpu;
     EncoderCaps m_caps;

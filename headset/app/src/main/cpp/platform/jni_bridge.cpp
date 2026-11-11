@@ -136,6 +136,25 @@ void Platform::Speak(const std::string& text) {
     env->DeleteLocalRef(cls);
 }
 
+bool Platform::ScreenshotStorageOk() {
+    JniScope scope;
+    JNIEnv* env = scope.env();
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID m = env->GetMethodID(cls, "screenshotStorageOk", "()Z");
+    const jboolean ok = env->CallBooleanMethod(g_activity, m);
+    env->DeleteLocalRef(cls);
+    return ok;
+}
+
+void Platform::OpenStorageSettings() {
+    JniScope scope;
+    JNIEnv* env = scope.env();
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID m = env->GetMethodID(cls, "openStorageSettings", "()V");
+    env->CallVoidMethod(g_activity, m);
+    env->DeleteLocalRef(cls);
+}
+
 HttpResult Platform::Http(const std::string& method, const std::string& url, const std::string& body,
                           const std::string& bearer, int timeoutMs) {
     JniScope scope;

@@ -1,8 +1,12 @@
 #include "client_session.h"
+
+#include <filesystem>
+#include <fstream>
 #include "../vr/face_share.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 
 #include "../app.h"
@@ -10,6 +14,8 @@
 #include "../encode/encoder.h"
 #include "../input/input_injector.h"
 #include "../settings.h"
+
+#include <windows.h>
 #include "../stream/desktop_stream.h"
 #include "../stream/foveator.h"
 #include "../stream/vr_stream.h"
@@ -18,6 +24,7 @@
 #include "rc/platform.h"
 
 namespace rcs {
+
 
 namespace {
 
@@ -30,6 +37,16 @@ float QualityScale(const std::string& q) {
 }
 
 uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a); }
+
+// 2026-11-11 12.34.56 - colons are not allowed in file names.
+std::string ShotStamp() {
+    SYSTEMTIME t{};
+    GetLocalTime(&t);
+    char buf[32] = {};
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u.%02u.%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+                  t.wMinute, t.wSecond);
+    return buf;
+}
 
 // The most the stream takes of SteamVR's resolution, against the headset's panel (the slider on
 // the headset stops there too): Virtual Desktop's highest. Headsets before 1.2.0 send their
@@ -79,6 +96,7 @@ void ClientSession::Start() {
 void ClientSession::Close(const std::string& reason) {
     if (m_closed.exchange(true)) return;
     RC_LOGI("Session with %s closed (%s)", m_hello.deviceName.c_str(), reason.c_str());
+    ResetShot();  // don't leave half a screenshot under a .part name
     m_connection->SendDisconnect();
     {
         std::lock_guard lock(m_queueMutex);
@@ -342,7 +360,7 @@ void ClientSession::HandleMessage(const json& m) {
             for (auto& [id, d] : m_desktop) {
                 auto s = d->Stats();
                 desk.push_back({{"streamId", id}, {"fps", s.fps}, {"encodeMs", s.encodeMs}, {"mbps", s.mbps},
-                                {"bitrateKbps", s.bitrateKbps}});
+                                {"bitrateKbps", s.bitrateKbps}, {"framesLost", s.framesLost}});
             }
             stats["desktop"] = desk;
         }
@@ -445,11 +463,113 @@ void ClientSession::HandleMessage(const json& m) {
         if (ok && !(m_vr && m_vr->Running())) NotifyVrState("launching", "steamvr", "");  // see LaunchSteamVr
         return;
     }
-    if (type == rc::msg::kStats) {
+    if (type == "screenshot.begin") {
+        ResetShot();
+        // Names come from this PC now: which headset, then when. The headset's own file name
+        // only says when the system wrote it, and says nothing about the device.
+        std::string ext = ".jpg";
+        // The name comes from the headset: keep a safe stem only, so the file cannot leave the
+        // screenshots folder (or leave it as something executable) no matter what it sends.
+        std::string name = m.value("name", "screenshot.jpg");
+        if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) name = name.substr(slash + 1);
+        std::string stem = name;
+        if (const size_t dot = name.rfind('.'); dot != std::string::npos && dot > 0) {
+            const std::string e = name.substr(dot);
+            if (e == ".jpg" || e == ".jpeg" || e == ".png") ext = e;
+            stem = name.substr(0, dot);
+        }
+        // "PICO 4" becomes "pico4": the product name, safe in a file name.
+        std::string clean;
+        for (const char c : HeadsetName(m_hello.model))
+            if (std::isalnum(static_cast<unsigned char>(c))) clean += char(std::tolower(static_cast<unsigned char>(c)));
+        if (clean.empty()) clean = "headset";
+        m_shotName = clean + " " + ShotStamp() + ext;
+        m_shotCap = std::min<uint64_t>(m.value("size", 0), 64u << 20) + 65536;
+        namespace fs = std::filesystem;
+        std::string dir = SettingsStore::Get().Snapshot().screenshotDir;
+        if (dir.empty()) dir = DefaultScreenshotDir();
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        m_shotTemp = dir + "/." + m_shotName + ".part";
+        m_shotFile.open(m_shotTemp, std::ios::binary | std::ios::trunc);
+        if (!m_shotFile) {
+            RC_LOGE("Screenshot: couldn't write %s", m_shotTemp.c_str());
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        m_shotActive = true;
+        RC_LOGI("Screenshot: receiving %s (%u bytes)", m_shotName.c_str(), unsigned(m.value("size", 0)));
+    } else if (type == "screenshot.data") {
+        if (!m_shotActive) return;
+        const std::string hex = m.value("data", "");
+        const size_t bytes = hex.size() / 2;
+        if (m_shotWritten + bytes > m_shotCap) {
+            RC_LOGW("Screenshot: more data than %s declared, dropping it", m_shotName.c_str());
+            m_shotFile.close();
+            std::error_code ec;
+            std::filesystem::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        std::vector<uint8_t> chunk(bytes);
+        rc::HexDecode(hex, chunk.data(), chunk.size());
+        m_shotFile.write(reinterpret_cast<const char*>(chunk.data()), std::streamsize(chunk.size()));
+        m_shotWritten += bytes;
+    } else if (type == "screenshot.end") {
+        if (!m_shotActive) return;
+        m_shotActive = false;
+        namespace fs = std::filesystem;
+        m_shotFile.close();
+        std::error_code ec;
+        if (m_shotWritten == 0 || !m_shotFile) {
+            fs::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        std::string stem = m_shotName, ext = ".jpg";
+        if (const size_t dot = stem.rfind('.'); dot != std::string::npos) {
+            ext = stem.substr(dot);
+            stem = stem.substr(0, dot);
+        }
+        const std::string dir = fs::path(m_shotTemp).parent_path().string();
+        std::string path = dir + "/" + stem + ext;
+        for (int n = 1; fs::exists(path, ec); n++) path = dir + "/" + stem + " (" + std::to_string(n) + ")" + ext;
+        fs::rename(m_shotTemp, path, ec);
+        if (ec) {
+            RC_LOGE("Screenshot: couldn't finish %s: %s", path.c_str(), ec.message().c_str());
+            fs::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        RC_LOGI("Screenshot: saved %s (%llu bytes)", path.c_str(), (unsigned long long)m_shotWritten);
+        App::Get().AddScreenshot(path);
+        SendControl({{"type", "screenshot.saved"}, {"ok", true}, {"name", fs::path(path).filename().string()},
+                     {"size", m_shotWritten}});
+        ResetShot();
+    } else if (type == "screenshot.folder") {
+        SettingsStore::Get().Update([&](Settings& st) { st.screenshotDir = m.value("path", ""); });
+        RC_LOGI("Screenshot folder: %s", m.value("path", "").c_str());
+    } else if (type == rc::msg::kStats) {
         std::lock_guard lock(m_mutex);
         m_clientStats = m.value("stats", json::object());
         return;
     }
+}
+
+void ClientSession::ResetShot() {
+    if (m_shotFile.is_open()) m_shotFile.close();
+    if (!m_shotTemp.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(m_shotTemp, ec);
+    }
+    m_shotActive = false;
+    m_shotTemp.clear();
+    m_shotWritten = 0;
+    m_shotCap = 0;
 }
 
 void ClientSession::ApplyClientInfo(const json& m) {
@@ -521,6 +641,11 @@ rc::VideoCodec ClientSession::ChooseCodec(bool forVr) const {
 
 void ClientSession::SendServerInfo() {
     const Settings s = SettingsStore::Get().Snapshot();
+    std::string vrState;
+    {
+        std::lock_guard lock(m_mutex);  // the VR threads write it under this lock
+        vrState = m_vrState;
+    }
     const EncoderCaps& caps = App::Get().Caps();
     const auto route = audio::ResolveRoute(s.audioDevices);
     const auto svr = steamvr::SteamVrPath();
@@ -543,7 +668,7 @@ void ClientSession::SendServerInfo() {
                          {"devices", route.micSet.empty() ? route.speakerSet : route.micSet}}},
         {"account", s.cloudUserName},
         {"remote", m_remote},
-        {"vrState", m_vrState},
+        {"vrState", vrState},
     });
 }
 
@@ -628,7 +753,10 @@ void ClientSession::StartDesktop(const json& m) {
         cfg.bitrateKbps = std::max<uint32_t>(cfg.bitrateKbps, 5000);
         // Internet paths lose packets and have no retransmissions: recover more of them locally.
         cfg.fecPercent = m_slowPath ? std::max(pc.fecPercent, 12) : pc.fecPercent;
-        cfg.pace = m_slowPath;
+        // Spread packets over the frame interval on Wi-Fi too: bursts are what access
+        // points drop. The send runs on its own thread, so this no longer stalls the
+        // capture-encode loop.
+        cfg.pace = true;
         cfg.adaptiveQuant = pc.adaptiveQuantization;
         // Over the internet a fixed bitrate only fills queues or loses frames: always adapt.
         cfg.adaptive = m_slowPath || (st.adaptiveBitrate && pc.adaptiveBitrate);
@@ -721,6 +849,8 @@ void ClientSession::StartVr() {
     if (!caps.refreshRates.empty() &&
         std::find(caps.refreshRates.begin(), caps.refreshRates.end(), rate) == caps.refreshRates.end())
         rate = caps.refreshRates.back();
+    // The desktop path clamps this; a buggy or hostile client could send anything.
+    rate = std::clamp(rate, 30.f, 240.f);
     dc.refreshRate = rate;
     dc.ipd = caps.ipd;
     std::memcpy(dc.fovTan, caps.fovTan, sizeof(dc.fovTan));
@@ -744,7 +874,7 @@ void ClientSession::StartVr() {
     cfg.bitrateKbps = uint32_t((st.vrBitrateMbps > 0 ? st.vrBitrateMbps : pc.vrBitrateMbps) * 1000);
     if (m_slowPath) cfg.bitrateKbps = std::min<uint32_t>(cfg.bitrateKbps, 60000);
     cfg.fecPercent = m_slowPath ? std::max(pc.fecPercent, 12) : pc.fecPercent;
-    cfg.pace = m_slowPath;
+    cfg.pace = true;  // see the VR note: spread on Wi-Fi too, the send thread absorbs the wait
     cfg.adaptive = m_slowPath || (st.adaptiveBitrate && pc.adaptiveBitrate);  // see above
     if (m_slowPath) cfg.startBitrateKbps = std::min<uint32_t>(cfg.bitrateKbps, 12000);
     cfg.foveated = pc.foveatedEncoding;

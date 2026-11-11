@@ -188,6 +188,13 @@
           <select id="language" class="select"></select>
           <label class="check spaced"><input type="checkbox" data-setting="startWithWindows"><span data-i18n="general.startWithWindows">Start with Windows</span></label>
           <label class="check"><input type="checkbox" data-setting="preventSleep"><span data-i18n="general.keepAwake">Keep the PC awake while streaming</span></label>
+          <h3><label for="screenshotDir" data-i18n="general.screenshotDir">Screenshots folder</label></h3>
+          <div class="inputrow">
+            <input type="text" id="screenshotDir" data-setting="screenshotDir" spellcheck="false">
+            <button class="btn" id="screenshotBrowse" data-i18n="general.browse">Browse…</button>
+          </div>
+          <div class="btns spaced"><button class="btn" id="openShotsFolder" data-i18n="general.openFolder">Open folder</button></div>
+          <p class="note" data-i18n="general.screenshotDirNote">Where headset screenshots land on this PC</p>
           <h2 data-i18n="general.networks">Networks</h2>
           <label class="check" id="publicRow"><input type="checkbox" id="allowPublic"><span data-i18n="general.public">Allow headsets on Public networks</span><small id="publicNote"></small></label>
         </div>

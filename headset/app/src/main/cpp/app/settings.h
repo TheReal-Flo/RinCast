@@ -72,6 +72,7 @@ struct HeadsetSettings {
     std::string lastPc;
     std::string lastPcAddress;          // where it answered, for networks that drop broadcasts
     bool autoConnect = false;           // connect to lastPc as soon as it's found
+    bool autoSendScreenshots = true;    // headset screenshots land on the PC automatically
     bool usbCable = false;              // use a USB cable to the PC when one is plugged in
     std::string manualPc;               // for networks that block discovery
     std::string deviceSecret;           // identity seed (hex), made on first start
