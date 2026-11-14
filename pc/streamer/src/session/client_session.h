@@ -30,6 +30,7 @@ class AudioStreamer;
 class MicPlayer;
 
 struct ClientCaps {
+    std::string controllerProfiles[2];
     bool h264 = true, hevc = true, hevc10 = false, av1 = false, av110 = false;
     uint32_t maxDecodeWidth = 4096, maxDecodeHeight = 4096;
     std::vector<float> refreshRates{72, 90};

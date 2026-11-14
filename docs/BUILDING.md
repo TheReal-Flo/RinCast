@@ -26,6 +26,20 @@ The output goes to `build\pc\bin\Release`:
 - `rincast-audio-setup.exe`
 - the developer tools
 
+Controller regression checks (also run in CI):
+
+```powershell
+cmake -S pc -B build\pc -DRINCAST_CORE_TESTS=ON
+cmake --build build\pc --config Release
+build\pc\bin\Release\rincast-core-tests.exe
+build\pc\bin\Release\rincast-controller-tests.exe
+python scripts/validate-controller-resources.py
+```
+
+The controller tests cover profile selection, startup registration gates, grip/aim
+transforms, skeleton preservation, shared config snapshots and model-cache recovery.
+Native Pico models require SteamVR's `vrlink` resources; they do not require PICO Connect.
+
 You can run the streamer straight from that folder. It finds the driver
 relative to its own path.
 

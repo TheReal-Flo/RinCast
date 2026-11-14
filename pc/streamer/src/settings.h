@@ -54,6 +54,7 @@ struct Settings {
     // VR
     std::string openxrRuntime = "steamvr";  // rincast | steamvr (what we make active while streaming)
     bool autoRegisterSteamVrDriver = true;
+    std::string controllerMode = "native";  // native | touch (SteamVR compatibility)
 
     // Cloud
     std::string cloudUrl = "https://rincast.com";

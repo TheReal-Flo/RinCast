@@ -283,6 +283,13 @@ struct GazePayload {
 };
 static_assert(sizeof(GazePayload) == 28);
 
+// Optional tracking extension, after TrackingPayload, GazePayload and BatteryPayload. Old peers
+// can ignore it; old packets without it retain model-based controller aiming.
+struct ControllerAimPayload {
+    uint32_t validMask;  // bit per controller; poses share the tracking prediction time
+    Pose poses[2];
+};
+static_assert(sizeof(ControllerAimPayload) == 60);
 inline constexpr uint32_t kBatteryMagic = 0x54424352;  // RCBT
 enum BatteryFlags : uint32_t {
     kBatteryValid = 1 << 0,
@@ -385,6 +392,7 @@ constexpr uint32_t kAudioSampleRate = 48000;
 namespace msg {
 // headset -> PC
 inline constexpr const char* kClientInfo = "client.info";           // device caps, display, codecs
+inline constexpr const char* kControllerProfiles = "controller.profiles";
 inline constexpr const char* kRequestSettings = "settings.get";
 inline constexpr const char* kUpdateSettings = "settings.set";
 inline constexpr const char* kStartDesktop = "desktop.start";

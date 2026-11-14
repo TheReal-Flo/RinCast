@@ -16,6 +16,17 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   RinCast stays unelevated. Uses the driver packages supplied by Steam on x64 Windows.
   The Audio page asks you to accept the Steam Subscriber Agreement first, and offers to
   download and start Steam's installer from Valve when Steam isn't on the PC.
+- Explicit Native / Oculus Touch compatibility setting in the Streamer's SteamVR page.
+  Restart SteamVR after changing it. Native mode requires the updated headset app;
+  older headset builds and unsupported native profiles can use Touch compatibility.
+
+### Fixed
+
+- SteamVR controllers follow the interaction profiles reported by each hand instead of
+  guessing from the headset model. Pico 4 and Ultra use native models, button hints and
+  calibrated grip/aim components; Quest retains its native Touch profiles.
+- Controllers and tracked hands appear only after receiving valid live data from the
+  connected headset. Controller state is cleared on disconnect.
 
 ## 1.2.1 - 2026-11-14
 

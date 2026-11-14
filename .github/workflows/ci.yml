@@ -28,6 +28,10 @@ jobs:
         run: python scripts/test-steam-audio-install.py
       - name: Core tests
         run: build\pc\bin\Release\rincast-core-tests.exe
+      - name: Controller tests
+        run: build\pc\bin\Release\rincast-controller-tests.exe
+      - name: Controller resource checks
+        run: python scripts/validate-controller-resources.py
 
   audio-driver:
     name: Audio driver

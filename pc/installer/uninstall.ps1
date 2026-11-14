@@ -68,7 +68,13 @@ foreach ($store in 'Root', 'TrustedPublisher') {
 # which SteamVR ignores.
 $steam = (Get-ItemProperty "$userHive\Software\Valve\Steam" -ErrorAction SilentlyContinue).SteamPath
 $vrpathreg = if ($steam) { Join-Path $steam 'steamapps\common\SteamVR\bin\win64\vrpathreg.exe' }
-if ($userSid -eq $id.User.Value -and $vrpathreg -and (Test-Path $vrpathreg)) { & $vrpathreg removedriver (Join-Path $installDir 'driver\rincast') | Out-Null }
+if ($userSid -eq $id.User.Value -and $vrpathreg -and (Test-Path $vrpathreg)) {
+    & $vrpathreg removedriver (Join-Path $installDir 'driver\rincast') | Out-Null
+    $nativeLocalAppData = Get-LocalAppData $userSid
+    if ($nativeLocalAppData) {
+        & $vrpathreg removedriver (Join-Path $nativeLocalAppData 'RinCast\native-controller-resources') | Out-Null
+    }
+}
 
 # OpenXR runtime: unregister, and hand the active runtime back to SteamVR if it was ours.
 $manifest = Join-Path $installDir 'openxr\rincast-openxr.json'

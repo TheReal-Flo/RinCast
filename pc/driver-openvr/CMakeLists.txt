@@ -15,3 +15,9 @@ set_target_properties(driver_rincast PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/bin/RelWithDebInfo/driver/rincast/bin/win64)
 add_custom_command(TARGET driver_rincast POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/package/rincast ${RINCAST_DRIVER_DIR})
+
+if(RINCAST_CORE_TESTS)
+  add_executable(rincast-controller-tests tests/controller_tests.cpp)
+  target_include_directories(rincast-controller-tests PRIVATE src ../common ${CMAKE_CURRENT_LIST_DIR}/../../third_party)
+  target_compile_definitions(rincast-controller-tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()

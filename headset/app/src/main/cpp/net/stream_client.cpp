@@ -281,15 +281,19 @@ void StreamClient::SendHandSkeleton(const rc::HandSkeletonPayload& h) {
     if (m_connection) m_connection->Send(rc::PacketType::HandSkeleton, &h, sizeof(h));
 }
 
-void StreamClient::SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze, const rc::BatteryPayload* battery) {
+void StreamClient::SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze, const rc::BatteryPayload* battery,
+                                const rc::ControllerAimPayload* aim) {
     std::lock_guard lock(m_mutex);
     if (!m_connection) return;
-    if (battery) {
-        uint8_t extension[sizeof(rc::GazePayload) + sizeof(rc::BatteryPayload)]{};
-        if (gaze) std::memcpy(extension, gaze, sizeof(*gaze));
-        std::memcpy(extension + sizeof(rc::GazePayload), battery, sizeof(*battery));
-        m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), extension, sizeof(extension));
-    } else if (gaze) m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), gaze, sizeof(*gaze));
+    // Each part sits at a fixed offset, so the ones before it are sent even when empty
+    // (zeros: no gaze, a battery block without its magic).
+    constexpr size_t kBattery = sizeof(rc::GazePayload), kAim = kBattery + sizeof(rc::BatteryPayload);
+    uint8_t extension[kAim + sizeof(rc::ControllerAimPayload)]{};
+    if (gaze) std::memcpy(extension, gaze, sizeof(*gaze));
+    if (battery) std::memcpy(extension + kBattery, battery, sizeof(*battery));
+    if (aim) std::memcpy(extension + kAim, aim, sizeof(*aim));
+    const size_t size = aim ? sizeof(extension) : battery ? kAim : gaze ? kBattery : 0;
+    if (size) m_connection->Send2(rc::PacketType::Tracking, &t, sizeof(t), extension, size);
     else m_connection->Send(rc::PacketType::Tracking, &t, sizeof(t));
 }
 

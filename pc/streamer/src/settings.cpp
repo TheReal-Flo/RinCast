@@ -74,6 +74,7 @@ json Settings::ToJson(bool forUi) const {
         {"audioDevices", audioDevices},
         {"openxrRuntime", openxrRuntime},
         {"autoRegisterSteamVrDriver", autoRegisterSteamVrDriver},
+        {"controllerMode", controllerMode},
         {"cloudUrl", cloudUrl},
         {"screenshotDir", screenshotDir},
         {"allowRemote", allowRemote},
@@ -118,6 +119,8 @@ void Settings::FromJson(const json& j) {
     get("audioDevices", audioDevices);
     get("openxrRuntime", openxrRuntime);
     get("autoRegisterSteamVrDriver", autoRegisterSteamVrDriver);
+    get("controllerMode", controllerMode);
+    if (controllerMode != "native" && controllerMode != "touch") controllerMode = "native";
     get("cloudUrl", cloudUrl);
     get("screenshotDir", screenshotDir);
     get("allowRemote", allowRemote);

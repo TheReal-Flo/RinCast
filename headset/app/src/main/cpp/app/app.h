@@ -379,6 +379,7 @@ class App {
         rc::TrackingPayload t{};
         rc::GazePayload gaze{};
         bool hasGaze = false;
+        rc::ControllerAimPayload aim{};  // validMask 0: none
         XrTime target = 0;
         bool relocateHead = false;
         bool relocateGrip[2] = {false, false};

@@ -6,10 +6,12 @@
 #include <cstring>
 #include <random>
 #include <thread>
+#include <limits>
 
 #include "rc/audio_codec.h"
 #include "rc/battery.h"
 #include "rc/connection.h"
+#include "rc/controller_tracking.h"
 #include "rc/discovery.h"
 #include "rc/hand_skeleton.h"
 #include "rc/handshake.h"
@@ -582,6 +584,50 @@ static void TestLinkLocalDiscovery() {
     CHECK(tried == 0 || heard > 0);
 }
 
+static void TestControllerTrackingExtensions() {
+    constexpr size_t offset = sizeof(TrackingPayload) + sizeof(GazePayload) + sizeof(BatteryPayload);
+    std::vector<uint8_t> packet(offset + sizeof(ControllerAimPayload) + 1);
+    ControllerAimPayload source{}, decoded{};
+    source.validMask = 0xff;
+    source.poses[0].orientation[3] = 1;
+    source.poses[1].orientation[3] = 2;
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(!ReadControllerAimExtension(packet.data(), sizeof(TrackingPayload), decoded));
+    CHECK(decoded.validMask == 0);
+    CHECK(!ReadControllerAimExtension(packet.data(), offset, decoded));
+    CHECK(!ReadControllerAimExtension(packet.data(), offset + sizeof(source) - 1, decoded));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 3);
+    CHECK(decoded.poses[1].orientation[3] == 1);
+    source.poses[0].orientation[0] = std::numeric_limits<float>::quiet_NaN();
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 2);
+    source.poses[1].position[0] = std::numeric_limits<float>::infinity();
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 0);
+    CHECK(!ReadControllerAimExtension(nullptr, packet.size(), decoded));
+    // Battery and aim together, as the headset sends them: neither overwrites the other.
+    const BatteryPayload battery{kBatteryMagic, {{0.5f, kBatteryValid}, {}, {}}};
+    std::memcpy(packet.data() + sizeof(TrackingPayload) + sizeof(GazePayload), &battery, sizeof(battery));
+    BatteryPayload batteryDecoded{};
+    CHECK(ReadBatteryExtension(packet.data(), packet.size(), batteryDecoded));
+    CHECK(batteryDecoded.devices[0].level == 0.5f);
+    source.poses[1].position[0] = 0;
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadControllerAimExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.validMask == 2);
+    CHECK(IsControllerProfilePath("/interaction_profiles/bytedance/pico4_controller"));
+    CHECK(IsControllerProfilePath(""));
+    CHECK(!IsControllerProfilePath("pico4"));
+    std::string embeddedNull = "/interaction_profiles/x";
+    embeddedNull.push_back('\0');
+    embeddedNull += "junk";
+    CHECK(!IsControllerProfilePath(embeddedNull));
+    CHECK(!IsControllerProfilePath("/interaction_profiles/" + std::string(256, 'x')));
+}
+
 static void TestBatteryExtension() {
     CHECK(PicoBatteryLevel(1).level == 0.2f);
     CHECK(PicoBatteryLevel(3).level == 0.6f);
@@ -611,6 +657,7 @@ static void TestBatteryExtension() {
 }
 
 int main() {
+    TestControllerTrackingExtensions();
     TestBatteryExtension();
     TestLinkLocalDiscovery();
     TestMusic();
