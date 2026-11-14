@@ -836,6 +836,19 @@ void ClientSession::StopDesktop() {
 void ClientSession::StartVr() {
     if (m_vr) {
         m_vr->SetPaused(false);
+        if (m_vr->Running()) {
+            // The running stream emits only state changes. Replay its current
+            // state when returning from the desktop, even after a launch error.
+            m_steamVrLaunchNs = 0;
+            {
+                std::lock_guard lock(m_mutex);
+                m_vrState = "running";
+                m_vrProducer = App::Get().Bridge().ActiveProducer() == rcvr::ProducerKind::SteamVR ? "steamvr" : "openxr";
+                m_vrApp = App::Get().Bridge().ApplicationName();
+            }
+            SendControl({{"type", rc::msg::kVrState}, {"state", "running"},
+                         {"producer", m_vrProducer}, {"app", m_vrApp}});
+        }
         return;
     }
     const Settings pc = SettingsStore::Get().Snapshot();
@@ -1048,9 +1061,10 @@ void ClientSession::LaunchSteamVr() {
     if (!steamvr::IsRunning()) {
         steamvr::Launch();
     } else if (App::Get().Bridge().ActiveProducer() != rcvr::ProducerKind::SteamVR) {
-        // SteamVR is running without our HMD (started before the headset connected
-        // or with another driver): restart so it picks up RinCast.
-        steamvr::Restart();
+        m_steamVrLaunchNs = 0;
+        NotifyVrState("error", "steamvr", "",
+                      "SteamVR is not sending frames to RinCast. If it is using PICO Connect or another headset "
+                      "driver, use Restart SteamVR in RinCast to switch to RinCast.");
     }
 }
 
