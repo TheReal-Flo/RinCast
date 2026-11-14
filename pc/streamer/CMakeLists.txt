@@ -26,6 +26,7 @@ add_executable(rincast-streamer WIN32
   src/session/client_session.cpp
   src/input/input_injector.cpp
   src/audio/audio.cpp
+  src/audio/steam_devices.cpp
   src/vr/vr_bridge_host.cpp
   src/vr/face_share.cpp
   src/vr/steamvr.cpp

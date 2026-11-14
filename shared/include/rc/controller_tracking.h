@@ -31,7 +31,8 @@ inline bool NormalizeTrackingPose(Pose& pose) {
 
 inline bool ReadControllerAimExtension(const uint8_t* data, size_t size, ControllerAimPayload& aim) {
     aim = {};
-    constexpr size_t offset = sizeof(TrackingPayload) + sizeof(GazePayload);
+    // After the gaze and the battery block (rc/battery.h), which come first when sent.
+    constexpr size_t offset = sizeof(TrackingPayload) + sizeof(GazePayload) + sizeof(BatteryPayload);
     if (!data || size < offset + sizeof(ControllerAimPayload)) return false;
     std::memcpy(&aim, data + offset, sizeof(aim));
     aim.validMask &= 3;

@@ -1381,6 +1381,18 @@ void App::Frame() {
     }
 
     m_input.Update(frame.predictedDisplayTime);
+    if (const auto now = rc::NowNs(); now - m_batteryAt >= 1'000'000'000LL) {
+        m_batteryAt = now;
+        rc::BatteryPayload next{};
+        next.magic = rc::kBatteryMagic;
+        next.devices[0] = Platform::HeadsetBattery();
+        for (int hand = 0; hand < 2; ++hand) next.devices[hand + 1] = m_input.ControllerBattery(hand);
+        std::lock_guard batteryLock(m_batteryMutex);
+        if (std::memcmp(&next, &m_battery, sizeof(next)) != 0)
+            RC_LOGI("Battery HMD=%.3f/%u left=%.3f/%u right=%.3f/%u", next.devices[0].level, next.devices[0].flags,
+                next.devices[1].level, next.devices[1].flags, next.devices[2].level, next.devices[2].flags);
+        m_battery = next;
+    }
     ProcessNetwork();
     if (m_problem != m_spokenProblem) {
         m_spokenProblem = m_problem;
@@ -1821,7 +1833,9 @@ void App::SendPose(HeldPose& p) {
                                   {pose.position.x, pose.position.y, pose.position.z}};
         }
     }
-    m_client.SendTracking(t, p.hasGaze ? &p.gaze : nullptr, &p.aim);
+    rc::BatteryPayload battery{};
+    { std::lock_guard batteryLock(m_batteryMutex); battery = m_battery; }
+    m_client.SendTracking(t, p.hasGaze ? &p.gaze : nullptr, &battery, &p.aim);
     std::lock_guard lock(m_trackingSentMutex);
     m_trackingSent[t.targetDisplayTimeNs] = int64_t(t.sampleTimeNs);
     while (m_trackingSent.size() > 512) m_trackingSent.erase(m_trackingSent.begin());

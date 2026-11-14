@@ -4,6 +4,22 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 
 ## Unreleased
 
+### Added
+
+- Battery status in SteamVR for Quest and PICO headsets, with PICO controller
+  charge in 20% steps through OpenXR. Last-reported charge remains visible while
+  a connected headset sleeps. Update the APK, PC streamer and driver together.
+  Quest controller batteries are unavailable to ordinary APKs; no VrApi or ADB
+  workaround is used.
+- Install Steam's virtual speakers and microphone from the streamer's Audio page,
+  without starting Remote Play. Only the installer requests administrator rights;
+  RinCast stays unelevated. Uses the driver packages supplied by Steam on x64 Windows.
+  The Audio page asks you to accept the Steam Subscriber Agreement first, and offers to
+  download and start Steam's installer from Valve when Steam isn't on the PC.
+- Explicit Native / Oculus Touch compatibility setting in the Streamer's SteamVR page.
+  Restart SteamVR after changing it. Native mode requires the updated headset app;
+  older headset builds and unsupported native profiles can use Touch compatibility.
+
 ### Fixed
 
 - SteamVR controllers follow the interaction profiles reported by each hand instead of
@@ -11,12 +27,6 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   calibrated grip/aim components; Quest retains its native Touch profiles.
 - Controllers and tracked hands appear only after receiving valid live data from the
   connected headset. Controller state is cleared on disconnect.
-
-### Added
-
-- Explicit Native / Oculus Touch compatibility setting in the Streamer's SteamVR page.
-  Restart SteamVR after changing it. Native mode requires the updated headset app;
-  older headset builds and unsupported native profiles can use Touch compatibility.
 
 ## 1.2.1 - 2026-11-14
 

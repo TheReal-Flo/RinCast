@@ -70,6 +70,20 @@ bool Platform::HasMicPermission() {
     return ok;
 }
 
+rc::BatteryState Platform::HeadsetBattery() {
+    JniScope scope;
+    auto* env = scope.env();
+    if (!env) return {};
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID method = env->GetMethodID(cls, "getHeadsetBattery", "()I");
+    const int value = method ? env->CallIntMethod(g_activity, method) : -1;
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return {}; }
+    if (value < 0 || (value & 255) > 100) return {};
+    return {float(value & 255) / 100.f, rc::kBatteryValid |
+        ((value & 256) ? rc::kBatteryChargingKnown : 0u) | ((value & 512) ? rc::kBatteryCharging : 0u)};
+}
+
 void Platform::SetStreamingLocks(bool enable) {
     JniScope scope;
     JNIEnv* env = scope.env();

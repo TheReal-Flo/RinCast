@@ -117,7 +117,9 @@ class StreamClient {
     void SendControl(const json& message);
     size_t SendQueueChunks();  // chunks waiting to go out (0 when not connected)
     // With where the eyes look appended, for foveated encoding.
-    void SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze = nullptr, const rc::ControllerAimPayload* aim = nullptr);
+    // Optional parts go after the poses in this order: gaze, battery, controller aim.
+    void SendTracking(const rc::TrackingPayload& t, const rc::GazePayload* gaze = nullptr, const rc::BatteryPayload* battery = nullptr,
+                      const rc::ControllerAimPayload* aim = nullptr);
     void SendBody(const rc::BodyTrackingPayload& b);
     void SendFace(const rc::FaceTrackingPayload& f);
     void SendHandSkeleton(const rc::HandSkeletonPayload& h);

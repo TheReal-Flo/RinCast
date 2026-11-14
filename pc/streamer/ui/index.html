@@ -134,6 +134,17 @@
           </div>
           <p class="note" id="audioDevicesHint"></p>
           <p class="note warn" id="audioMissing"></p>
+          <div id="steamAudioSetup" hidden>
+            <h3 data-i18n="audio.setupTitle">Add Steam's audio devices</h3>
+            <p class="note" id="steamAudioIntro"></p>
+            <label class="check"><input type="checkbox" id="acceptSteamTerms"><span data-i18n="audio.acceptTerms">I accept the Steam Subscriber Agreement</span><small><button class="link" id="steamTermsLink" data-i18n="audio.readTerms">Read the agreement</button></small></label>
+            <div class="btns spaced">
+              <button class="btn" id="installSteamAudio" data-i18n="audio.install">Install Steam audio devices</button>
+              <button class="btn" id="installSteam" data-i18n="audio.getSteam">Download and install Steam</button>
+              <button class="btn" id="steamAudioRecheck" data-i18n="audio.checkAgain">Check again</button>
+            </div>
+          </div>
+          <p class="note" id="audioInstallStatus" role="status" aria-live="polite"></p>
         </div>
       </div>
     </section>
