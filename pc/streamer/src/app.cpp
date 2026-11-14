@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "audio/audio.h"
+#include "audio/steam_devices.h"
 #include "rc/platform.h"
 #include "rc/project.h"
 #include "rc/protocol.h"
@@ -270,7 +271,8 @@ json App::StateJson() {
             {"active", Narrow(openxr::ActiveRuntime())}}},
           {"audioDriver",
            {{"speaker", drv.speaker}, {"microphone", drv.microphone}, {"microphoneFeed", drv.microphoneFeed},
-            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed}}},
+            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed},
+                       {"packages", audio::SteamDriverPackagesPresent()}, {"supported", audio::SteamDevicesSupported()}}},
             {"active", {{"speaker", route.speakerSet}, {"microphone", route.micSet}}}}},
           {"addresses", m_cloud.LanAddresses()},
           {"vpnAddresses", vpnAddresses},
@@ -417,6 +419,47 @@ void App::HandleUiMessage(const std::string& text) {
         RunAsync([=, this] {
             const std::string err = m_cloud.ApproveHeadsetCode(code);
             reply({{"ok", err.empty()}, {"error", err}});
+        });
+    } else if (type == "installSteamAudio" || type == "installSteam") {
+        // Steam's devices and Steam itself come under Valve's terms, which the user
+        // accepts on the Audio page first. Not only a disabled button: checked here too.
+        if (!m.value("acceptSteamTerms", false)) {
+            reply({{"ok", false}, {"error", "audio.termsRequired"}});
+            return;
+        }
+        if (type == "installSteam") {
+            RunAsync([=] {
+                const int code = audio::DownloadAndStartSteamSetup();
+                const char* error = code == 0 ? "" :
+                    code == int(TRUST_E_NOSIGNATURE) ? "audio.steamUntrusted" :
+                    code == ERROR_CANCELLED ? "audio.steamCancelled" : "audio.steamDownloadFailed";
+                reply({{"ok", code == 0}, {"error", error}, {"code", code}});
+            });
+            return;
+        }
+        if (m_installingSteamAudio.exchange(true)) {
+            reply({{"ok", false}, {"error", "audio.installBusy"}});
+            return;
+        }
+        RunAsync([=, this] {
+            const int code = audio::InstallSteamDevices();
+            bool ready = false;
+            if (code == 0 || code == ERROR_SUCCESS_REBOOT_REQUIRED) {
+                // Device installation can finish before WASAPI publishes the endpoints.
+                for (int i = 0; i < 20; ++i) {
+                    const auto status = audio::QueryDriver(audio::DeviceSet::Steam);
+                    ready = status.speaker && status.microphone && status.microphoneFeed;
+                    if (ready) break;
+                    Sleep(500);
+                }
+            }
+            const char* error = code == ERROR_CANCELLED ? "audio.installCancelled" :
+                code == ERROR_FILE_NOT_FOUND ? "audio.installMissing" :
+                code == ERROR_NOT_SUPPORTED ? "audio.installUnsupported" :
+                code == ERROR_SUCCESS_REBOOT_REQUIRED ? "audio.installReboot" :
+                code == 0 ? "audio.installNoDevices" : "audio.installFailed";
+            m_installingSteamAudio = false;
+            reply({{"ok", ready}, {"error", error}, {"code", code}});
         });
     } else if (type == "registerSteamVrDriver") {
         RunAsync([=] { reply({{"ok", steamvr::RegisterDriver()}}); });

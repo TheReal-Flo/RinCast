@@ -59,7 +59,7 @@ devices** setting in the streamer has three modes:
 
 Releases don't include the RinCast driver because Windows won't load a kernel
 driver without Microsoft's signature. Steam's devices come with Steam; see
-[how to enable them](docs/BUILDING.md#audio-modes).
+[how to install them](docs/BUILDING.md#audio-modes).
 
 ## Connecting with a USB cable
 

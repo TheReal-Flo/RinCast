@@ -2,6 +2,16 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- Install Steam's virtual speakers and microphone from the streamer's Audio page,
+  without starting Remote Play. Only the installer requests administrator rights;
+  RinCast stays unelevated. Uses the driver packages supplied by Steam on x64 Windows.
+  The Audio page asks you to accept the Steam Subscriber Agreement first, and offers to
+  download and start Steam's installer from Valve when Steam isn't on the PC.
+
 ## 1.2.1 - 2026-11-14
 
 ### Added
