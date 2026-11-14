@@ -142,8 +142,8 @@ WindowHit WindowManager::Raycast(const Vec3& origin, const Vec3& dir) {
         WindowHit h;
         if (HitContent(w, origin, dir, h) && h.distance < best.distance) {
             h.window = &w;
-            h.zone = HitZone::Content;
-            best = h;
+            h.zone = w.zoneAt ? w.zoneAt({h.uv.x * w.canvasW, h.uv.y * w.canvasH}) : HitZone::Content;
+            if (h.zone != HitZone::None) best = h;
         }
         if (w.showChrome && (w.movable || w.resizable)) {
             const Pose cp = w.ChromePose();
@@ -186,10 +186,27 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
         } else if (m_drag.zone == HitZone::Handle) {
             m_drag.distance = std::clamp(m_drag.distance + r.push * dt * 1.6f, 0.35f, 8.f);
             const Vec3 grab = r.origin + r.dir * m_drag.distance;
-            const Quat facing = FaceTowards(grab, head.position, &head.orientation);
+            const Quat rolled = Quat::AxisAngle({0, 0, 1}, w.roll);
+            const Quat facing = FaceTowards(grab, head.position, &head.orientation) * rolled;
             const Vec3 target = grab + facing.Rotate(m_drag.offsetLocal);
             w.pose.position = Damp(w.pose.position, target, 22.f, dt);
-            w.pose.orientation = Slerp(w.pose.orientation, FaceTowards(w.pose.position, head.position, &head.orientation), Clamp01(dt * 18.f));
+            w.pose.orientation = Slerp(w.pose.orientation, FaceTowards(w.pose.position, head.position, &head.orientation) * rolled, Clamp01(dt * 18.f));
+        } else if (m_drag.zone == HitZone::Tilt) {
+            // Like a steering wheel, still facing you: the corner held follows the ray. Within 3
+            // degrees of level it snaps level (the keyboard's tilt handle).
+            const Quat level = w.pose.orientation * Quat::AxisAngle({0, 0, 1}, -w.roll);
+            const Vec3 n = level.Rotate({0, 0, 1});
+            const float denom = Dot(r.dir, n);
+            if (std::fabs(denom) > 1e-5f) {
+                const Vec3 p = r.origin + r.dir * (Dot(w.pose.position - r.origin, n) / denom);
+                const Vec3 local = level.Conjugate().Rotate(p - w.pose.position);
+                if (std::hypot(local.x, local.y) >= 0.03f) {
+                    const float delta = std::remainder(std::atan2(local.y, local.x) - m_drag.angle0, 2 * kPi);
+                    const float a = std::clamp(m_drag.roll0 + delta, -1.4f, 1.4f);
+                    w.roll = std::fabs(a) < 3 * kPi / 180 ? 0.f : a;
+                    w.pose.orientation = level * Quat::AxisAngle({0, 0, 1}, w.roll);
+                }
+            }
         } else {
             // Resize: measure the pointer's horizontal distance from the window centre on its plane.
             const Vec3 n = w.pose.orientation.Rotate({0, 0, 1});
@@ -210,7 +227,8 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
         for (int h = 0; h < 2; h++) {
             const WindowHit& hit = hits[h];
             if (!hit.window || !hands[h].triggerPressed) continue;
-            if (hit.zone == HitZone::Handle || hit.zone == HitZone::ResizeLeft || hit.zone == HitZone::ResizeRight) {
+            if (hit.zone == HitZone::Handle || hit.zone == HitZone::ResizeLeft || hit.zone == HitZone::ResizeRight ||
+                hit.zone == HitZone::Tilt) {
                 Window& w = *hit.window;
                 m_drag.window = &w;
                 m_drag.hand = h;
@@ -220,6 +238,9 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
                 m_drag.startWidth = w.widthM;
                 const Vec3 local = w.pose.orientation.Conjugate().Rotate(hit.point - w.pose.position);
                 m_drag.startSpan = std::max(0.05f, std::fabs(local.x));
+                const Vec3 level = Quat::AxisAngle({0, 0, 1}, w.roll).Rotate(local);
+                m_drag.angle0 = std::atan2(level.y, level.x);
+                m_drag.roll0 = w.roll;
                 m_hapticPending = true;
                 m_hapticHand = h;
                 break;
@@ -270,6 +291,22 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
                 }
         }
     }
+    // Windows that point for themselves get both hands, wherever they point: a press is theirs
+    // until it's let go.
+    for (auto& w : m_windows) {
+        if (!w->twoHands) continue;
+        for (int h = 0; h < 2; h++) {
+            PointerState& p = w->hands[h];
+            const bool over = !m_drag.window && hits[h].window == w.get() && hits[h].zone == HitZone::Content;
+            p.hovering = over;
+            if (over) p.pos = {hits[h].uv.x * w->canvasW, hits[h].uv.y * w->canvasH};
+            const bool wasDown = p.down;
+            p.down = hands[h].valid && hands[h].triggerDown;
+            p.pressed = over && hands[h].triggerPressed;
+            p.released = hands[h].triggerReleased || (wasDown && !p.down);  // (or the hand went away)
+            p.scroll = 0;
+        }
+    }
     // Chrome hover (for highlighting).
     for (auto& w : m_windows) {
         HitZone hover = HitZone::None;
@@ -318,19 +355,38 @@ void WindowManager::RenderCanvases(float dt, float time) {
         if (w.appear < 0.01f && !w.visible) continue;
         if (w.canvasLayer) continue;
         if (w.showChrome) RenderChrome(w, m_chromeHover[w.id]);
+        w.canvasRedrawn = false;
         if (w.kind != WindowKind::Ui || !w.build) continue;
         const int rw = int(w.canvasW * w.rtScale), rh = int(w.canvasH * w.rtScale);
-        if (w.rt.color.width != rw || w.rt.color.height != rh) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
+        const bool resized = w.rt.color.width != rw || w.rt.color.height != rh;
+        // Drawn every frame only while it can change from one to the next: pointed at (hover,
+        // clicks, scrolling, typing), a moment after, while something on it animates (needsRedraw
+        // from the last drawing) and while it fades in or out. Otherwise ten times a second, soon
+        // enough for news from the PC. All of them every frame, supersampled and mipmapped, kept
+        // the GPU busy for nothing.
+        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
+        const auto active = [](const PointerState& s) { return s.hovering || s.down || s.pressed || s.released; };
+        const bool pointed = active(p) || (w.twoHands && (active(w.hands[0]) || active(w.hands[1])));
+        if (pointed) w.lastPointedTime = time;
+        const bool lively = time - w.lastPointedTime < 0.2f || w.appear < 0.995f || !w.visible;
+        w.pendingDt += dt;
+        if (!resized && !w.needsRedraw && !lively && time - w.lastRedrawTime < 0.1f) continue;
+        const float drawDt = std::min(w.pendingDt, 0.25f);
+        w.pendingDt = 0;
+        w.lastRedrawTime = time;
+        w.needsRedraw = false;
+        w.canvasRedrawn = true;
+        if (resized) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
         glBindFramebuffer(GL_FRAMEBUFFER, w.rt.fbo);
         glClearColor(0, 0, 0, 0);
         glViewport(0, 0, rw, rh);
         glClear(GL_COLOR_BUFFER_BIT);
         // Widgets work in logical px; the renderer supersamples by rtScale.
         m_r->Begin(rw, rh, w.rtScale);
-        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
-        m_ui->Begin(w.id, p, dt, time);
+        m_ui->Begin(w.id, p, drawDt, time);
         w.build(*m_ui, Rect{0, 0, float(w.canvasW), float(w.canvasH)});
         m_ui->End();
+        w.needsRedraw = m_ui->WantsRedraw();  // a spinner, a highlight still fading
         m_r->End();
         glBindTexture(GL_TEXTURE_2D, w.rt.color.id);
         glGenerateMipmap(GL_TEXTURE_2D);

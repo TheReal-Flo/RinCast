@@ -759,6 +759,61 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 ```
 
+## BetterFrame Keyboard
+
+Headset (the keyboard is a port of it). https://github.com/hardwaresteam/BetterFrameKeyboard, release 1.0.0.
+Its layouts, languages, icons and key sounds are exported from its code by `tools/keyboard-assets`
+into `headset/app/src/main/assets/keyboard`, and its layout, drawing and typing code is ported to C++
+in `headset/app/src/main/cpp/keyboard`.
+
+```text
+MIT License
+
+Copyright (c) 2026 BetterFrame Keyboard contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Word lists for swipe typing and word suggestions (wordfreq)
+
+Headset. `headset/app/src/main/assets/keyboard/words`, as BetterFrame Keyboard ships them: made from
+wordfreq by Robyn Speer and contributors (https://github.com/rspeer/wordfreq). Creative Commons
+Attribution-ShareAlike 4.0 (CC BY-SA 4.0), https://creativecommons.org/licenses/by-sa/4.0/; these lists
+are shared under the same licence.
+
+## Unicode emoji data
+
+Headset (the keyboard's emoji, their order and groups). From BetterFrame Keyboard: Unicode emoji-test.txt
+(Emoji 15.1) and the Unicode CLDR. Copyright Unicode, Inc. Unicode License v3,
+https://www.unicode.org/license.txt.
+
+## Noto Color Emoji
+
+Headset (the keyboard's emoji, drawn into `assets/keyboard/emoji-*`). https://github.com/googlefonts/noto-emoji,
+v2.047. Copyright Google LLC. SIL Open Font License 1.1 (text under Noto Sans SC).
+
+## Noto Sans, Noto Sans Arabic, Hebrew, Devanagari and Thai, Noto Sans KR
+
+Headset (baked into the keyboard's text atlas, `assets/keyboard/text.png`). https://github.com/notofonts
+and https://github.com/notofonts/noto-cjk. Copyright the Noto Project Authors and Adobe. SIL Open Font
+License 1.1 (text under Noto Sans SC).
+
 ## Android NDK: libc++ and native_app_glue
 
 Headset. `libc++_shared.so` is LLVM libc++, Apache License 2.0 with LLVM exceptions (https://llvm.org/LICENSE.txt). `android_native_app_glue` is from the Android Open Source Project, Apache License 2.0, full text below.

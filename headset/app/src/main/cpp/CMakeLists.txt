@@ -32,6 +32,10 @@ add_library(rincast SHARED
   platform/jni_bridge.cpp
   ui/ui.cpp
   ui/window.cpp
+  keyboard/keyboard.cpp
+  keyboard/kb_layout.cpp
+  keyboard/kb_swipe.cpp
+  keyboard/kb_sound.cpp
   xr/xr_context.cpp
   xr/xr_loader.cpp
   xr/xr_input.cpp

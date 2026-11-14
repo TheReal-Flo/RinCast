@@ -10,6 +10,12 @@ class AndroidXrHeadset : public Headset {
    public:
     const char* Family() const override { return "Android XR"; }
 
+    // The Galaxy XR, the one Android XR headset so far.
+    bool PanelSize(uint32_t& width, uint32_t& height) const override {
+        width = 3552, height = 3840;
+        return true;
+    }
+
     // Hands are how most people use the Galaxy XR, so this is asked for right away rather than
     // when a feature is turned on. The hand trackers start once it's granted (XrInput retries).
     std::vector<std::string> StartupPermissions() const override { return {"android.permission.HAND_TRACKING"}; }

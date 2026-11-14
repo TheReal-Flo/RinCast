@@ -12,6 +12,7 @@
 #include "platform/jni_bridge.h"
 #include "gfx/sky.h"
 #include "gfx/ui_renderer.h"
+#include "keyboard/keyboard.h"
 #include "nlohmann/json.hpp"
 #include "ui/window.h"
 
@@ -101,6 +102,10 @@ class Headset {
     bool pico = false;
     const char* SettingsName() const { return pico ? Tr("device.pico.settings") : Tr("device.quest.settings"); }
     bool PreferStageSpace() const { return pico; }
+    void FullResolution(const XrContext&, uint32_t& width, uint32_t& height) const {  // Quest 3 or PICO 4
+        width = pico ? 2160 : 2064;
+        height = pico ? 2160 : 2208;
+    }
     bool BodySupported(const XrContext&) const { return true; }
     const char* BodyHint() const { return pico ? Tr("device.pico.bodyHint") : nullptr; }
     std::string BodyStatus() const { return pico ? Trf("device.pico.trackerMany", {{"n", "3"}}) : ""; }
@@ -120,6 +125,8 @@ class XrInput {
 class App {
    public:
     HeadsetSettings settings;
+    kb::Keyboard kb;
+    kb::Keyboard& Kb() { return kb; }
     Mode mode = Mode::Home;
     Discovery lan;
     Cloud account;
@@ -159,7 +166,7 @@ class App {
     void Disconnect() {}
     void LaunchSteamVr() {}
     void LaunchGame(const std::string&) {}
-    void ExitVr() {}
+    void ExitVr(bool = false) {}
     void Recenter() {}
     void UpdateScreenShape(float) {}
     const std::string& ConnectionProblem() const { return problem; }

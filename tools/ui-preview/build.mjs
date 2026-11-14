@@ -64,7 +64,7 @@ for (const dll of ["libEGL", "libGLESv2"]) {
   }
 }
 const includes = [join(gen, "app"), gen, cpp, join(cpp, "app"), join(repo, "shared/include"), join(repo, "third_party"), inc].map((i) => `/I${q(i)}`).join(" ");
-const sources = [join(repo, "tools/ui-preview/main.cpp"), join(gen, "app/screens.cpp"), join(cpp, "app/strings.cpp"), join(cpp, "ui/ui.cpp"), join(cpp, "ui/window.cpp"), join(cpp, "gfx/ui_renderer.cpp"), join(gen, "gfx/gl.cpp"), join(cpp, "stb_impl.cpp")].map(q).join(" ");
+const sources = [join(repo, "tools/ui-preview/main.cpp"), join(gen, "app/screens.cpp"), join(cpp, "app/strings.cpp"), join(cpp, "ui/ui.cpp"), join(cpp, "ui/window.cpp"), join(cpp, "keyboard/keyboard.cpp"), join(cpp, "keyboard/kb_layout.cpp"), join(cpp, "keyboard/kb_swipe.cpp"), join(cpp, "keyboard/kb_sound.cpp"), join(cpp, "gfx/ui_renderer.cpp"), join(gen, "gfx/gl.cpp"), join(cpp, "stb_impl.cpp")].map(q).join(" ");
 // The headset app gets its version from VERSION through CMake; the preview needs it too.
 const version = readFileSync(join(repo, "VERSION"), "utf8").trim();
 lines.push(`cl /nologo /std:c++17 /EHsc /O1 /utf-8 /W0 /DNOMINMAX /DGL_GLEXT_PROTOTYPES /DRINCAST_VERSION_STRING=\\"${version}\\" /Fo:obj\\ ${includes} ${sources} /Fe:ui-preview.exe /link libEGL.lib libGLESv2.lib`);

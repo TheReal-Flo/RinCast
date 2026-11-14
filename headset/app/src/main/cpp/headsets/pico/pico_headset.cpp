@@ -20,6 +20,16 @@ class PicoHeadset : public Headset {
     const char* Family() const override { return "PICO"; }
     const char* SettingsName() const override { return Tr("device.pico.settings"); }
 
+    bool PanelSize(uint32_t& width, uint32_t& height) const override {
+        // The Neo3; the PICO 4 (Pro, Enterprise) and 4 Ultra share their panels.
+        const std::string model = SystemProperty("ro.product.model");
+        if (model.find("Neo3") != std::string::npos || model.find("Neo 3") != std::string::npos)
+            width = 1832, height = 1920;
+        else
+            width = 2160, height = 2160;
+        return true;
+    }
+
     std::vector<ControllerProfile> Controllers() const override {
         // No thumbrest on any of them. The PICO 4 Ultra's controllers have two profiles: PICO's
         // own and the registered one.

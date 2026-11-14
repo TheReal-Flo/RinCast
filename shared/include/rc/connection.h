@@ -52,6 +52,8 @@ class Connection {
 
     // Reliable, ordered JSON message. Thread-safe.
     void SendControl(const std::string& json);
+    // Chunks waiting for window space: a screenshot burst can back this up.
+    size_t SendQueueChunks() const;
 
     // Feed a datagram received from the peer. Returns false if it was not
     // authentic (wrong session or MAC failure).
@@ -112,7 +114,7 @@ class Connection {
     PacketHandler m_onPacket;
 
     // Reliable send state
-    std::mutex m_controlMutex;
+    mutable std::mutex m_controlMutex;
     uint32_t m_nextChunkSeq = 0;
     uint32_t m_nextMessageId = 0;
     std::deque<PendingChunk> m_unacked;     // in flight, ordered by seq

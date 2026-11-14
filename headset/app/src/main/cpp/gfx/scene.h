@@ -58,12 +58,15 @@ class SceneRenderer {
     void DrawKeptMoved(GLuint dstFbo, int dstW, int dstH, float scaleX, float scaleY, float fieldU, float fieldV);
     void UploadMotion(const int8_t* grid, int width, int height);
     void Blit2D(GLuint texture, int width, int height, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
+    // As Blit2D, scaled by `alpha` over cleared black: a window fading in or out as a layer.
+    void Blit2DAlpha(GLuint texture, int width, int height, float alpha);
 
    private:
     Program m_panel2D, m_panelExt, m_beam, m_dot, m_blitExt, m_blit2D, m_blitExtGamma, m_gsr, m_kept, m_keptMoved;
     GLuint m_motionTexture = 0;
     int m_motionWidth = 0, m_motionHeight = 0;
     bool m_upscalerReady = false;
+    bool m_rawSrgbWrites = false;  // GL_EXT_sRGB_write_control: video goes into sRGB images as it is
     GLuint m_gsrTexture = 0, m_gsrFbo = 0;
     int m_gsrWidth = 0, m_gsrHeight = 0;
     GLuint m_gridVao = 0, m_gridVbo = 0;

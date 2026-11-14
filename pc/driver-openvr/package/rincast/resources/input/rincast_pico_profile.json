@@ -1,0 +1,104 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "pico_controller",
+  "device_class": "TrackedDeviceClass_Controller",
+  "resource_root": "vrlink",
+  "driver_name": "rincast",
+  "input_bindingui_mode": "controller_handed",
+  "should_show_binding_errors": true,
+  "remapping": "{rincast}/input/rincast_pico_remapping.json",
+  "legacy_binding": "{vrlink}/input/legacy_bindings_pico_controller.json",
+  "input_bindingui_left": {
+    "image": "{vrlink}/icons/pico4ultracontroller_left.svg"
+  },
+  "input_bindingui_right": {
+    "image": "{vrlink}/icons/pico4ultracontroller_right.svg"
+  },
+  "input_source": {
+    "/input/joystick": {
+      "click": true,
+      "type": "joystick",
+      "touch": true
+    },
+    "/input/trigger": {
+      "click": true,
+      "type": "trigger",
+      "touch": true
+    },
+    "/input/grip": {
+      "click": true,
+      "type": "trigger",
+      "touch": true
+    },
+    "/input/a": {
+      "click": true,
+      "side": "right",
+      "type": "button",
+      "touch": true
+    },
+    "/input/b": {
+      "click": true,
+      "side": "right",
+      "type": "button",
+      "touch": true
+    },
+    "/input/x": {
+      "click": true,
+      "side": "left",
+      "type": "button",
+      "touch": true
+    },
+    "/input/y": {
+      "click": true,
+      "side": "left",
+      "type": "button",
+      "touch": true
+    },
+    "/input/system": {
+      "click": true,
+      "side": "left",
+      "type": "button",
+      "touch": true
+    },
+    "/input/skeleton/left": {
+      "skeleton": "/skeleton/hand/left",
+      "side": "left",
+      "type": "skeleton"
+    },
+    "/input/skeleton/right": {
+      "skeleton": "/skeleton/hand/right",
+      "side": "right",
+      "type": "skeleton"
+    },
+    "/output/haptic": {
+      "type": "vibration"
+    },
+    "/pose/raw": {
+      "type": "pose"
+    },
+    "/pose/base": {
+      "type": "pose"
+    },
+    "/pose/handgrip": {
+      "type": "pose"
+    },
+    "/pose/tip": {
+      "type": "pose"
+    },
+    "/pose/openxr_aim": {
+      "type": "pose"
+    },
+    "/pose/grip": {
+      "type": "pose"
+    },
+    "/pose/openxr_grip": {
+      "type": "pose"
+    }
+  },
+  "default_bindings": [
+    {
+      "app_key": "openvr.component.vrcompositor",
+      "binding_url": "rincast_pico_dashboard.json"
+    }
+  ]
+}

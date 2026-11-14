@@ -2,11 +2,14 @@
 
 #ifdef __ANDROID__
 #include <android_native_app_glue.h>
+#include <dlfcn.h>
+#include <sys/system_properties.h>
 #endif
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <ctime>
 #include <unistd.h>
 
@@ -22,6 +25,42 @@
     } while (0)
 
 namespace rv {
+
+namespace {
+
+// How hot the headset is, as Android rates it: "none", "light", "moderate", "severe"...;
+// "unknown" before Android 11 or without the thermal service. Meta's first answer to heat is
+// lowering a refresh rate above 72 Hz to 72.
+const char* ThermalStatus() {
+#ifdef __ANDROID__
+    using Acquire = void* (*)();
+    using Status = int (*)(void*);
+    static void* lib = dlopen("libandroid.so", RTLD_NOW);
+    static auto acquire = lib ? reinterpret_cast<Acquire>(dlsym(lib, "AThermal_acquireManager")) : nullptr;
+    static auto status = lib ? reinterpret_cast<Status>(dlsym(lib, "AThermal_getCurrentThermalStatus")) : nullptr;
+    static void* manager = acquire ? acquire() : nullptr;
+    if (!manager || !status) return "unknown";
+    static const char* const kNames[] = {"none", "light", "moderate", "severe", "critical", "emergency", "shutdown"};
+    const int s = status(manager);
+    return s >= 0 && s < int(std::size(kNames)) ? kNames[s] : "unknown";
+#else
+    return "unknown";
+#endif
+}
+
+// A developer setting (adb, SideQuest, Meta Quest Developer Hub) that sets the display's
+// rate whatever an app asks for. Empty when not set.
+std::string RefreshRateOverride() {
+#ifdef __ANDROID__
+    char value[PROP_VALUE_MAX] = {};
+    __system_property_get("debug.oculus.refreshRate", value);
+    return value;
+#else
+    return {};
+#endif
+}
+
+}  // namespace
 
 const char* XrResultString(XrResult r) {
     switch (r) {
@@ -262,6 +301,14 @@ bool XrContext::CreateSession(bool preferStage) {
         enumRates(m_session, 0, &rc, nullptr);
         m_refreshRates.resize(rc);
         enumRates(m_session, rc, &rc, m_refreshRates.data());
+        m_refreshRates.resize(rc);
+        std::string list;
+        for (float r : m_refreshRates) list += (list.empty() ? "" : ", ") + std::to_string(int(std::lround(r)));
+        if (m_refreshRates.empty()) RC_LOGW("Refresh rates: the headset listed none, so only 72 Hz is offered");
+        else RC_LOGI("Refresh rates: %s Hz", list.c_str());
+        if (const std::string forced = RefreshRateOverride(); !forced.empty())
+            RC_LOGW("Refresh rate: the developer setting debug.oculus.refreshRate = %s sets the display's rate, "
+                    "whatever this app asks for", forced.c_str());
     }
     if (m_refreshRates.empty()) m_refreshRates = {72.f};
 
@@ -326,6 +373,7 @@ bool XrContext::CreateAppSpace() {
     if (m_appSpace && rs.referenceSpaceType == m_appSpaceType) return true;
     XrSpace space = XR_NULL_HANDLE;
     XR_CHECK(xrCreateReferenceSpace(m_session, &rs, &space));
+    std::lock_guard lock(m_spaceMutex);
     if (m_appSpace) {
         xrDestroySpace(m_appSpace);
         m_spaceGeneration++;  // like a recenter: windows are placed again
@@ -378,6 +426,7 @@ void XrContext::HandleStateChange(XrSessionState state) {
 #endif
         // Rate requests before the session runs may be ignored.
         if (m_requestedHz > 0) SetRefreshRate(m_requestedHz);
+        SetPerformanceLevels();
     } else if (state == XR_SESSION_STATE_STOPPING) {
         xrEndSession(m_session);
         m_running = false;
@@ -400,6 +449,19 @@ bool XrContext::PollEvents() {
                 RC_LOGI("Reference space %d moved by %.2f m (recentered)%s", int(e->referenceSpaceType),
                         std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z), e->referenceSpaceType == m_appSpaceType ? ", SteamVR's too" : "");
                 m_spaceGeneration++;
+                break;
+            }
+            case XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB: {
+                const auto* e = reinterpret_cast<XrEventDataDisplayRefreshRateChangedFB*>(&ev);
+                // Away from the rate asked for, without being asked: the headset's own doing.
+                m_rateLoweredBySystem = m_targetHz > 0 && std::fabs(e->fromDisplayRefreshRate - m_targetHz) < 0.5f &&
+                                        e->toDisplayRefreshRate < m_targetHz - 0.5f;
+                if (m_rateLoweredBySystem)
+                    RC_LOGW("Refresh rate: the headset lowered it from %.0f to %.0f Hz itself (heat: %s; Meta's first step "
+                            "against heat is 72 Hz)", e->fromDisplayRefreshRate, e->toDisplayRefreshRate, ThermalStatus());
+                else
+                    RC_LOGI("Refresh rate changed from %.0f to %.0f Hz (heat: %s)", e->fromDisplayRefreshRate,
+                            e->toDisplayRefreshRate, ThermalStatus());
                 break;
             }
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
@@ -486,7 +548,8 @@ bool XrContext::LocateSpace(XrSpace space, XrTime time, Pose& pose, Vec3* linVel
     XrSpaceVelocity vel{XR_TYPE_SPACE_VELOCITY};
     XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
     if (linVel || angVel) loc.next = &vel;
-    if (XR_FAILED(xrLocateSpace(space, m_appSpace, time, &loc))) return false;
+    std::lock_guard lock(m_spaceMutex);
+    if (!m_appSpace || XR_FAILED(xrLocateSpace(space, m_appSpace, time, &loc))) return false;
     const bool valid = (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                        (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
     if (!valid) return false;
@@ -599,19 +662,24 @@ void XrContext::EndFrame(const FrameState& frame, const std::vector<const XrComp
 float XrContext::RefreshRate() const {
     if (!HasExtension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)) return 72.f;
     auto get = GetProc<PFN_xrGetDisplayRefreshRateFB>(m_instance, "xrGetDisplayRefreshRateFB");
-    float hz = 72.f;
-    if (get) get(m_session, &hz);
+    // 0 when it can't be read: a failed read reported as 72 would send the PC to 72 for nothing.
+    float hz = 0;
+    if (!get || XR_FAILED(get(m_session, &hz))) return 0;
     return hz;
 }
 
-void XrContext::SetStreamingPerformance(bool streaming) {
+// Sustained low, always. It is a range the headset scales within, not a fixed clock: on a Quest
+// CPU levels 2 to 4 and GPU 1 to 4, raised as soon as the work needs it. Sustained high pins the
+// CPU at 4 and keeps the GPU at 3 or more, the same ceilings with a far higher floor, and the
+// headsets ran hot with it while streaming. It is also what a Quest app gets that asks for
+// nothing, so this is asked for as soon as the session runs.
+void XrContext::SetPerformanceLevels() {
     if (!HasExtension(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME) || !m_running) return;
     auto set = GetProc<PFN_xrPerfSettingsSetPerformanceLevelEXT>(m_instance, "xrPerfSettingsSetPerformanceLevelEXT");
     if (!set) return;
-    const XrPerfSettingsLevelEXT level = streaming ? XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT : XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT;
-    set(m_session, XR_PERF_SETTINGS_DOMAIN_CPU_EXT, level);
-    set(m_session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT, level);
-    RC_LOGI("Performance level: %s", streaming ? "sustained high" : "sustained low");
+    set(m_session, XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
+    set(m_session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
+    RC_LOGI("Performance level: sustained low");
 }
 
 void XrContext::SetRefreshRate(float hz) {
@@ -621,11 +689,36 @@ void XrContext::SetRefreshRate(float hz) {
     float best = m_refreshRates.empty() ? hz : m_refreshRates[0];
     for (float r : m_refreshRates)
         if (std::fabs(r - hz) < std::fabs(best - hz)) best = r;
+    m_targetHz = best;
     auto set = GetProc<PFN_xrRequestDisplayRefreshRateFB>(m_instance, "xrRequestDisplayRefreshRateFB");
     if (set) {
         const XrResult r = set(m_session, best);
         if (XR_FAILED(r)) RC_LOGW("Refresh rate %.0f Hz refused: %s", best, XrResultString(r));
+        else RC_LOGI("Refresh rate: %.0f Hz asked for, %.0f Hz now", best, RefreshRate());
     }
+}
+
+// A request the runtime took but never applied leaves the display at its default 72 Hz while
+// the PC renders at the rate asked for: 90 frames a second into 72 shows four in five, a
+// stutter whenever the view moves. Look every two seconds and ask again.
+void XrContext::KeepRefreshRate() {
+    if (!m_running || m_targetHz <= 0) return;
+    const int64_t now = rc::NowNs();
+    // Lowered by the headset itself (heat): it gives the rate back when it cools down, so ask
+    // rarely; asking every two seconds only fills the log.
+    const int64_t interval = m_rateLoweredBySystem ? 30'000'000'000LL : 2'000'000'000LL;
+    if (now - m_refreshCheckNs < interval) return;
+    m_refreshCheckNs = now;
+    const float hz = RefreshRate();
+    if (hz <= 0 || std::fabs(hz - m_targetHz) < 0.5f) {
+        if (hz > 0) m_rateLoweredBySystem = false;
+        return;
+    }
+    auto set = GetProc<PFN_xrRequestDisplayRefreshRateFB>(m_instance, "xrRequestDisplayRefreshRateFB");
+    const XrResult r = set ? set(m_session, m_targetHz) : XR_ERROR_FUNCTION_UNSUPPORTED;
+    const std::string forced = RefreshRateOverride();
+    RC_LOGW("Refresh rate %.0f Hz instead of %.0f, asked again: %s (heat: %s%s%s)", hz, m_targetHz, XrResultString(r),
+            ThermalStatus(), forced.empty() ? "" : "; developer setting debug.oculus.refreshRate = ", forced.c_str());
 }
 
 void XrContext::SetPassthrough(bool enable) {

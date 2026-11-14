@@ -18,9 +18,12 @@ json HeadsetSettings::ToJson() const {
             {"language", language},
             {"vrQuality", vrQuality},
             {"vrScale", vrScale},
+            {"vrScaleOfPanel", vrScaleOfPanel},
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
             {"autoConnect", autoConnect},
+            {"autoSendScreenshots", autoSendScreenshots},
+            {"autoLaunchSteamVr", autoLaunchSteamVr},
             {"usbCable", usbCable},
             {"refreshRate", refreshRate},
             {"codec", codec},
@@ -30,6 +33,7 @@ json HeadsetSettings::ToJson() const {
             {"desktopFps", desktopFps},
             {"curvature", curvature},
             {"sharpLayers", sharpLayers},
+            {"desktopInput", desktopInput},
             {"upscaling", upscaling},
             {"frameGeneration", frameGeneration},
             {"bodyTracking", bodyTracking},
@@ -57,7 +61,8 @@ json HeadsetSettings::ToJson() const {
             {"cloudRefreshToken", cloudRefreshToken},
             {"cloudUserName", cloudUserName},
             {"lastPc", lastPc},
-            {"lastPcAddress", lastPcAddress}};
+            {"lastPcAddress", lastPcAddress},
+            {"keyboard", keyboard.ToJson()}};
 }
 
 void HeadsetSettings::FromJson(const json& j) {
@@ -81,10 +86,14 @@ void HeadsetSettings::FromJson(const json& j) {
             if (vrQuality == presets[i]) vrScale = scales[i];
     }
     get("vrScale", vrScale);
+    // Saved before 1.2.0: of the runtime's recommended size; App::Init converts it.
+    vrScaleOfPanel = j.value("vrScaleOfPanel", false);
     SetVrScale(vrScale);
     get("matchSteamVr", matchSteamVr);
     get("gazeFoveation", gazeFoveation);
     get("autoConnect", autoConnect);
+    get("autoSendScreenshots", autoSendScreenshots);
+    get("autoLaunchSteamVr", autoLaunchSteamVr);
     get("usbCable", usbCable);
     get("refreshRate", refreshRate);
     get("codec", codec);
@@ -94,6 +103,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("desktopFps", desktopFps);
     get("curvature", curvature);
     get("sharpLayers", sharpLayers);
+    get("desktopInput", desktopInput);
     get("upscaling", upscaling);
     get("frameGeneration", frameGeneration);
     get("bodyTracking", bodyTracking);
@@ -123,6 +133,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("cloudUserName", cloudUserName);
     get("lastPc", lastPc);
     get("lastPcAddress", lastPcAddress);
+    if (j.contains("keyboard")) keyboard.FromJson(j["keyboard"]);
 }
 
 json HeadsetSettings::StreamSettingsJson() const {

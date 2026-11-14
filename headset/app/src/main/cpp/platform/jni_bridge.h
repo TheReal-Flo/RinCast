@@ -9,6 +9,7 @@
 
 #include <string>
 #include <vector>
+#include "rc/protocol.h"
 
 struct android_app;
 
@@ -33,6 +34,7 @@ class Platform {
     // The system's language as a BCP 47 tag, e.g. "zh-CN"; "en" when it can't be asked.
     static std::string SystemLocale();
     static bool HasMicPermission();
+    static rc::BatteryState HeadsetBattery();
     static void SetStreamingLocks(bool enable);
     enum class Sound { Click = 0, Connected = 1, Problem = 2 };
     static void PlaySound(Sound sound);
@@ -48,6 +50,8 @@ class Platform {
     };
     static UsbNetwork GetUsbNetwork();
     static void Speak(const std::string& text);  // needs a text-to-speech engine on the headset
+    static bool ScreenshotStorageOk();   // can we read shared storage for screenshots?
+    static void OpenStorageSettings();   // the system page that grants it
     // Blocking; call from worker threads only.
     static HttpResult Http(const std::string& method, const std::string& url, const std::string& body,
                            const std::string& bearer, int timeoutMs);

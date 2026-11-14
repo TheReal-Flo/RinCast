@@ -1,0 +1,4 @@
+Word lists for swipe typing (one file per language, most common words first) were made from wordfreq
+by Robyn Speer and contributors: https://github.com/rspeer/wordfreq
+wordfreq's data is licensed under the Creative Commons Attribution-ShareAlike 4.0 license (CC-BY-SA 4.0),
+https://creativecommons.org/licenses/by-sa/4.0/ ; these lists are shared under the same license.

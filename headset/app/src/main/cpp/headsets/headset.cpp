@@ -1,5 +1,9 @@
 #include "headset.h"
 
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 
@@ -8,9 +12,22 @@
 
 namespace rv {
 
+std::string SystemProperty(const char* name) {
+#ifdef __ANDROID__
+    char value[PROP_VALUE_MAX] = {};
+    __system_property_get(name, value);
+    return value;
+#else
+    (void)name;
+    return {};
+#endif
+}
+
 std::vector<const char*> Headset::Extensions() {
     return {
         // Quest
+        XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME,
+        XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME,
         XR_FB_BODY_TRACKING_EXTENSION_NAME,
         XR_META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
         XR_META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,

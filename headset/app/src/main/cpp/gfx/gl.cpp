@@ -76,6 +76,21 @@ bool LoadImageTexture(const std::vector<uint8_t>& file, int channels, bool srgb,
     int w = 0, h = 0, n = 0;
     stbi_uc* pixels = stbi_load_from_memory(file.data(), int(file.size()), &w, &h, &n, channels);
     if (!pixels) return false;
+    UploadImageTexture(pixels, w, h, channels, srgb, mipmaps, out);
+    stbi_image_free(pixels);
+    return true;
+}
+
+std::vector<uint8_t> DecodeImage(const std::vector<uint8_t>& file, int channels, int& w, int& h) {
+    int n = 0;
+    stbi_uc* pixels = stbi_load_from_memory(file.data(), int(file.size()), &w, &h, &n, channels);
+    if (!pixels) return {};
+    std::vector<uint8_t> out(pixels, pixels + size_t(w) * h * channels);
+    stbi_image_free(pixels);
+    return out;
+}
+
+void UploadImageTexture(const uint8_t* pixels, int w, int h, int channels, bool srgb, bool mipmaps, Texture& out) {
     glGenTextures(1, &out.id);
     glBindTexture(GL_TEXTURE_2D, out.id);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -90,10 +105,8 @@ bool LoadImageTexture(const std::vector<uint8_t>& file, int channels, bool srgb,
     if (mipmaps) glGenerateMipmap(GL_TEXTURE_2D);
     SetSampling(GL_TEXTURE_2D, mipmaps);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    stbi_image_free(pixels);
     out.width = w;
     out.height = h;
-    return true;
 }
 
 Texture CreateTexture(int width, int height, GLenum internalFormat, bool mipmaps) {
