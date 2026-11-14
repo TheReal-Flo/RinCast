@@ -3,7 +3,7 @@
 #   <bin>/driver/rincast/resources/...
 #   <bin>/driver/rincast/bin/win64/driver_rincast.dll
 add_library(driver_rincast SHARED src/driver.cpp)
-target_include_directories(driver_rincast PRIVATE ../common ${CMAKE_CURRENT_LIST_DIR}/../../third_party)
+target_include_directories(driver_rincast PRIVATE ../common ${CMAKE_CURRENT_LIST_DIR}/../../third_party ${CMAKE_CURRENT_LIST_DIR}/../../shared/include)
 target_compile_definitions(driver_rincast PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(MSVC)
   target_compile_options(driver_rincast PRIVATE /W3 /utf-8 /permissive-)

@@ -163,7 +163,14 @@ rcvr::DisplayConfig VrBridgeHost::LastConfig() const {
 }
 
 void VrBridgeHost::SetHeadsetConnected(bool connected) {
-    if (m_shared) InterlockedExchange(&m_shared->headsetConnected, connected ? 1 : 0);
+    if (!m_shared) return;
+    InterlockedExchange(&m_shared->headsetConnected, connected ? 1 : 0);
+    if (!connected) {
+        rcvr::TrackingSnapshot tracking{};
+        rcvr::ReadTracking(m_shared, tracking);
+        std::memset(tracking.battery, 0, sizeof(tracking.battery));
+        rcvr::WriteTracking(m_shared, tracking);
+    }
 }
 
 void VrBridgeHost::PublishTracking(const rcvr::TrackingSnapshot& snapshot) {
