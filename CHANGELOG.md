@@ -6,6 +6,11 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 
 ### Added
 
+- Battery status in SteamVR for Quest and PICO headsets, with PICO controller
+  charge in 20% steps through OpenXR. Last-reported charge remains visible while
+  a connected headset sleeps. Update the APK, PC streamer and driver together.
+  Quest controller batteries are unavailable to ordinary APKs; no VrApi or ADB
+  workaround is used.
 - Install Steam's virtual speakers and microphone from the streamer's Audio page,
   without starting Remote Play. Only the installer requests administrator rights;
   RinCast stays unelevated. Uses the driver packages supplied by Steam on x64 Windows.

@@ -35,6 +35,21 @@ import java.util.UUID;
  * Native code calls these methods through JNI.
  */
 public class MainActivity extends NativeActivity {
+    // Packed level (low byte) and charging status; -1 means unavailable.
+    public int getHeadsetBattery() {
+        Intent state = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (state == null || !state.getBooleanExtra(android.os.BatteryManager.EXTRA_PRESENT, true)) return -1;
+        int level = state.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+        int scale = state.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+        if (level < 0 || scale <= 0 || level > scale) return -1;
+        int status = state.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, android.os.BatteryManager.BATTERY_STATUS_UNKNOWN);
+        boolean known = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_DISCHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_NOT_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+        return Math.round(100f * level / scale) | (known ? 256 : 0) |
+            (status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ? 512 : 0);
+    }
     static {
         System.loadLibrary("rincast");
     }

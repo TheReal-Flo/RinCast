@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "rc/audio_codec.h"
+#include "rc/battery.h"
 #include "rc/connection.h"
 #include "rc/discovery.h"
 #include "rc/hand_skeleton.h"
@@ -581,7 +582,36 @@ static void TestLinkLocalDiscovery() {
     CHECK(tried == 0 || heard > 0);
 }
 
+static void TestBatteryExtension() {
+    CHECK(PicoBatteryLevel(1).level == 0.2f);
+    CHECK(PicoBatteryLevel(3).level == 0.6f);
+    CHECK(PicoBatteryLevel(5).level == 1.f);
+    for (float level : {0.f, -1.f, 6.f, 2.5f, std::numeric_limits<float>::quiet_NaN()})
+        CHECK(PicoBatteryLevel(level).flags == 0);
+    constexpr size_t offset = sizeof(TrackingPayload) + sizeof(GazePayload);
+    std::vector<uint8_t> packet(offset + sizeof(BatteryPayload));
+    BatteryPayload decoded{}, source{kBatteryMagic, {{0, kBatteryValid}, {0.9f, kBatteryValid | kBatteryCharging}, {1, kBatteryValid | kBatteryChargingKnown | kBatteryCharging}}};
+    std::memcpy(packet.data() + offset, &source, sizeof(source));
+    CHECK(ReadBatteryExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.devices[0].flags == kBatteryValid && decoded.devices[0].level == 0);
+    CHECK(decoded.devices[1].flags == kBatteryValid);  // no inferred charging state
+    CHECK(decoded.devices[2].flags == 7 && decoded.devices[2].level == 1);
+    packet[offset] ^= 1;
+    CHECK(!ReadBatteryExtension(packet.data(), packet.size(), decoded));
+    CHECK(decoded.devices[1].flags == 0);
+    packet[offset] ^= 1;
+    CHECK(!ReadBatteryExtension(packet.data(), offset, decoded));  // old peer
+    CHECK(decoded.devices[0].flags == 0);
+    CHECK(!ReadBatteryExtension(packet.data(), packet.size() - 1, decoded));
+    CHECK(!ReadBatteryExtension(nullptr, packet.size(), decoded));
+    for (float level : {-1.f, 1.01f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()})
+        CHECK(SanitizeBattery({level, kBatteryValid}).flags == 0);
+    CHECK(SanitizeBattery({0.8f, kBatteryChargingKnown | kBatteryCharging}).flags == 0);
+    CHECK(SanitizeBattery({0.8f, kBatteryValid | 0x80000000u}).flags == kBatteryValid);
+}
+
 int main() {
+    TestBatteryExtension();
     TestLinkLocalDiscovery();
     TestMusic();
     TestMotionRuns();

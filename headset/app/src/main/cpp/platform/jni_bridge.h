@@ -9,6 +9,7 @@
 
 #include <string>
 #include <vector>
+#include "rc/protocol.h"
 
 struct android_app;
 
@@ -33,6 +34,7 @@ class Platform {
     // The system's language as a BCP 47 tag, e.g. "zh-CN"; "en" when it can't be asked.
     static std::string SystemLocale();
     static bool HasMicPermission();
+    static rc::BatteryState HeadsetBattery();
     static void SetStreamingLocks(bool enable);
     enum class Sound { Click = 0, Connected = 1, Problem = 2 };
     static void PlaySound(Sound sound);

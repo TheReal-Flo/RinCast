@@ -43,6 +43,7 @@ class XrInput {
         return m_gripSpace[hand] && m_xr->LocateSpace(m_gripSpace[hand], time, pose, linVel, angVel);
     }
     const HandInput& Hand(int i) const { return m_hands[i]; }
+    rc::BatteryState ControllerBattery(int hand) const;
     // A tracked hand's joints at `time`, in app space. False if the hand isn't tracked then.
     bool LocateHandJoints(int hand, XrTime time, rc::Pose joints[rc::kHandJointCount]) const;
     // Tracks hands and controllers together. The Quest's runtime fails if body tracking is
@@ -68,6 +69,7 @@ class XrInput {
     XrAction m_touchPrimary = XR_NULL_HANDLE, m_touchSecondary = XR_NULL_HANDLE, m_touchStick = XR_NULL_HANDLE,
              m_touchTrigger = XR_NULL_HANDLE, m_touchThumbrest = XR_NULL_HANDLE;
     XrAction m_haptic = XR_NULL_HANDLE;
+    XrAction m_battery[2] = {};
     XrSpace m_aimSpace[2] = {}, m_gripSpace[2] = {};
     XrAction m_gazePose = XR_NULL_HANDLE;
     XrSpace m_gazeSpace = XR_NULL_HANDLE;

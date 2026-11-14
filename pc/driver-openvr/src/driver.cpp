@@ -29,6 +29,7 @@
 #include "hand_poses.h"
 #include "openvr/openvr_driver.h"
 #include "vr_bridge.h"
+#include "rc/battery.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -38,6 +39,43 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+class BatteryProperties {
+   public:
+    void Reset() { m_flags = ~0u; }
+    void Update(uint32_t id, rc::BatteryState state) {
+        if (id == vr::k_unTrackedDeviceIndexInvalid) return;
+        state = rc::SanitizeBattery(state);
+        if (m_flags == state.flags && m_level == state.level) return;
+        auto* properties = vr::VRProperties();
+        const auto container = properties->TrackedDeviceToPropertyContainer(id);
+        if (state.flags & rc::kBatteryValid) {
+            properties->SetFloatProperty(container, vr::Prop_DeviceBatteryPercentage_Float, state.level);
+            if (state.flags & rc::kBatteryChargingKnown)
+                properties->SetBoolProperty(container, vr::Prop_DeviceIsCharging_Bool, (state.flags & rc::kBatteryCharging) != 0);
+            else properties->EraseProperty(container, vr::Prop_DeviceIsCharging_Bool);
+            properties->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
+        } else {
+            properties->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, false);
+            properties->EraseProperty(container, vr::Prop_DeviceBatteryPercentage_Float);
+            properties->EraseProperty(container, vr::Prop_DeviceIsCharging_Bool);
+        }
+        m_flags = state.flags;
+        m_level = state.level;
+    }
+   private:
+    uint32_t m_flags = ~0u;
+    float m_level = 0;
+};
+
+rc::BatteryState LiveBattery(const rcvr::TrackingSnapshot& tracking, int device, bool connected) {
+    const auto age = rcvr::QpcNowNs() - tracking.receivedPcNs;
+    // A sleeping headset stops tracking while its network session stays alive.
+    // Battery state is last-reported telemetry, not a pose: retain it until a
+    // new sample invalidates it or the headset/session disconnects.
+    if (!connected || tracking.receivedPcNs <= 0 || age < 0) return {};
+    return {tracking.battery[device].level, tracking.battery[device].flags};
+}
 
 void Log(const char* fmt, ...) {
     char buf[1024];
@@ -246,6 +284,7 @@ class Controller : public vr::ITrackedDeviceServerDriver {
 
     vr::EVRInitError Activate(uint32_t id) override {
         m_id = id;
+        m_battery.Reset();
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
         const bool left = m_hand == 0;
@@ -320,6 +359,11 @@ class Controller : public vr::ITrackedDeviceServerDriver {
 
     uint32_t Id() const { return m_id; }
     vr::VRInputComponentHandle_t HapticHandle() const { return m_haptic; }
+
+    void UpdateBattery(const rcvr::TrackingSnapshot& t, bool connected) {
+        const auto flags = t.controllers[m_hand].flags;
+        m_battery.Update(m_id, LiveBattery(t, m_hand + 1, connected && (flags & 1) && !(flags & 4)));
+    }
 
     void Update(const rcvr::TrackingSnapshot& t, const rcvr::HandSnapshot* tracked, bool headsetConnected, double timeOffset) {
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
@@ -422,6 +466,7 @@ class Controller : public vr::ITrackedDeviceServerDriver {
     int m_hand;
     std::string m_serial;
     ModelNames m_names;
+    BatteryProperties m_battery;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
     vr::DriverPose_t m_lastPose{};
     vr::VRInputComponentHandle_t m_system{}, m_systemTouch{}, m_btn1{}, m_btn1Touch{}, m_btn2{}, m_btn2Touch{},
@@ -561,6 +606,7 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
 
     vr::EVRInitError Activate(uint32_t id) override {
         m_id = id;
+        m_battery.Reset();
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
         props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
@@ -906,6 +952,10 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         return m_vsyncEpochNs;
     }
 
+    void UpdateBattery(const rcvr::TrackingSnapshot& t, bool connected) {
+        m_battery.Update(m_id, LiveBattery(t, 0, connected));
+    }
+
     void Update(const rcvr::TrackingSnapshot& t, bool headsetConnected, double timeOffset) {
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         const bool valid = headsetConnected && (t.flags & 1);
@@ -1104,6 +1154,7 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     rcvr::DisplayConfig m_cfg;
     std::mutex m_cfgMutex;  // fov / ipd / refresh can change live (ApplyLiveConfig)
     std::string m_serial;
+    BatteryProperties m_battery;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
     vr::DriverPose_t m_lastPose{};
     std::atomic<int64_t> m_vsyncPeriodNs;
@@ -1351,7 +1402,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             if (wake > now) Sleep(DWORD(std::max<int64_t>(0, (wake - now) / 1'000'000)));
             while (rcvr::QpcNowNs() < wake) YieldProcessor();
 
-            rcvr::TrackingSnapshot t;
+            rcvr::TrackingSnapshot t{};
             const bool have = rcvr::ReadTracking(s, t);
             const bool connected = s->headsetConnected != 0 && g_shared->bridge.StreamerAlive();
             if (connected && have && t.sequence == uint64_t(lastPushed)) poseRepeats++;
@@ -1409,6 +1460,9 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             } else if (!connected && have) {
                 m_hmd->Update(t, false, 0);
             }
+            m_hmd->UpdateBattery(t, have && connected);
+            for (int hand = 0; hand < 2; ++hand)
+                if (m_controllers[hand]) m_controllers[hand]->UpdateBattery(t, have && connected);
             UpdateBodyTrackers(s, connected);
             // While a headset is connected but no picture reaches the streamer, say every 10 s how
             // far SteamVR got: no textures, no layers, no presents, or frames dropped on the way.
