@@ -93,6 +93,7 @@ class App {
     UiSink m_uiSink;
     json m_pendingApproval;
     std::atomic<bool> m_streaming{false};
+    std::atomic<bool> m_installingSteamAudio{false};
     std::mutex m_eventMutex;
     std::vector<json> m_recentEvents;
     std::set<std::string> m_noRemember;  // approved once without "remember"

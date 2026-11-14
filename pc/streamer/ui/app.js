@@ -632,10 +632,29 @@ function renderDependents() {
   setOff($("#micRow"), state.settings.audioDevices === "system");
 }
 
+let installingSteamAudio = false;
+
+$("#installSteamAudio").onclick = async () => {
+  if (installingSteamAudio) return;
+  installingSteamAudio = true;
+  renderAudio();
+  $("#audioInstallStatus").textContent = t("audio.installing");
+  try {
+    const r = await request({ type: "installSteamAudio" }, 90000);
+    $("#audioInstallStatus").textContent = r.ok ? t("audio.installDone") :
+      (r.error?.startsWith("audio.install") ? t(r.error, { code: r.code }) : r.error || t("audio.installFailed", { code: r.code }));
+    await request({ type: "getState" });
+  } finally {
+    installingSteamAudio = false;
+    renderAudio();
+  }
+};
+
 function renderAudio() {
   if (!state) return;
   const a = state.system.audioDriver;
   const steam = a.steam || {};
+  $("#installSteamAudio").disabled = installingSteamAudio || (steam.speaker && steam.microphone);
   const active = a.active || {};
   const row = (ok, name, inUse) => [name, ok ? (inUse ? t("audio.inUse") : t("audio.installed")) : t("audio.notInstalled"), ok ? "" : "no"];
   const rows = [
