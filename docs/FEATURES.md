@@ -22,6 +22,7 @@ RinCast covers much of the same ground as Virtual Desktop; the tables below list
 | Feature | RinCast |
 |---|---|
 | SteamVR support | ✅ SteamVR shows the headset by its model (Quest, Quest 2, Quest Pro, Quest 3, 3S, or the headset's own name) with matching Touch controllers and haptics. |
+| Battery status in SteamVR | ◐ Quest and PICO headsets (charge and charging state); PICO controllers (20% steps). Quest controller batteries unavailable. |
 | OpenXR runtime without SteamVR | ✗ Not in this release. OpenXR games run through SteamVR. |
 | Launch SteamVR from the headset | ✅ The windows hide, the hyperspace tunnel plays, and it fades into the stream once the first frame arrives. |
 | Game library with cover art | ✅ Lists installed Steam VR games with library art. Selecting one launches it. |

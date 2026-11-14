@@ -113,6 +113,40 @@ on that interface, from a socket bound to that network. The streamer joins `ff02
 adapter, again as adapters appear, and answers on an IPv6-only socket on the discovery port. The
 stream then runs to that link-local address, with its scope, like any local connection.
 
+## Battery status
+
+Tracking datagrams may append a zero-filled `GazePayload` (28 bytes, when no gaze
+is available), followed by the optional 28-byte `BatteryPayload`:
+
+```
+magic u32 (0x54424352, RCBT) | headset BatteryState | left BatteryState | right BatteryState
+BatteryState: level float32 (0..1) | flags u32
+```
+
+Flag bits are level valid (1), charging known (2), and charging (4). Each device
+is validated separately; non-finite and out-of-range values are unavailable.
+Missing, truncated or unrecognized battery extensions mean unknown battery state.
+Older receivers can ignore the suffix; wire protocol version remains 3.
+
+The APK samples on its render thread once a second and copies the snapshot to
+its tracking thread under a mutex. PICO's OpenXR `/input/battery/value` returns
+coarse integer levels 1..5, mapped to 20..100%; zero/inactive is unknown. Android
+provides headset charge and charging state for PICO and Quest. USB power alone
+is not interpreted as charging. No Quest controller battery API is registered.
+
+The PC bridge ABI is version 8: update the PC streamer and driver together.
+The driver retains last-reported charge through tracking pauses while the headset
+session stays connected. New invalid samples and disconnects clear the properties.
+Controller battery state is never assigned to tracked bare hands.
+
+Quest's internal controller-status APIs require
+`com.oculus.permission.READ_CONTROLLER_STATUS` (or its
+`horizonos.permission.READ_CONTROLLER_STATUS` equivalent). On the tested Quest 3S
+firmware these are `signature|preinstalled` permissions: a normal installed APK
+cannot obtain them, including through a runtime permission request. The current
+Quest OpenXR runtime does not expose battery state. RinCast therefore leaves
+Quest controller batteries unknown rather than using VrApi, ADB, or another process.
+
 ## Face tracking
 
 `FaceTracking` (24), headset to PC, unreliable, once per frame while face tracking is on:

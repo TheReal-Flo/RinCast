@@ -411,6 +411,9 @@ class App {
     WindowHit m_hits[2];
     WindowManager::HandRay m_rays[2];
     uint32_t m_pointerSeq = 0;
+    std::mutex m_batteryMutex;  // render thread samples; tracking thread sends
+    rc::BatteryPayload m_battery{};
+    int64_t m_batteryAt = 0;
 
     // Transitions
     float m_warp = 0;           // hyperspace visibility

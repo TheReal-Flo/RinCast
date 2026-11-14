@@ -22,6 +22,7 @@
 #include "../vr/steamvr.h"
 #include "../vr/vr_bridge_host.h"
 #include "rc/platform.h"
+#include "rc/battery.h"
 
 namespace rcs {
 
@@ -228,6 +229,10 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
                 std::memcpy(d.pose.linearVelocity, c.linearVelocity, sizeof(float) * 3);
                 std::memcpy(d.pose.angularVelocity, c.angularVelocity, sizeof(float) * 3);
             }
+            rc::BatteryPayload battery{};
+            if (rc::ReadBatteryExtension(payload, size, battery))
+                for (int device = 0; device < 3; ++device)
+                    s.battery[device] = {battery.devices[device].level, battery.devices[device].flags};
             App::Get().Bridge().PublishTracking(s);
             MeasurePoseWait(s.receivedPcNs);
             // Where the eyes look comes after the poses, from headsets doing foveated encoding.

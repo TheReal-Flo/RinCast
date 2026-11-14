@@ -21,7 +21,7 @@ inline constexpr wchar_t kSharedMemoryName[] = L"Local\\RinCastVRBridge.v1";
 inline constexpr wchar_t kFrameReadyEventName[] = L"Local\\RinCastVRFrameReady.v1";
 inline constexpr wchar_t kTrackingEventName[] = L"Local\\RinCastVRTracking.v1";
 inline constexpr uint32_t kMagic = 0x42564352;  // 'RCVB'
-inline constexpr uint32_t kVersion = 5;
+inline constexpr uint32_t kVersion = 8;
 inline constexpr int kFrameSlots = 3;
 inline constexpr int kHapticsRing = 32;
 inline constexpr int kBodyTrackers = 10;  // rc::kBodyTrackerCount
@@ -49,6 +49,11 @@ struct BridgeController {
     BridgePose pose;    // grip pose
 };
 
+struct BridgeBattery {
+    float level;
+    uint32_t flags;  // rc::BatteryFlags
+};
+
 struct TrackingSnapshot {
     uint64_t sequence;               // increments per update
     int64_t receivedPcNs;            // PC QPC ns when the sample arrived
@@ -58,6 +63,7 @@ struct TrackingSnapshot {
     uint32_t reserved;
     BridgePose hmd;
     BridgeController controllers[2];
+    BridgeBattery battery[3];  // headset, left, right
 };
 
 struct BodySnapshot {

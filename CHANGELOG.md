@@ -2,6 +2,16 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- Battery status in SteamVR for Quest and PICO headsets, with PICO controller
+  charge in 20% steps through OpenXR. Last-reported charge remains visible while
+  a connected headset sleeps. Update the APK, PC streamer and driver together.
+  Quest controller batteries are unavailable to ordinary APKs; no VrApi or ADB
+  workaround is used.
+
 ## 1.2.1 - 2026-11-14
 
 ### Added

@@ -283,6 +283,22 @@ struct GazePayload {
 };
 static_assert(sizeof(GazePayload) == 28);
 
+inline constexpr uint32_t kBatteryMagic = 0x54424352;  // RCBT
+enum BatteryFlags : uint32_t {
+    kBatteryValid = 1 << 0,
+    kBatteryChargingKnown = 1 << 1,
+    kBatteryCharging = 1 << 2,
+};
+struct BatteryState {
+    float level;  // 0..1; meaningful only with kBatteryValid
+    uint32_t flags;
+};
+struct BatteryPayload {
+    uint32_t magic;  // kBatteryMagic
+    BatteryState devices[3];  // headset, left physical controller, right physical controller
+};
+static_assert(sizeof(BatteryPayload) == 28);
+
 // --- Tracked hands in games -------------------------------------------------
 inline constexpr int kHandJointCount = 26;  // XR_EXT_hand_tracking
 inline constexpr int kHandBoneCount = 31;   // SteamVR's hand skeleton
