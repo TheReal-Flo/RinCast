@@ -1,12 +1,17 @@
 // RinCast headset application.
 #pragma once
 
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <atomic>
+#include <thread>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../gfx/scene.h"
@@ -94,6 +99,8 @@ class App {
     void LaunchSteamVr();
     void LaunchGame(const std::string& id);
     void ExitVr(bool byUser = false);
+    void StartScreenshotWatch();
+    bool SendScreenshot(const std::string& path, const std::string& name);
     void Recenter();
     // Applies the curve and distance settings to the screens where they are now.
     void UpdateScreenShape(float previousDistance);
@@ -133,6 +140,8 @@ class App {
     const std::deque<Notice>& Notices() const { return m_notices; }
     struct Stats {
         double fps = 0, latencyMs = 0, decodeMs = 0, mbps = 0, rttMs = 0;
+        double targetKbps = 0, pcEncodeMs = 0;  // PC side: the bitrate it aims at, and its encode time
+        int pcFramesLost = 0;
         std::string codec;
         int width = 0, height = 0;
         double stageMs[kStageCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};  // -1: not measured
@@ -151,6 +160,8 @@ class App {
     void Shutdown();
     void HandleAndroidEvents();
     void Frame();
+    nlohmann::json StreamSettingsForPc();
+    void FollowDisplayRate();
     void UpdateInput(const FrameState& frame, float dt);
     void UpdateTracking(const FrameState& frame);
     void UpdateBody(const FrameState& frame);
@@ -166,7 +177,7 @@ class App {
     void LayoutHome(bool force);
     void UpdateMode(float dt);
     void EnterMode(Mode m);
-    void LatchVideo(const FrameState& frame);
+    void LatchVideo(const FrameState& frame, bool late);
     void RenderEyes(const FrameState& frame, float dt);
     void BuildLayers(const FrameState& frame);
     void SendHello();
@@ -183,6 +194,7 @@ class App {
     XrContext m_xr;
     XrInput m_input;
     std::unique_ptr<Headset> m_headset;
+    std::thread m_screenshotThread;  // polls the screenshots folders; joined at shutdown
     bool m_facePermissionAsked = false;
     bool m_gazePermissionAsked = false;
     void UpdateFace(const FrameState& frame);
@@ -202,7 +214,10 @@ class App {
     void ReleaseMicInBackground();
 
     bool m_initialized = false;
-    bool m_exit = false;
+    std::atomic<bool> m_exit = false;
+    // One screenshot at a time: the PC confirms each with screenshot.saved before the next.
+    std::atomic<bool> m_shotSending = false;
+    int64_t m_shotSendingSince = 0;
     bool m_disconnectRequested = false;
     Mode m_mode = Mode::Home;
     float m_modeTime = 0;
@@ -230,9 +245,13 @@ class App {
     // When the PC last reported VR as launching or running (m_time), to tell a VR app that
     // just started from the same one coming back after a stream restart.
     float m_vrLastActive = -1e9f;
+    // The display's rate when it stays off the one asked for (0: it's on it), for the PC to
+    // render at, and since when it has been off (m_time).
+    float m_displayHzForPc = 0;
+    float m_displayOffSince = -1;
+    float m_displayCheckAt = 0;
 
     // Video
-    bool m_streamingPerformance = false;
     std::string m_problem;
     bool m_haveLast = false, m_lastIsCloud = false;
     DiscoveredPc m_lastLan;
@@ -242,6 +261,8 @@ class App {
     float m_gamesRequestedAt = -100;
     bool m_gamesAnswered = false;
     float m_noPcsSince = -1;
+    float m_storageNoticeAt = 0;      // app time to check storage once at (0/-1: done or n/a)
+    bool m_requestedStorage = false;  // asked for the storage permission this session
     float m_abHeld = 0;
     float m_gripsHeld = 0;  // both grips, for the keyboard
     std::string m_spokenProblem;
@@ -299,11 +320,81 @@ class App {
     // Steering the PC's frame timing so frames are decoded just before the late latch.
     void SteerVrTiming(const FrameState& frame);
     int64_t m_lateLatchNs = 0;
+    // Where a VR frame's time on the headset goes, for the log: from waking for a display to
+    // picking the game's picture up, from there to handing it to the compositor, and the GPU's
+    // time drawing it.
+    void TimeVrDraw(bool begin);
+    void LogVrTiming(const FrameState& frame, int64_t wokeNs);
+    int64_t m_vrLatchNs = 0;
+    double m_timingWakeLeadNs = 0, m_timingLatchNs = 0, m_timingSubmitNs = 0, m_timingGpuNs = 0;
+    int m_timingFrames = 0, m_timingGpuFrames = 0;
+    // Where the stream's frames went in the same 5 s: displays, the ones with a new picture,
+    // pictures decoded after the late latch, and the decoder's count when the window began.
+    // Each controller's last tracked pose, kept for SteamVR while it sleeps (UpdateTracking).
+    rc::Pose m_controllerPose[2] = {};
+    bool m_haveControllerPose[2] = {false, false};
+    int m_flowDisplays = 0, m_flowShown = 0, m_flowLate = 0;
+    uint32_t m_flowDecodedStart = 0;
+    double m_flowDecodeMaxMs = 0;
+    int64_t m_timingLogNs = 0;
+    GLuint m_vrTimer = 0;
+    bool m_vrTimerChecked = false, m_vrTimerRunning = false, m_vrTimerPending = false;
     double m_latchLeadNs = 0;          // late latch -> display, averaged
     double m_phaseMarginNs = 3e6;      // how early a frame should be ready, from how much arrivals vary
     std::vector<double> m_phaseErrors;
     int64_t m_phaseSentNs = 0;
+    // What covers the time arrivals vary by: the margin alone, with no picture waiting (0),
+    // or, when no margin shorter than a frame would do, a picture waiting as well (1), which
+    // is how it was before the PC could let waiting pictures run out (CatchUpVr).
+    int m_queueWanted = 1;
+    std::deque<std::pair<int64_t, float>> m_arrivalSpread;  // when measured; ns later than the average arrival
+    void CatchUpVr(VideoDecoder& decoder, int waiting, const FrameState& frame);
+    // The PC moves its frame timing later when asked ("slipNs"), and what it moves, SteamVR's
+    // vsync, is what paces the game. An OpenXR game keeps its own time. Off unless turned on
+    // (debug.rincast.slip): measured on a Quest 3, a picture waiting gave lower latency.
+    bool PcSlips() const {
+        return m_debugSlip && m_serverInfo.value("vrPhaseSlip", false) && m_vrProducer == "steamvr";
+    }
+    int64_t m_behindSinceNs = 0;    // pictures have been waiting since: the 150 ms being looked at
+    int m_behindLeast = 0;          // the fewest waiting in that time
+    int m_behindLatches = 0, m_behindOver = 0;  // displays in that time, and those with more waiting than wanted
+    int64_t m_slipUntilNs = 0;      // the PC is moving its frames later until then
+    int m_slipFrom = 0;             // how many waited when it was asked to
+    int m_slipLeast = 0;            // the fewest waiting since
+    int64_t m_slipRetryNs = 0;      // asking didn't help: not again before
+    std::deque<int64_t> m_slips;    // when it was asked with no picture meant to wait, lately
+    int64_t m_queueKeptUntilNs = 0;  // pictures waited again right after running out: one stays until then
+    // For the log: how long before the late latch each frame was decoded, how many newer
+    // pictures waited when each was taken (0, 1, 2 or more), and how often the PC was asked.
+    std::vector<float> m_flowSlackMs;
+    int m_flowWaiting[3] = {0, 0, 0};
+    int m_flowSlips = 0;
     std::map<uint64_t, int64_t> m_trackingSent;  // target time -> sample time
+    std::mutex m_trackingSentMutex;              // written by whichever thread sends (SendPose)
+    // Tracking can go out from a thread of its own, held back so it reaches the PC just before
+    // SteamVR takes a pose (rc::msg::kVrPoseWait), and with the head and controllers located
+    // again then: games render with a pose sampled that much later. UpdateTracking hands it
+    // each frame's packet.
+    struct HeldPose {
+        rc::TrackingPayload t{};
+        rc::GazePayload gaze{};
+        bool hasGaze = false;
+        rc::ControllerAimPayload aim{};  // validMask 0: none
+        XrTime target = 0;
+        bool relocateHead = false;
+        bool relocateGrip[2] = {false, false};
+        int64_t sendAtNs = 0;
+    };
+    void PoseThread();
+    void SendPose(HeldPose& p);  // either thread
+    void OnPoseWait(const json& m);
+    std::thread m_poseThread;
+    std::mutex m_poseMutex;
+    std::condition_variable m_poseCv;
+    std::optional<HeldPose> m_heldPose;
+    bool m_poseThreadStop = false;
+    double m_poseHoldNs = 0;       // how long poses are held back (main thread)
+    int64_t m_poseWaitNs = -1, m_poseWaitLowNs = 0, m_poseWaitAtNs = 0;  // the PC's last report
 
     // Input state
     struct HandState {
@@ -333,6 +424,9 @@ class App {
     Stats m_stats;
     float m_lastDebugPoll = 0;
     std::string m_debugUi, m_debugTab, m_debugPc;
+    float m_debugPreLatchMs = 0;    // debug.rincast.prelatch_ms
+    bool m_debugSlip = false;       // debug.rincast.slip
+    bool m_debugPoseHold = true;    // debug.rincast.pose_hold
     std::set<std::string> m_placed;  // windows that have been positioned at least once
     int64_t m_statsWindowStart = 0;
     uint32_t m_statsFrames = 0;

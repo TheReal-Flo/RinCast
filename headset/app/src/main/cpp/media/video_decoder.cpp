@@ -99,7 +99,7 @@ bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height, float fps) 
     m_height = height;
     m_fps = fps > 1 ? fps : 90;
     const media_status_t st = AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
-                                                        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 5, &m_reader);
+                                                        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 8, &m_reader);
     if (st != AMEDIA_OK) {
         RC_LOGE("Decoder %s %dx%d: AImageReader_newWithUsage failed (%d)", Mime(codec), width, height, st);
         m_failed = true;
@@ -133,6 +133,8 @@ void VideoDecoder::Shutdown() {
     m_eglImage = EGL_NO_IMAGE_KHR;
     for (auto& [img, egl] : m_retired) ReleaseImage(img, egl);
     m_retired.clear();
+    m_held.clear();  // the decoder's own buffers, gone with it
+    m_behindSinceNs = m_inReaderSinceNs = 0;
     if (m_reader) {
         AImageReader_delete(m_reader);
         m_reader = nullptr;
@@ -259,6 +261,7 @@ void VideoDecoder::OutputLoop() {
                 auto it = m_inputTimes.find(info.presentationTimeUs);
                 if (it != m_inputTimes.end()) {
                     m_decodeMsSum += rc::NsToMs(now - it->second);
+                    m_decodeMsMax = std::max(m_decodeMsMax, rc::NsToMs(now - it->second));
                     m_decodeCount++;
                     m_inputTimes.erase(it);
                 }
@@ -268,7 +271,12 @@ void VideoDecoder::OutputLoop() {
                 auto it = m_infos.find(info.presentationTimeUs);
                 if (it != m_infos.end()) it->second.decodedNs = now;
             }
-            AMediaCodec_releaseOutputBuffer(m_codecHandle, size_t(index), info.size != 0);
+            if (info.size != 0) {
+                std::lock_guard lock(m_heldMutex);
+                m_held.push_back(size_t(index));
+            } else {
+                AMediaCodec_releaseOutputBuffer(m_codecHandle, size_t(index), false);
+            }
             if (!m_decoded++) RC_LOGI("Decoder %s %dx%d: first frame decoded", Mime(m_codec), m_width, m_height);
         } else if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
             AMediaFormat* f = AMediaCodec_getOutputFormat(m_codecHandle);
@@ -277,7 +285,31 @@ void VideoDecoder::OutputLoop() {
         } else if (index != AMEDIACODEC_INFO_TRY_AGAIN_LATER && index != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
             Warn("dequeueOutputBuffer returned an error");
         }
+        std::lock_guard lock(m_heldMutex);
+        HandOver();
     }
+}
+
+// Decoded pictures go to the image reader one at a time, in order, each once the one before
+// was taken. The reader keeps only the newest picture not yet taken: handed over as decoded,
+// two finished between the same two displays (one a little late, the next on time) lost the
+// late one, and the display before repeated its picture. A skip and a stutter together,
+// several times a second on Wi-Fi. Now the newer one waits in the decoder for the next display.
+// That keeps the stream a frame behind until a display comes without a new picture; Latch
+// skips one to catch up when that lasts. Called with m_heldMutex held.
+void VideoDecoder::HandOver() {
+    const int64_t now = rc::NowNs();
+    // A picture handed over but never taken (the reader dropped it): don't wait for it forever.
+    if (m_inReaderSinceNs && now - m_inReaderSinceNs > 100'000'000LL) m_inReaderSinceNs = 0;
+    if (m_inReaderSinceNs || m_held.empty()) return;
+    while (m_held.size() > 2) {
+        AMediaCodec_releaseOutputBuffer(m_codecHandle, m_held.front(), false);
+        m_held.pop_front();
+        m_skipped++;
+    }
+    AMediaCodec_releaseOutputBuffer(m_codecHandle, m_held.front(), true);
+    m_held.pop_front();
+    m_inReaderSinceNs = now;
 }
 
 void VideoDecoder::ReleaseImage(AImage* image, EGLImageKHR egl) {
@@ -289,6 +321,29 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
     if (!m_reader) return false;
     AImage* image = nullptr;
     if (AImageReader_acquireLatestImage(m_reader, &image) != AMEDIA_OK || !image) return false;
+    int waiting = 0;
+    {
+        // Room in the reader again: the next picture the decoder holds goes in (see HandOver).
+        std::lock_guard lock(m_heldMutex);
+        m_inReaderSinceNs = 0;
+        // A newer picture already decoded while this one is shown: the stream runs a frame
+        // behind. After 500 ms of that at every display, skip a picture to catch up: the next
+        // display then shows one decoded after it (no repeat, as one is decoded before each).
+        // Not while that is held off (HoldCatchUp).
+        const int64_t now = rc::NowNs();
+        waiting = int(m_held.size());
+        if (m_held.empty()) {
+            m_behindSinceNs = 0;
+        } else if (!m_behindSinceNs) {
+            m_behindSinceNs = now;
+        } else if (now - m_behindSinceNs > 500'000'000LL && now >= m_catchUpHeldUntilNs) {
+            for (size_t index : m_held) AMediaCodec_releaseOutputBuffer(m_codecHandle, index, false);
+            m_skipped += uint32_t(m_held.size());
+            m_held.clear();
+            m_behindSinceNs = 0;
+        }
+        HandOver();
+    }
     AHardwareBuffer* hb = nullptr;
     AImage_getHardwareBuffer(image, &hb);
     if (!hb || !pCreateImage) {
@@ -351,6 +406,7 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
         out = {};
         out.frameIndex = uint32_t(pts);
     }
+    out.waiting = waiting;
     return true;
 }
 

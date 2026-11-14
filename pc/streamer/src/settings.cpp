@@ -1,17 +1,52 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
+
+#include <shlobj.h>
 
 #include "rc/platform.h"
 
 namespace rcs {
 
+std::string HeadsetName(const std::string& model) {
+    if (model.empty()) return {};
+    // PICO sells under model codes; these are the ones their own manuals and certificates use.
+    static const struct {
+        const char* code;
+        const char* name;
+    } kModels[] = {
+        {"A8110", "PICO 4"},        // PICO 4, 4 Pro and 4 Enterprise
+        {"A9210", "PICO 4 Ultra"},  // also sold as PICO 4S in some markets
+        {"A7H10", "PICO Neo 3"},
+        {"A7Q10", "PICO G3"},
+    };
+    for (const auto& m : kModels)
+        if (model == m.code) return m.name;
+    if (model.rfind("A8", 0) == 0 || model.rfind("A9", 0) == 0 || model.rfind("A7", 0) == 0) return "PICO " + model;
+    return model;
+}
+
+std::string DefaultScreenshotDir() {
+    // The shell knows where Pictures is: it may be moved, renamed or on another drive.
+    PWSTR known = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &known))) {
+        std::string dir = Narrow(known) + "/RinCast";
+        CoTaskMemFree(known);
+        return dir;
+    }
+    const char* profile = getenv("USERPROFILE");
+    return std::string(profile ? profile : "") + "/Pictures/RinCast";
+}
+
 json Settings::ToJson(bool forUi) const {
     json devices = json::array();
-    for (const auto& d : trustedDevices)
-        devices.push_back({{"id", d.id}, {"name", d.name}, {"model", d.model}, {"firstSeen", d.firstSeen},
+    for (const auto& d : trustedDevices) {
+        const std::string shown = HeadsetName(d.model).empty() ? d.name : HeadsetName(d.model);
+        devices.push_back({{"id", d.id}, {"name", shown}, {"model", d.model}, {"firstSeen", d.firstSeen},
                            {"lastSeen", d.lastSeen}, {"publicKey", d.publicKey}});
+    }
     json j{
         {"serverId", serverId},
         {"pcName", pcName},
@@ -41,6 +76,7 @@ json Settings::ToJson(bool forUi) const {
         {"autoRegisterSteamVrDriver", autoRegisterSteamVrDriver},
         {"controllerMode", controllerMode},
         {"cloudUrl", cloudUrl},
+        {"screenshotDir", screenshotDir},
         {"allowRemote", allowRemote},
         {"cloudUserName", cloudUserName},
         {"cloudEmail", cloudEmail},
@@ -86,6 +122,7 @@ void Settings::FromJson(const json& j) {
     get("controllerMode", controllerMode);
     if (controllerMode != "native" && controllerMode != "touch") controllerMode = "native";
     get("cloudUrl", cloudUrl);
+    get("screenshotDir", screenshotDir);
     get("allowRemote", allowRemote);
     get("cloudRefreshTokenProtected", cloudRefreshTokenProtected);
     get("cloudUserName", cloudUserName);
@@ -97,6 +134,8 @@ void Settings::FromJson(const json& j) {
             td.id = d.value("id", "");
             td.name = d.value("name", "");
             td.model = d.value("model", "");
+            const std::string mapped = HeadsetName(td.model);
+            if (!mapped.empty()) td.name = mapped;
             td.firstSeen = d.value("firstSeen", int64_t(0));
             td.lastSeen = d.value("lastSeen", int64_t(0));
             td.publicKey = d.value("publicKey", "");
@@ -111,6 +150,9 @@ void Settings::FromJson(const json& j) {
     if (openxrRuntime != "rincast" && openxrRuntime != "steamvr") openxrRuntime = "steamvr";
     if (audioDevices != "auto" && audioDevices != "rincast" && audioDevices != "steam" && audioDevices != "system")
         audioDevices = "auto";
+    // An empty folder used to mean "the default" quietly. Say the default instead, so
+    // what the UI shows and where screenshots land can never disagree.
+    if (screenshotDir.empty()) screenshotDir = DefaultScreenshotDir();
 }
 
 SettingsStore& SettingsStore::Get() {

@@ -11,12 +11,14 @@
 #include <media/NdkMediaCodec.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <map>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../gfx/gl.h"
@@ -35,6 +37,7 @@ struct DecodedFrameInfo {
     std::vector<uint8_t> metadata;   // VrFrameMetadata / DesktopFrameMetadata
     int64_t receivedNs = 0;          // all fragments arrived
     int64_t decodedNs = 0;           // decoder output
+    int waiting = 0;                 // pictures decoded after this one, still waiting when it was taken
 };
 
 class VideoDecoder {
@@ -71,11 +74,21 @@ class VideoDecoder {
 
     // Statistics (thread-safe).
     double AverageDecodeMs();
+    // The slowest decode since the last call.
+    double TakeMaxDecodeMs() {
+        std::lock_guard lock(m_statsMutex);
+        return std::exchange(m_decodeMsMax, 0.0);
+    }
     bool NeedsKeyframe() { return m_needKeyframe.exchange(false); }
     bool Failed() const { return m_failed; }
     // For explaining a missing picture: did the decoder start, and has it produced anything.
     bool Started() const { return m_configured; }
     uint32_t DecodedFrames() const { return m_decoded; }
+    // Decoded pictures never shown: skipped to catch up, or more waiting than a display can take.
+    uint32_t SkippedFrames() const { return m_skipped; }
+    // Until then (rc::NowNs), Latch skips no waiting picture to catch up: whoever calls has
+    // another way to let them run out, or a reason to keep one waiting.
+    void HoldCatchUp(int64_t untilNs) { m_catchUpHeldUntilNs = untilNs; }
 
    private:
     bool Configure(const std::vector<uint8_t>& keyframe);
@@ -123,6 +136,8 @@ class VideoDecoder {
     std::atomic<bool> m_failed{false};
     std::atomic<bool> m_needKeyframe{false};
     std::atomic<uint32_t> m_decoded{0};
+    std::atomic<uint32_t> m_skipped{0};
+    std::atomic<int64_t> m_catchUpHeldUntilNs{0};
     void Warn(const char* what);  // at most every 5 s per reason
 
     struct Pending {
@@ -149,10 +164,16 @@ class VideoDecoder {
     AImage* m_image = nullptr;
     EGLImageKHR m_eglImage = EGL_NO_IMAGE_KHR;
     std::deque<std::pair<AImage*, EGLImageKHR>> m_retired;
+    // Decoded pictures still in the decoder, oldest first (see HandOver).
+    void HandOver();
+    std::mutex m_heldMutex;
+    std::deque<size_t> m_held;
+    int64_t m_behindSinceNs = 0;    // a newer picture was waiting at every display since
+    int64_t m_inReaderSinceNs = 0;  // handed to the reader, not taken yet
 #endif
 
     std::mutex m_statsMutex;
-    double m_decodeMsSum = 0;
+    double m_decodeMsSum = 0, m_decodeMsMax = 0;
     int m_decodeCount = 0;
     std::map<int64_t, int64_t> m_inputTimes;  // pts -> queued time
 };

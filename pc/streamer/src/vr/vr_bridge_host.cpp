@@ -1,10 +1,12 @@
 #include "vr_bridge_host.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <utility>
 
 #include "../settings.h"
 #include "rc/platform.h"
+#include "rc/protocol.h"
 
 namespace rcs {
 
@@ -229,6 +231,24 @@ void VrBridgeHost::ShiftVsync(int64_t shiftNs) {
     m_driftNsPerS = std::clamp(m_driftNsPerS.load() + 0.2 * s, -2e6, 2e6);
 }
 
+void VrBridgeHost::SlipVsync(int64_t slipNs) {
+    if (slipNs <= 0) return;
+    // A few frames at most: more than that waiting is no longer a matter of timing.
+    m_pendingSlipNs = std::min(m_pendingSlipNs.load() + double(slipNs), 50e6);
+}
+
+bool VrBridgeHost::PoseWaitNs(int64_t atNs, int64_t& waitNs, int64_t& periodNs) const {
+    if (ActiveProducer() != rcvr::ProducerKind::SteamVR) return false;
+    const float rate = m_shared->config.refreshRate;
+    const int64_t epoch = m_shared->vsyncEpochNs;
+    if (rate <= 1 || !epoch) return false;
+    // As the driver's TrackingLoop counts: vsyncs at epoch + k * period, poses read 1 ms before.
+    periodNs = int64_t(1e9 / rate);
+    const int64_t pickup = epoch - 1'000'000;
+    waitNs = ((pickup - atNs) % periodNs + periodNs) % periodNs;
+    return true;
+}
+
 void VrBridgeHost::SetHapticHandler(HapticHandler h) {
     std::lock_guard lock(m_mutex);
     m_onHaptic = std::move(h);
@@ -273,6 +293,13 @@ void VrBridgeHost::HeartbeatLoop() {
         const int64_t now = rcvr::QpcNowNs();
         // The driver's vsyncs fall on vsyncEpochNs + k * period.
         phaseNs += m_pendingShiftNs.exchange(0) + m_driftNsPerS.load() * double(now - lastPhase) / 1e9;
+        // A slip in small steps, so no vsync comes much later than the one before: games see a
+        // frame rate a few percent lower for a moment, not a frame missing.
+        if (const double slip = m_pendingSlipNs.load(); slip > 0) {
+            const double step = std::min(slip, rc::kVrPhaseSlipRate * double(now - lastPhase));
+            phaseNs += step;
+            m_pendingSlipNs.fetch_sub(step);
+        }
         lastPhase = now;
         InterlockedExchange64(&m_shared->vsyncEpochNs, m_epochBaseNs + int64_t(phaseNs));
         if (now - lastBeat > 100'000'000LL) {

@@ -10,6 +10,7 @@
 
 #include "xr_loader.h"  // OpenXR itself, from the loader picked at run time
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -92,13 +93,13 @@ class XrContext {
     std::vector<float> RefreshRates() const { return m_refreshRates; }
     float RefreshRate() const;
     void SetRefreshRate(float hz);
+    void KeepRefreshRate();  // once a frame: asks again while the display isn't at the rate asked for
 
     // Passthrough (XR_FB_passthrough)
     bool PassthroughSupported() const { return m_passthrough != XR_NULL_HANDLE || m_alphaBlend; }
     void SetPassthrough(bool enable);
-    // Sustained CPU and GPU clocks while streaming; decoding and networking can't catch up
-    // after a clock drop without visible hitches.
-    void SetStreamingPerformance(bool streaming);
+    // The lowest CPU and GPU levels the headset scales up from as needed (see the .cpp).
+    void SetPerformanceLevels();
     bool PassthroughActive() const { return m_passthroughActive; }
 
     XrInstance Instance() const { return m_instance; }
@@ -138,6 +139,8 @@ class XrContext {
     XrSystemId m_system = XR_NULL_SYSTEM_ID;
     XrSession m_session = XR_NULL_HANDLE;
     XrSpace m_appSpace = XR_NULL_HANDLE;
+    // LocateSpace runs on the app's pose thread as well: the app space isn't replaced under it.
+    std::mutex m_spaceMutex;
     XrReferenceSpaceType m_appSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     bool m_preferStage = false;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
@@ -151,6 +154,9 @@ class XrContext {
     XrSwapchainGl m_eyes[2];
     std::vector<float> m_refreshRates;
     float m_requestedHz = 0;
+    float m_targetHz = 0;  // the supported rate nearest m_requestedHz
+    int64_t m_refreshCheckNs = 0;
+    bool m_rateLoweredBySystem = false;  // the headset moved the display off the rate asked for (heat)
     bool m_cylinder = false;
     // Linux: the runtime takes the GL ES context under XR_KHR_opengl_enable (no ES extension).
     bool m_glNotEs = false;

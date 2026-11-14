@@ -653,8 +653,8 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     changed |= CheckRow(ui, c, "handsgames", Tr("vr.handsInGames"), s.handsInGames, Tr("vr.handsHint"));
     if (device.FaceSupported(app.Xr()))
         changed |= CheckRow(ui, c, "face", Tr("vr.faceTracking"), s.faceTracking, device.FaceHint());
-    if (app.GazeSupported())
-        changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation, Tr("vr.foveatedHint"));
+    changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation,
+                        Tr(app.GazeSupported() ? "vr.foveatedHint" : "vr.foveatedFixedHint"));
     return changed;
 }
 
@@ -891,6 +891,8 @@ bool PageGeneral(Ui& ui, const Rect& body) {
         s.scrollSpeed = sp;
         changed = true;
     }
+    Section(ui, l, Tr("general.screenshots"));
+    changed |= CheckRow(ui, l, "autosend", Tr("general.autoSaveToPc"), s.autoSendScreenshots, Tr("general.autoSaveToPcHint"));
     // SteamVR's play space; on the VR quality page there's no room. (PICO always uses the
     // stage, where its trackers are.)
     if (!app.Device().PreferStageSpace()) {
@@ -901,6 +903,7 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     Column c{body.x + w + gap, body.y - scroll, w};
     Section(ui, c, Tr("general.connectingSection"));
     changed |= CheckRow(ui, c, "autoconnect", Tr("general.autoConnect"), s.autoConnect, Tr("general.autoConnectHint"));
+    changed |= CheckRow(ui, c, "autosteamvr", Tr("general.autoSteamVr"), s.autoLaunchSteamVr, Tr("general.autoSteamVrHint"));
     {
         // The headset asks once whether RinCast may use the cable.
         using U = Platform::UsbNetwork;
@@ -1202,23 +1205,32 @@ void BuildStats(Ui& ui, const Rect& r) {
     };
     const Item items[] = {{Tr("stat.latency"), s.latencyMs > 0 ? FormatMs(s.latencyMs) + " ms" : "–"},
                           {Tr("stat.fps"), s.fps > 0 ? FormatMs(s.fps) + " fps" : "–"},
-                          {Tr("stat.bitrate"), s.mbps > 0 ? FormatMs(s.mbps) + " Mbps" : "–"},
+                          {Tr("stat.bitrate"),
+                           s.mbps > 0 ? (s.targetKbps > 0 ? FormatMs(s.mbps) + " / " + std::to_string(int(s.targetKbps)) + " Mbps"
+                                                          : FormatMs(s.mbps) + " Mbps")
+                                      : "–"},
                           {Tr("stat.decoding"), s.decodeMs > 0 ? FormatMs(s.decodeMs) + " ms" : "–"},
+                          {Tr("stat.pcEncode"), s.pcEncodeMs > 0 ? FormatMs(s.pcEncodeMs) + " ms" : "–"},
                           {Tr("stat.network"), s.rttMs > 0 ? FormatMs(s.rttMs) + " ms" : "–"},
-                          {Tr("stat.video"), s.codec.empty() ? "–" : s.codec + " " + PixelSize(s.width, s.height)}};
-    for (int i = 0; i < 6; i++) {
+                          {Tr("stat.video"), s.codec.empty() ? "–" : s.codec + " " + PixelSize(s.width, s.height)},
+                          {Tr("stat.framesLost"), std::to_string(s.pcFramesLost)}};
+    for (int i = 0; i < int(std::size(items)); i++) {
         const float y = r.y + 16 + i * 38;
         R.Text(items[i].label, r.x + 22, y, 20, kMuted);
         const bool poor = (i == 0 && PoorLatency(s)) || (i == 1 && app.CurrentMode() == Mode::Vr && PoorFrameRate(s, app.Settings().refreshRate));
         R.Text(items[i].value, r.Right() - 22, y, 20, poor ? kWarn : kText, Face::SemiBold, Align::Right);
     }
     // The latency, stage by stage. Bars are shares of the whole; the biggest stands out.
+    // The wait for the next screen refresh is left out: it's the display's own cadence,
+    // nothing on this panel acts on it. Stages under half a millisecond stay hidden too:
+    // a clock a little off pushes some of them negative, and they read as zeros.
     double total = 0, biggest = 0;
-    for (double ms : s.stageMs) {
-        total += std::max(ms, 0.0);
-        biggest = std::max(biggest, ms);
+    for (int i = 0; i < kStageCount; i++) {
+        if (i == kStageCompositor || s.stageMs[i] < 0.5) continue;
+        total += std::max(s.stageMs[i], 0.0);
+        biggest = std::max(biggest, s.stageMs[i]);
     }
-    float y = r.y + 16 + 6 * 38 + 6;
+    float y = r.y + 16 + std::size(items) * 38 + 6;
     ui.Divider(r.x + 22, y, r.w - 44);
     y += 16;
     if (total <= 0) {
@@ -1228,6 +1240,7 @@ void BuildStats(Ui& ui, const Rect& r) {
     R.Text(Tr("stats.stages"), r.x + 22, y, 20, kText, Face::SemiBold);
     y += 36;
     for (int i = 0; i < kStageCount; i++) {
+        if (i == kStageCompositor || s.stageMs[i] < 0.5) continue;
         const double ms = s.stageMs[i];
         if (ms < 0) continue;
         R.Text(Tr((std::string("stage.") + kLatencyStages[i].key).c_str()), r.x + 22, y, 18, kMuted);
@@ -1351,7 +1364,7 @@ void Build(App& app, WindowManager& wm) {
     kb->zoneAt = [](Vec2 p) { return g_app->Kb().ZoneAt(p); };
     kb->twoHands = true;
     kb->showChrome = false;
-    Window* stats = make("stats", 380, 600, 0.30f, false, BuildStats);
+    Window* stats = make("stats", 420, 740, 0.32f, false, BuildStats);
     stats->showChrome = true;
     Window* notices = make("notices", 800, 104, 0.68f, false, BuildNotices);
     notices->showChrome = false;

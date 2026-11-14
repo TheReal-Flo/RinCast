@@ -261,6 +261,11 @@ void StreamClient::SendControl(const json& message) {
     if (m_connection) m_connection->SendControl(message.dump());
 }
 
+size_t StreamClient::SendQueueChunks() {
+    std::lock_guard lock(m_mutex);
+    return m_connection ? m_connection->SendQueueChunks() : 0;
+}
+
 void StreamClient::SendBody(const rc::BodyTrackingPayload& b) {
     std::lock_guard lock(m_mutex);
     if (m_connection) m_connection->Send(rc::PacketType::BodyTracking, &b, sizeof(b));

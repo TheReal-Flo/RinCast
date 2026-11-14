@@ -59,14 +59,15 @@ struct Params {
 
 }  // namespace
 
-uint32_t Foveator::EncodedSize(uint32_t full) {
-    const double size = full * (kFoveaSize + (1.0 - kFoveaSize) * 0.5);
+uint32_t Foveator::EncodedSize(uint32_t full, float fovea) {
+    const double size = full * (fovea + (1.0 - fovea) * 0.5);
     return std::max<uint32_t>(64, uint32_t(std::lround(size / 16)) * 16);
 }
 
 bool Foveator::Init(ID3D11Device* device, uint32_t eyeWidth, uint32_t eyeHeight, uint32_t encodedEyeWidth,
-                    uint32_t encodedEyeHeight) {
+                    uint32_t encodedEyeHeight, float fovea) {
     m_device = device;
+    m_fovea = fovea;
     m_eyeWidth = eyeWidth;
     m_eyeHeight = eyeHeight;
     m_encodedWidth = encodedEyeWidth;
@@ -118,7 +119,7 @@ bool Foveator::Squeeze(ID3D11DeviceContext* ctx, ID3D11Texture2D* frame, const f
         if (FAILED(m_device->CreateShaderResourceView(frame, &sd, &m_inputSrv))) return false;
         m_lastInput = frame;
     }
-    const float F = kFoveaSize;
+    const float F = m_fovea;
     Params p{};
     std::memcpy(p.start, foveaStart, sizeof(float) * 4);
     p.layout[0] = F;

@@ -3,6 +3,7 @@ package app.rincast.vr;
 import android.Manifest;
 import android.app.NativeActivity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
@@ -46,9 +47,9 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 1);
-        }
+        // Permissions are asked for by the native side once the first frame is up: PICO's VR
+        // permission screen takes over the display, and asking here (before anything is drawn)
+        // is what left the app looking like it wouldn't open after an update.
     }
 
     @Override
@@ -237,10 +238,33 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    /** Whether the app can read the shared storage the screenshots feature needs. */
+    public boolean screenshotStorageOk() {
+        if (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager()) return true;
+        final String p = android.os.Build.VERSION.SDK_INT >= 33
+                ? "android.permission.READ_MEDIA_IMAGES" : Manifest.permission.READ_EXTERNAL_STORAGE;
+        return checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** The system's file-access page for this app, where the screenshots permission lives. */
+    public void openStorageSettings() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                     android.net.Uri.parse("package:" + getPackageName())));
+        } catch (RuntimeException e) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)); }
+            catch (RuntimeException ignored) {}
+        }
+    }
+
     /** Asks for those of the permissions (separated by commas) that aren't granted yet. */
     public void requestPermissionList(String list) {
         final java.util.ArrayList<String> missing = new java.util.ArrayList<>();
         for (String p : list.split(",")) {
+            // Android 13+: READ_EXTERNAL_STORAGE grants nothing any more; reading other
+            // apps' images (the screenshots we send to the PC) needs READ_MEDIA_IMAGES.
+            if (p.equals(Manifest.permission.READ_EXTERNAL_STORAGE) && android.os.Build.VERSION.SDK_INT >= 33)
+                p = "android.permission.READ_MEDIA_IMAGES";
             if (!p.isEmpty() && checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
         }
         if (!missing.isEmpty()) runOnUiThread(() -> requestPermissions(missing.toArray(new String[0]), 2));

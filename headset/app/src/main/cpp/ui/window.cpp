@@ -350,19 +350,38 @@ void WindowManager::RenderCanvases(float dt, float time) {
         if (w.appear < 0.01f && !w.visible) continue;
         if (w.canvasLayer) continue;
         if (w.showChrome) RenderChrome(w, m_chromeHover[w.id]);
+        w.canvasRedrawn = false;
         if (w.kind != WindowKind::Ui || !w.build) continue;
         const int rw = int(w.canvasW * w.rtScale), rh = int(w.canvasH * w.rtScale);
-        if (w.rt.color.width != rw || w.rt.color.height != rh) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
+        const bool resized = w.rt.color.width != rw || w.rt.color.height != rh;
+        // Drawn every frame only while it can change from one to the next: pointed at (hover,
+        // clicks, scrolling, typing), a moment after, while something on it animates (needsRedraw
+        // from the last drawing) and while it fades in or out. Otherwise ten times a second, soon
+        // enough for news from the PC. All of them every frame, supersampled and mipmapped, kept
+        // the GPU busy for nothing.
+        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
+        const auto active = [](const PointerState& s) { return s.hovering || s.down || s.pressed || s.released; };
+        const bool pointed = active(p) || (w.twoHands && (active(w.hands[0]) || active(w.hands[1])));
+        if (pointed) w.lastPointedTime = time;
+        const bool lively = time - w.lastPointedTime < 0.2f || w.appear < 0.995f || !w.visible;
+        w.pendingDt += dt;
+        if (!resized && !w.needsRedraw && !lively && time - w.lastRedrawTime < 0.1f) continue;
+        const float drawDt = std::min(w.pendingDt, 0.25f);
+        w.pendingDt = 0;
+        w.lastRedrawTime = time;
+        w.needsRedraw = false;
+        w.canvasRedrawn = true;
+        if (resized) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
         glBindFramebuffer(GL_FRAMEBUFFER, w.rt.fbo);
         glClearColor(0, 0, 0, 0);
         glViewport(0, 0, rw, rh);
         glClear(GL_COLOR_BUFFER_BIT);
         // Widgets work in logical px; the renderer supersamples by rtScale.
         m_r->Begin(rw, rh, w.rtScale);
-        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
-        m_ui->Begin(w.id, p, dt, time);
+        m_ui->Begin(w.id, p, drawDt, time);
         w.build(*m_ui, Rect{0, 0, float(w.canvasW), float(w.canvasH)});
         m_ui->End();
+        w.needsRedraw = m_ui->WantsRedraw();  // a spinner, a highlight still fading
         m_r->End();
         glBindTexture(GL_TEXTURE_2D, w.rt.color.id);
         glGenerateMipmap(GL_TEXTURE_2D);

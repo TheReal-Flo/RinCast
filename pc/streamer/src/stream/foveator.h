@@ -12,14 +12,17 @@ namespace rcs {
 
 class Foveator {
    public:
-    // The full share of each eye (along both axes) that keeps every pixel.
+    // The share of each eye (along both axes) that keeps every pixel: around where the eyes
+    // look, or, on a headset that doesn't track them, fixed where the lens is sharpest. Larger
+    // then: the eyes move within the fixed square, and pancake lenses are sharp far out.
     static constexpr float kFoveaSize = 0.45f;
+    static constexpr float kFixedFoveaSize = 0.6f;
     // The squeezed eye size for a full one: the fovea, and the rest at half density.
-    static uint32_t EncodedSize(uint32_t full);
+    static uint32_t EncodedSize(uint32_t full, float fovea);
 
     // eyeWidth x eyeHeight per eye in, encodedEyeWidth x encodedEyeHeight per eye out.
     bool Init(ID3D11Device* device, uint32_t eyeWidth, uint32_t eyeHeight, uint32_t encodedEyeWidth,
-              uint32_t encodedEyeHeight);
+              uint32_t encodedEyeHeight, float fovea);
     // foveaStart: per eye, where the full-density square starts (x, y from the top, 0..1).
     bool Squeeze(ID3D11DeviceContext* ctx, ID3D11Texture2D* frame, const float foveaStart[2][2]);
     ID3D11Texture2D* Output() const { return m_output.Get(); }
@@ -35,6 +38,7 @@ class Foveator {
     ID3D11Texture2D* m_lastInput = nullptr;
     ComPtr<ID3D11ShaderResourceView> m_inputSrv;
     uint32_t m_eyeWidth = 0, m_eyeHeight = 0, m_encodedWidth = 0, m_encodedHeight = 0;
+    float m_fovea = kFoveaSize;
 };
 
 }  // namespace rcs

@@ -343,6 +343,30 @@ class BridgeClient {
 
     void AbandonSlot(int slot) { InterlockedExchange(&m_shared->slots[slot].state, kSlotFree); }
 
+    // Pacing to the encoder: whether the streamer still has to take the frame published in
+    // `slot` as `frameIndex`. While a headset streams, the streamer takes a frame only when its
+    // encoder is about to want one, so a producer that waits for this before starting its next
+    // frame renders at the rate the encoder keeps up with, not frames that would be replaced.
+    bool Untaken(int slot, uint64_t frameIndex) const {
+        if (!m_shared || slot < 0 || slot >= kFrameSlots) return false;
+        const volatile FrameSlot& fs = m_shared->slots[slot];
+        return fs.state == kSlotReady && fs.frameIndex == frameIndex;
+    }
+    // Waits while Untaken, up to timeoutNs; false if it timed out.
+    bool WaitTaken(int slot, uint64_t frameIndex, int64_t timeoutNs) const {
+        const int64_t start = QpcNowNs();
+        while (Untaken(slot, frameIndex)) {
+            const int64_t waited = QpcNowNs() - start;
+            if (waited > timeoutNs) return false;
+            // Usually it's taken right away: spin briefly before giving up the CPU.
+            if (waited < 500'000) YieldProcessor();
+            else Sleep(1);
+        }
+        return true;
+    }
+    // Whether holding the producer for the streamer makes sense: a headset streams from it.
+    bool Streaming() const { return m_shared && m_shared->headsetConnected && StreamerAlive(); }
+
     void PushHaptic(uint32_t hand, float duration, float frequency, float amplitude) {
         if (!m_shared) return;
         const LONG index = InterlockedIncrement(&m_shared->hapticsWrite) - 1;

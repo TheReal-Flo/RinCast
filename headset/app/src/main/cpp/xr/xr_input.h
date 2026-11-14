@@ -38,6 +38,14 @@ class XrInput {
     void Update(XrTime time);
     // Locate grip poses at another time (used for the stream's predicted poses).
     void Locate(XrTime time, HandInput hands[2]);
+    // One controller's grip at `time`, from any thread (XrContext::LocateSpace locks).
+    bool LocateGrip(int hand, XrTime time, Pose& pose, Vec3* linVel, Vec3* angVel) const {
+        return m_gripSpace[hand] && m_xr->LocateSpace(m_gripSpace[hand], time, pose, linVel, angVel);
+    }
+    // One controller's aim at `time`, from any thread, as LocateGrip.
+    bool LocateAim(int hand, XrTime time, Pose& pose) const {
+        return m_aimSpace[hand] && m_xr->LocateSpace(m_aimSpace[hand], time, pose);
+    }
     const HandInput& Hand(int i) const { return m_hands[i]; }
     std::string ControllerProfilePath(int hand) const;
     // A tracked hand's joints at `time`, in app space. False if the hand isn't tracked then.

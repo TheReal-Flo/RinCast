@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "controller_models.h"
@@ -639,7 +640,22 @@ V vs(uint id : SV_VertexID) {
     float2 c = float2((id << 1) & 2, id & 2);
     V o; o.pos = float4(c * float2(2, -2) + float2(-1, 1), 0, 1); o.uv = lerp(rect.xy, rect.zw, c); return o;
 }
-float4 ps(V i) : SV_Target { return tex.Sample(samp, i.uv); }
+// SteamVR usually renders larger than the stream (its resolution setting, 150% on a fast GPU).
+// One bilinear sample per pixel would then skip most of the game's pixels: fine detail shimmers
+// and edges crawl. Shrinking, each pixel averages the ones it covers instead, from a 4x4 grid
+// of bilinear samples spread over them.
+float4 ps(V i) : SV_Target {
+    float w, h;
+    tex.GetDimensions(w, h);
+    const float2 covered = float2(abs(ddx(i.uv.x)) * w, abs(ddy(i.uv.y)) * h);  // source pixels per pixel
+    if (covered.x <= 1.05 && covered.y <= 1.05) return tex.Sample(samp, i.uv);
+    const float2 step = max(covered, 1.0) / (4.0 * float2(w, h));
+    float4 sum = 0;
+    [unroll] for (int y = 0; y < 4; y++)
+        [unroll] for (int x = 0; x < 4; x++)
+            sum += tex.SampleLevel(samp, i.uv + (float2(x, y) - 1.5) * step, 0);
+    return sum / 16;
+}
 )";
 
 class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponent,
@@ -946,6 +962,8 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         s->producerPid = LONG(GetCurrentProcessId());
         InterlockedExchange64(&s->producerHeartbeatNs, rcvr::QpcNowNs());
         g_shared->bridge.PublishSlot(slot);
+        m_heldSlot = slot;
+        m_heldFrame = fs.frameIndex;
         if (!m_framesPublished++) Log("First frame handed to RinCast Streamer (%ux%u)", dd.Width, dd.Height);
         m_lastPublishNs = rcvr::QpcNowNs();
     }
@@ -961,20 +979,45 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         return {m_presents, m_layersSubmitted, m_framesPublished, m_swapSets.size() / 3, m_lastPublishNs};
     }
 
-    // Paces SteamVR to the headset's refresh rate: block until the next (virtual) vsync.
+    // Paces SteamVR to the headset's refresh rate: block until the next (virtual) vsync. And
+    // when the encoder can't keep up with that rate, to the encoder: a frame the streamer
+    // hasn't taken yet would only be replaced, and rendering it takes GPU time the encoding
+    // needs. Held that way, a frame that is late already goes on without waiting for a vsync.
     void PostPresent(const Throttling_t*) override {
         const int64_t now = rcvr::QpcNowNs();
-        const int64_t next = NextVsync(now);
+        const int64_t next = NextVsync(now, m_pacedVsync);
+        m_pacedVsync = next;
+        if (WaitForStreamer() && rcvr::QpcNowNs() >= next) return;
         const int64_t coarse = next - 1'500'000;
         if (coarse > now) Sleep(DWORD((coarse - now) / 1'000'000));
         while (rcvr::QpcNowNs() < next) YieldProcessor();
     }
+    // Until the streamer has taken the frame just presented; false if it didn't need waiting
+    // for. A streamer that doesn't take frames (stuck, or not streaming) stops the holding for
+    // a few seconds, so SteamVR never stalls on it.
+    bool WaitForStreamer() {
+        const int slot = std::exchange(m_heldSlot, -1);
+        auto& bridge = g_shared->bridge;
+        if (slot < 0 || !bridge.Streaming() || rcvr::QpcNowNs() < m_holdOffUntilNs) return false;
+        if (!bridge.Untaken(slot, m_heldFrame)) return false;
+        if (!bridge.WaitTaken(slot, m_heldFrame, std::max<int64_t>(3 * m_vsyncPeriodNs, 40'000'000))) {
+            m_holdOffUntilNs = rcvr::QpcNowNs() + 3'000'000'000LL;
+            LogEvery5s("RinCast Streamer didn't take a frame for several refreshes; not holding SteamVR for it for 3 s");
+        }
+        return true;
+    }
+
     void GetFrameTiming(vr::DriverDirectMode_FrameTiming* timing) override { timing->m_nReprojectionFlags = 0; }
 
-    int64_t NextVsync(int64_t now) const {
+    // The first vsync after now, and at least half a period after `last`, the one used before:
+    // the streamer moves the epoch a little at a time, and moved later, the vsync just passed
+    // comes up again (measured: 160-190 vsync events a second at 120 Hz).
+    int64_t NextVsync(int64_t now, int64_t last = 0) const {
         const int64_t period = m_vsyncPeriodNs;
         const int64_t epoch = VsyncEpochNs();
-        return epoch + ((now - epoch) / period + 1) * period;
+        int64_t next = epoch + ((now - epoch) / period + 1) * period;
+        if (last && next - last < period / 2) next += period;
+        return next;
     }
 
     int64_t VsyncPeriodNs() const { return m_vsyncPeriodNs; }
@@ -1021,6 +1064,14 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
             return;
         }
         device.As(&m_device);
+        // The copy of each frame for RinCast Streamer queues behind the game's own GPU work
+        // otherwise: with a busy GPU it waits most of a frame, and the stream loses frames.
+        // A relative priority, within this process's class: no privilege needed.
+        ComPtr<IDXGIDevice> dxgi;
+        if (SUCCEEDED(device.As(&dxgi))) {
+            const HRESULT hr = dxgi->SetGPUThreadPriority(7);
+            Log("GPU priority for the frame copy: %s", SUCCEEDED(hr) ? "raised" : "unchanged (refused)");
+        }
         ComPtr<ID3DBlob> vs, ps, err;
         D3DCompile(kBlitShader, strlen(kBlitShader), nullptr, nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vs, &err);
         D3DCompile(kBlitShader, strlen(kBlitShader), nullptr, nullptr, nullptr, "ps", "ps_5_0", 0, 0, &ps, &err);
@@ -1185,6 +1236,11 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     std::atomic<int64_t> m_vsyncPeriodNs;
     int64_t m_vsyncEpochNs;
     uint64_t m_frameIndex = 0;
+    // The frame Present just handed over, for PostPresent to wait on (see WaitForStreamer).
+    int m_heldSlot = -1;
+    uint64_t m_heldFrame = 0;
+    int64_t m_holdOffUntilNs = 0;
+    int64_t m_pacedVsync = 0;  // the vsync PostPresent last held SteamVR to
 
     ComPtr<ID3D11Device1> m_device;
     ComPtr<ID3D11DeviceContext> m_ctx;
@@ -1432,11 +1488,14 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     // Pushes poses once per (virtual) vsync, right before SteamVR starts a frame,
     // and remembers which sample that frame will be rendered with.
     void TrackingLoop() {
-        int64_t lastPushed = 0;
+        int64_t lastPushed = 0, lastVsync = 0;
         LONG configGeneration = -1;
         rcvr::TrackingSnapshot previous{};
         int jumpLogs = 0;
         int64_t lastFrameReportNs = rcvr::QpcNowNs();
+        int64_t lastPoseReportNs = lastFrameReportNs;
+        double poseWaitMs = 0, poseWaitMaxMs = 0;
+        int poseWaits = 0, poseRepeats = 0;
         while (m_running) {
             Hmd* hmd = nullptr;
             {
@@ -1457,8 +1516,8 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             }
             const int64_t period = hmd->VsyncPeriodNs();
             const int64_t now = rcvr::QpcNowNs();
-            const int64_t epoch = hmd->VsyncEpochNs();
-            const int64_t nextVsync = epoch + ((now - epoch) / period + 1) * period;
+            const int64_t nextVsync = hmd->NextVsync(now, lastVsync);
+            lastVsync = nextVsync;
             // Wake ~1 ms before vsync so the pose is in place when the compositor samples it.
             const int64_t wake = nextVsync - 1'000'000;
             if (wake > now) Sleep(DWORD(std::max<int64_t>(0, (wake - now) / 1'000'000)));
@@ -1467,8 +1526,17 @@ class Provider : public vr::IServerTrackedDeviceProvider {
             rcvr::TrackingSnapshot t;
             const bool have = rcvr::ReadTracking(s, t);
             const bool connected = s->headsetConnected != 0 && g_shared->bridge.StreamerAlive();
+            if (connected && have && t.sequence == uint64_t(lastPushed)) poseRepeats++;
             if (have && t.sequence != uint64_t(lastPushed)) {
                 lastPushed = int64_t(t.sequence);
+                // How long this sample waited here for the vsync: time the headset could have
+                // sampled later by, had it known when SteamVR takes it.
+                const double waitedMs = double(rcvr::QpcNowNs() - t.receivedPcNs) / 1e6;
+                if (waitedMs >= 0 && waitedMs < 100) {
+                    poseWaitMs += waitedMs;
+                    poseWaitMaxMs = std::max(poseWaitMaxMs, waitedMs);
+                    poseWaits++;
+                }
                 // Headset positions that jump: no head moves 10 cm between two samples a few ms
                 // apart, so the headset's space moved (a recenter, or its tracking catching up).
                 // Lighthouse trackers calibrated against the headset slide out of place then.
@@ -1531,6 +1599,18 @@ class Provider : public vr::IServerTrackedDeviceProvider {
                     Log("No frame for RinCast Streamer in 10 s. Since SteamVR started: %zu texture sets, %u layers, "
                         "%u presents, %u frames handed over",
                         c.textureSets, c.layers, c.presents, c.published);
+            }
+            // Every 30 s: how old the headset's poses were when they went to SteamVR. Close to a
+            // whole vsync means the headset samples just after SteamVR took one; a vsync without
+            // a new one renders with the pose of the vsync before.
+            if (rcvr::QpcNowNs() - lastPoseReportNs > 30'000'000'000LL) {
+                lastPoseReportNs = rcvr::QpcNowNs();
+                if (poseWaits > 100)
+                    Log("Headset poses waited %.1f ms for their vsync on average (longest %.1f ms, one vsync is %.1f ms); "
+                        "%d of %d vsyncs had no new pose",
+                        poseWaitMs / poseWaits, poseWaitMaxMs, double(period) / 1e6, poseRepeats, poseWaits + poseRepeats);
+                poseWaitMs = poseWaitMaxMs = 0;
+                poseWaits = poseRepeats = 0;
             }
             // Direct mode: SteamVR paces its frames by these.
             while (rcvr::QpcNowNs() < nextVsync) YieldProcessor();

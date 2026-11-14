@@ -33,6 +33,13 @@ class VrBridgeHost {
     // Moves the driver's vsync by about half of shiftNs (+ = later), and learns the rate at
     // which the two clocks drift apart, from the headset's reports twice a second.
     void ShiftVsync(int64_t shiftNs);
+    // Moves the driver's vsync later by slipNs, a little with every vsync (rc::kVrPhaseSlipRate):
+    // the headset has frames waiting and shows them without getting new ones as fast, until
+    // none wait, instead of skipping one.
+    void SlipVsync(int64_t slipNs);
+    // While SteamVR runs on our driver: how long a pose published at `atNs` waits until the
+    // driver picks one up for its next frame (1 ms before its vsync), 0 to one period.
+    bool PoseWaitNs(int64_t atNs, int64_t& waitNs, int64_t& periodNs) const;
 
     void SetHapticHandler(HapticHandler h);
 
@@ -79,6 +86,7 @@ class VrBridgeHost {
     int64_t m_epochBaseNs = 0;
     std::atomic<double> m_pendingShiftNs{0};  // for the heartbeat loop, which owns the phase
     std::atomic<double> m_driftNsPerS{0};
+    std::atomic<double> m_pendingSlipNs{0};  // what is left of a slip
 };
 
 }  // namespace rcs

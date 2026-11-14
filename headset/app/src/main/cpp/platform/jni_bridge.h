@@ -48,6 +48,8 @@ class Platform {
     };
     static UsbNetwork GetUsbNetwork();
     static void Speak(const std::string& text);  // needs a text-to-speech engine on the headset
+    static bool ScreenshotStorageOk();   // can we read shared storage for screenshots?
+    static void OpenStorageSettings();   // the system page that grants it
     // Blocking; call from worker threads only.
     static HttpResult Http(const std::string& method, const std::string& url, const std::string& body,
                            const std::string& bearer, int timeoutMs);

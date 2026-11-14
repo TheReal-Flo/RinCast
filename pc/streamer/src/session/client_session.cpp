@@ -1,8 +1,12 @@
 #include "client_session.h"
+
+#include <filesystem>
+#include <fstream>
 #include "../vr/face_share.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 
 #include "../app.h"
@@ -10,6 +14,8 @@
 #include "../encode/encoder.h"
 #include "../input/input_injector.h"
 #include "../settings.h"
+
+#include <windows.h>
 #include "../stream/desktop_stream.h"
 #include "../stream/foveator.h"
 #include "../stream/vr_stream.h"
@@ -19,6 +25,7 @@
 #include "rc/controller_tracking.h"
 
 namespace rcs {
+
 
 namespace {
 
@@ -31,6 +38,16 @@ float QualityScale(const std::string& q) {
 }
 
 uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a); }
+
+// 2026-11-11 12.34.56 - colons are not allowed in file names.
+std::string ShotStamp() {
+    SYSTEMTIME t{};
+    GetLocalTime(&t);
+    char buf[32] = {};
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u.%02u.%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+                  t.wMinute, t.wSecond);
+    return buf;
+}
 
 // The most the stream takes of SteamVR's resolution, against the headset's panel (the slider on
 // the headset stops there too): Virtual Desktop's highest. Headsets before 1.2.0 send their
@@ -80,6 +97,7 @@ void ClientSession::Start() {
 void ClientSession::Close(const std::string& reason) {
     if (m_closed.exchange(true)) return;
     RC_LOGI("Session with %s closed (%s)", m_hello.deviceName.c_str(), reason.c_str());
+    ResetShot();  // don't leave half a screenshot under a .part name
     m_connection->SendDisconnect();
     {
         std::lock_guard lock(m_queueMutex);
@@ -236,6 +254,7 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
                 }
             }
             App::Get().Bridge().PublishTracking(s);
+            MeasurePoseWait(s.receivedPcNs);
             // Where the eyes look comes after the poses, from headsets doing foveated encoding.
             if (size >= sizeof(t) + sizeof(rc::GazePayload)) {
                 rc::GazePayload g;
@@ -367,7 +386,7 @@ void ClientSession::HandleMessage(const json& m) {
             for (auto& [id, d] : m_desktop) {
                 auto s = d->Stats();
                 desk.push_back({{"streamId", id}, {"fps", s.fps}, {"encodeMs", s.encodeMs}, {"mbps", s.mbps},
-                                {"bitrateKbps", s.bitrateKbps}});
+                                {"bitrateKbps", s.bitrateKbps}, {"framesLost", s.framesLost}});
             }
             stats["desktop"] = desk;
         }
@@ -398,6 +417,7 @@ void ClientSession::HandleMessage(const json& m) {
         const bool videoChanged = before.codec != after.codec || before.tenBit != after.tenBit ||
                                   before.vrQuality != after.vrQuality || before.vrScale != after.vrScale ||
                                   before.matchSteamVr != after.matchSteamVr || before.gazeFoveation != after.gazeFoveation ||
+                                  before.eyesTracked != after.eyesTracked ||
                                   before.frameGeneration != after.frameGeneration || before.refreshRate != after.refreshRate ||
                                   before.vrBitrateMbps != after.vrBitrateMbps ||
                                   before.adaptiveBitrate != after.adaptiveBitrate;
@@ -449,7 +469,8 @@ void ClientSession::HandleMessage(const json& m) {
         return;
     }
     if (type == rc::msg::kVrPhase) {
-        App::Get().Bridge().ShiftVsync(m.value("shiftNs", int64_t(0)));
+        if (const int64_t slip = m.value("slipNs", int64_t(0)); slip > 0) App::Get().Bridge().SlipVsync(slip);
+        else App::Get().Bridge().ShiftVsync(m.value("shiftNs", int64_t(0)));
         return;
     }
     if (type == rc::msg::kListGames) {
@@ -476,11 +497,113 @@ void ClientSession::HandleMessage(const json& m) {
         if (ok && !(m_vr && m_vr->Running())) NotifyVrState("launching", "steamvr", "");  // see LaunchSteamVr
         return;
     }
-    if (type == rc::msg::kStats) {
+    if (type == "screenshot.begin") {
+        ResetShot();
+        // Names come from this PC now: which headset, then when. The headset's own file name
+        // only says when the system wrote it, and says nothing about the device.
+        std::string ext = ".jpg";
+        // The name comes from the headset: keep a safe stem only, so the file cannot leave the
+        // screenshots folder (or leave it as something executable) no matter what it sends.
+        std::string name = m.value("name", "screenshot.jpg");
+        if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) name = name.substr(slash + 1);
+        std::string stem = name;
+        if (const size_t dot = name.rfind('.'); dot != std::string::npos && dot > 0) {
+            const std::string e = name.substr(dot);
+            if (e == ".jpg" || e == ".jpeg" || e == ".png") ext = e;
+            stem = name.substr(0, dot);
+        }
+        // "PICO 4" becomes "pico4": the product name, safe in a file name.
+        std::string clean;
+        for (const char c : HeadsetName(m_hello.model))
+            if (std::isalnum(static_cast<unsigned char>(c))) clean += char(std::tolower(static_cast<unsigned char>(c)));
+        if (clean.empty()) clean = "headset";
+        m_shotName = clean + " " + ShotStamp() + ext;
+        m_shotCap = std::min<uint64_t>(m.value("size", 0), 64u << 20) + 65536;
+        namespace fs = std::filesystem;
+        std::string dir = SettingsStore::Get().Snapshot().screenshotDir;
+        if (dir.empty()) dir = DefaultScreenshotDir();
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        m_shotTemp = dir + "/." + m_shotName + ".part";
+        m_shotFile.open(m_shotTemp, std::ios::binary | std::ios::trunc);
+        if (!m_shotFile) {
+            RC_LOGE("Screenshot: couldn't write %s", m_shotTemp.c_str());
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        m_shotActive = true;
+        RC_LOGI("Screenshot: receiving %s (%u bytes)", m_shotName.c_str(), unsigned(m.value("size", 0)));
+    } else if (type == "screenshot.data") {
+        if (!m_shotActive) return;
+        const std::string hex = m.value("data", "");
+        const size_t bytes = hex.size() / 2;
+        if (m_shotWritten + bytes > m_shotCap) {
+            RC_LOGW("Screenshot: more data than %s declared, dropping it", m_shotName.c_str());
+            m_shotFile.close();
+            std::error_code ec;
+            std::filesystem::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        std::vector<uint8_t> chunk(bytes);
+        rc::HexDecode(hex, chunk.data(), chunk.size());
+        m_shotFile.write(reinterpret_cast<const char*>(chunk.data()), std::streamsize(chunk.size()));
+        m_shotWritten += bytes;
+    } else if (type == "screenshot.end") {
+        if (!m_shotActive) return;
+        m_shotActive = false;
+        namespace fs = std::filesystem;
+        m_shotFile.close();
+        std::error_code ec;
+        if (m_shotWritten == 0 || !m_shotFile) {
+            fs::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        std::string stem = m_shotName, ext = ".jpg";
+        if (const size_t dot = stem.rfind('.'); dot != std::string::npos) {
+            ext = stem.substr(dot);
+            stem = stem.substr(0, dot);
+        }
+        const std::string dir = fs::path(m_shotTemp).parent_path().string();
+        std::string path = dir + "/" + stem + ext;
+        for (int n = 1; fs::exists(path, ec); n++) path = dir + "/" + stem + " (" + std::to_string(n) + ")" + ext;
+        fs::rename(m_shotTemp, path, ec);
+        if (ec) {
+            RC_LOGE("Screenshot: couldn't finish %s: %s", path.c_str(), ec.message().c_str());
+            fs::remove(m_shotTemp, ec);
+            SendControl({{"type", "screenshot.saved"}, {"ok", false}});
+            ResetShot();
+            return;
+        }
+        RC_LOGI("Screenshot: saved %s (%llu bytes)", path.c_str(), (unsigned long long)m_shotWritten);
+        App::Get().AddScreenshot(path);
+        SendControl({{"type", "screenshot.saved"}, {"ok", true}, {"name", fs::path(path).filename().string()},
+                     {"size", m_shotWritten}});
+        ResetShot();
+    } else if (type == "screenshot.folder") {
+        SettingsStore::Get().Update([&](Settings& st) { st.screenshotDir = m.value("path", ""); });
+        RC_LOGI("Screenshot folder: %s", m.value("path", "").c_str());
+    } else if (type == rc::msg::kStats) {
         std::lock_guard lock(m_mutex);
         m_clientStats = m.value("stats", json::object());
         return;
     }
+}
+
+void ClientSession::ResetShot() {
+    if (m_shotFile.is_open()) m_shotFile.close();
+    if (!m_shotTemp.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(m_shotTemp, ec);
+    }
+    m_shotActive = false;
+    m_shotTemp.clear();
+    m_shotWritten = 0;
+    m_shotCap = 0;
 }
 
 void ClientSession::ApplyClientInfo(const json& m) {
@@ -523,6 +646,7 @@ void ClientSession::ApplyClientInfo(const json& m) {
         m_settings.vrScale = s.value("vrScale", m_settings.vrScale);
         m_settings.matchSteamVr = s.value("matchSteamVr", m_settings.matchSteamVr);
         m_settings.gazeFoveation = s.value("gazeFoveation", m_settings.gazeFoveation);
+        m_settings.eyesTracked = s.value("eyesTracked", m_settings.eyesTracked);  // headsets before 1.2.1 only foveate tracked
         m_settings.frameGeneration = s.value("frameGeneration", m_settings.frameGeneration);
         m_settings.refreshRate = s.value("refreshRate", m_settings.refreshRate);
         m_settings.vrBitrateMbps = s.value("vrBitrateMbps", m_settings.vrBitrateMbps);
@@ -560,8 +684,51 @@ rc::VideoCodec ClientSession::ChooseCodec(bool forVr) const {
 
 // ---------------------------------------------------------------------------
 
+void ClientSession::MeasurePoseWait(int64_t receivedNs) {
+    int64_t wait = 0, period = 0;
+    if (!App::Get().Bridge().PoseWaitNs(receivedNs, wait, period)) {
+        m_poseWaits.clear();
+        return;
+    }
+    if (period != m_poseWaitPeriodNs) m_poseWaits.clear();
+    m_poseWaitPeriodNs = period;
+    m_poseWaits.push_back(wait);
+    if (receivedNs - m_poseWaitSentNs < 1'000'000'000LL) return;
+    m_poseWaitSentNs = receivedNs;
+    if (m_poseWaits.size() < 30) {
+        m_poseWaits.clear();
+        return;
+    }
+    // Averaged as angles on the period's circle: a pose that just missed a pickup waits almost
+    // a whole period, and is the same story as one that just made it.
+    const double p = double(period), k = 6.283185307 / p;
+    double sinSum = 0, cosSum = 0;
+    for (int64_t w : m_poseWaits) {
+        sinSum += std::sin(double(w) * k);
+        cosSum += std::cos(double(w) * k);
+    }
+    double mean = std::atan2(sinSum, cosSum) / k;
+    if (mean < 0) mean += p;
+    // Each one against that, within half a period either way; the 2% that waited least.
+    std::vector<double> waited;
+    waited.reserve(m_poseWaits.size());
+    for (int64_t w : m_poseWaits) waited.push_back(mean + std::fmod(double(w) - mean + 1.5 * p, p) - p / 2);
+    m_poseWaits.clear();
+    const size_t low = waited.size() / 50;
+    std::nth_element(waited.begin(), waited.begin() + low, waited.end());
+    SendControl({{"type", rc::msg::kVrPoseWait},
+                 {"waitNs", int64_t(mean)},
+                 {"lowNs", int64_t(waited[low])},
+                 {"periodNs", period}});
+}
+
 void ClientSession::SendServerInfo() {
     const Settings s = SettingsStore::Get().Snapshot();
+    std::string vrState;
+    {
+        std::lock_guard lock(m_mutex);  // the VR threads write it under this lock
+        vrState = m_vrState;
+    }
     const EncoderCaps& caps = App::Get().Caps();
     const auto route = audio::ResolveRoute(s.audioDevices);
     const auto svr = steamvr::SteamVrPath();
@@ -573,6 +740,7 @@ void ClientSession::SendServerInfo() {
         {"os", WindowsVersion()},
         {"gpu", App::Get().Gpu().name},
         {"vrBitrateMbps", s.vrBitrateMbps},
+        {"vrPhaseSlip", true},  // "slipNs" in vr.phase is understood
         {"encoder",
          {{"backend", caps.backend}, {"h264", caps.h264}, {"hevc", caps.hevc}, {"av1", caps.av1},
           {"hevc10", caps.hevc10}, {"av110", caps.av110}}},
@@ -584,7 +752,7 @@ void ClientSession::SendServerInfo() {
                          {"devices", route.micSet.empty() ? route.speakerSet : route.micSet}}},
         {"account", s.cloudUserName},
         {"remote", m_remote},
-        {"vrState", m_vrState},
+        {"vrState", vrState},
     });
 }
 
@@ -669,7 +837,10 @@ void ClientSession::StartDesktop(const json& m) {
         cfg.bitrateKbps = std::max<uint32_t>(cfg.bitrateKbps, 5000);
         // Internet paths lose packets and have no retransmissions: recover more of them locally.
         cfg.fecPercent = m_slowPath ? std::max(pc.fecPercent, 12) : pc.fecPercent;
-        cfg.pace = m_slowPath;
+        // Spread packets over the frame interval on Wi-Fi too: bursts are what access
+        // points drop. The send runs on its own thread, so this no longer stalls the
+        // capture-encode loop.
+        cfg.pace = true;
         cfg.adaptiveQuant = pc.adaptiveQuantization;
         // Over the internet a fixed bitrate only fills queues or loses frames: always adapt.
         cfg.adaptive = m_slowPath || (st.adaptiveBitrate && pc.adaptiveBitrate);
@@ -698,6 +869,8 @@ void ClientSession::StopDesktop() {
         std::lock_guard lock(m_mutex);
         old.swap(m_desktop);
     }
+    // Said, so the log shows whether a monitor's encoder was still running next to VR's.
+    if (!old.empty()) RC_LOGI("Desktop: stopped %zu monitor stream(s)", old.size());
     old.clear();
 }
 
@@ -775,6 +948,8 @@ void ClientSession::StartVr() {
     if (!caps.refreshRates.empty() &&
         std::find(caps.refreshRates.begin(), caps.refreshRates.end(), rate) == caps.refreshRates.end())
         rate = caps.refreshRates.back();
+    // The desktop path clamps this; a buggy or hostile client could send anything.
+    rate = std::clamp(rate, 30.f, 240.f);
     dc.refreshRate = rate;
     dc.ipd = caps.ipd;
     std::memcpy(dc.fovTan, caps.fovTan, sizeof(dc.fovTan));
@@ -799,7 +974,7 @@ void ClientSession::StartVr() {
     cfg.bitrateKbps = uint32_t((st.vrBitrateMbps > 0 ? st.vrBitrateMbps : pc.vrBitrateMbps) * 1000);
     if (m_slowPath) cfg.bitrateKbps = std::min<uint32_t>(cfg.bitrateKbps, 60000);
     cfg.fecPercent = m_slowPath ? std::max(pc.fecPercent, 12) : pc.fecPercent;
-    cfg.pace = m_slowPath;
+    cfg.pace = true;  // see the VR note: spread on Wi-Fi too, the send thread absorbs the wait
     cfg.adaptive = m_slowPath || (st.adaptiveBitrate && pc.adaptiveBitrate);  // see above
     if (m_slowPath) cfg.startBitrateKbps = std::min<uint32_t>(cfg.bitrateKbps, 12000);
     cfg.foveated = pc.foveatedEncoding;
@@ -807,9 +982,11 @@ void ClientSession::StartVr() {
     cfg.twoPass = pc.twoPassEncoding;
     cfg.motionField = st.frameGeneration;
     if (st.gazeFoveation) {
-        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth);
-        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight);
-        RC_LOGI("VR stream: foveated, encoding %ux%u per eye", cfg.foveatedEyeWidth, cfg.foveatedEyeHeight);
+        cfg.foveaSize = st.eyesTracked ? Foveator::kFoveaSize : Foveator::kFixedFoveaSize;
+        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth, cfg.foveaSize);
+        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight, cfg.foveaSize);
+        RC_LOGI("VR stream: foveated %s, encoding %ux%u per eye", st.eyesTracked ? "where the eyes look" : "at the lens centre",
+                cfg.foveatedEyeWidth, cfg.foveatedEyeHeight);
     }
     RC_LOGI("VR stream: %s bitrate, up to %u kbps%s", cfg.adaptive ? "adaptive" : "fixed", cfg.bitrateKbps,
             cfg.startBitrateKbps ? (", starting at " + std::to_string(cfg.startBitrateKbps) + " kbps").c_str() : "");
@@ -828,7 +1005,7 @@ void ClientSession::StartVr() {
                      {"tenBit", cfg.tenBit}};
     // See rc::VrFoveationMetadata.
     if (cfg.foveatedEyeWidth)
-        vrStream["foveation"] = {{"eyeWidth", cfg.foveatedEyeWidth}, {"eyeHeight", cfg.foveatedEyeHeight}, {"size", Foveator::kFoveaSize}};
+        vrStream["foveation"] = {{"eyeWidth", cfg.foveatedEyeWidth}, {"eyeHeight", cfg.foveatedEyeHeight}, {"size", cfg.foveaSize}};
     SendControl({{"type", rc::msg::kStreamConfig}, {"kind", "vr"}, {"streams", json::array({vrStream})}});
     vr->Start();
     {
