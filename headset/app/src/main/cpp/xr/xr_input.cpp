@@ -34,6 +34,10 @@ XrPath Path(XrInstance instance, const char* s) {
 bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles) {
     m_xr = &xr;
     XrInstance inst = xr.Instance();
+    XrInstanceProperties runtime{XR_TYPE_INSTANCE_PROPERTIES};
+    const bool legacyQuest1 = xrloader::IsQuest1() &&
+        XR_SUCCEEDED(xrGetInstanceProperties(inst, &runtime)) && runtime.runtimeVersion != 0 &&
+        XR_VERSION_MAJOR(runtime.runtimeVersion) <= 28;
     XrActionSetCreateInfo si{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy(si.actionSetName, "rincast");
     strcpy(si.localizedActionSetName, "RinCast");
@@ -79,6 +83,32 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
                 m_gazePose = XR_NULL_HANDLE;
             }
         }
+    }
+
+    const auto suggestSimpleController = [&] {
+        // Hand tracking via the Khronos simple profile (aim pose + select = pinch).
+        std::vector<XrActionSuggestedBinding> hb;
+        for (const char* side : {"left", "right"}) {
+            const std::string h = std::string("/user/hand/") + side;
+            hb.push_back({m_aimPose, Path(inst, (h + "/input/aim/pose").c_str())});
+            hb.push_back({m_gripPose, Path(inst, (h + "/input/grip/pose").c_str())});
+            hb.push_back({m_trigger, Path(inst, (h + "/input/select/click").c_str())});
+        }
+        XrInteractionProfileSuggestedBinding sb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        sb.interactionProfile = Path(inst, "/interaction_profiles/khr/simple_controller");
+        sb.suggestedBindings = hb.data();
+        sb.countSuggestedBindings = uint32_t(hb.size());
+        xrSuggestInteractionProfileBindings(inst, &sb);
+    };
+
+    // On older Quest firmware (v28 in my case), suggesting simple_controller last
+    // silently replaces all Touch bindings (including actions absent from the
+    // simple profile). Suggest the fallback first on this legacy runtime, leaving
+    // the full Touch mapping last. Preserve the existing suggestion order on newer
+    // firmware and other headsets.
+    if (legacyQuest1) {
+        RC_LOGI("Quest 1 legacy input");
+        suggestSimpleController();
     }
 
     // Every family's controllers have the Touch layout: A/B and X/Y, a trigger, a grip and a stick.
@@ -129,22 +159,11 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
             sb.countSuggestedBindings = uint32_t(normalBindings);
             bindingResult = xrSuggestInteractionProfileBindings(inst, &sb);
         }
-        if (XR_FAILED(bindingResult)) RC_LOGW("Bindings for %s rejected", profile.path);
+        if (XR_FAILED(bindingResult)) RC_LOGW("Bindings for %s rejected: %d", profile.path, int(bindingResult));
         else m_controllerProfiles.push_back(path);
     }
 
-    // Hand tracking via the Khronos simple profile (aim pose + select = pinch).
-    std::vector<XrActionSuggestedBinding> hb;
-    for (const char* side : {"left", "right"}) {
-        const std::string h = std::string("/user/hand/") + side;
-        hb.push_back({m_aimPose, Path(inst, (h + "/input/aim/pose").c_str())});
-        hb.push_back({m_gripPose, Path(inst, (h + "/input/grip/pose").c_str())});
-        hb.push_back({m_trigger, Path(inst, (h + "/input/select/click").c_str())});
-    }
-    sb.interactionProfile = Path(inst, "/interaction_profiles/khr/simple_controller");
-    sb.suggestedBindings = hb.data();
-    sb.countSuggestedBindings = uint32_t(hb.size());
-    xrSuggestInteractionProfileBindings(inst, &sb);
+    if (!legacyQuest1) suggestSimpleController();
 
     XrSessionActionSetsAttachInfo ai{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     ai.countActionSets = 1;
