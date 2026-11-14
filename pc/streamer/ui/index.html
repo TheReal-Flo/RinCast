@@ -149,6 +149,12 @@
         <button class="btn primary" id="getSteamVR" data-i18n="vr.get">Get SteamVR</button>
       </div>
       <label class="check spaced"><input type="checkbox" data-setting="autoRegisterSteamVrDriver"><span data-i18n="vr.autoRegister">Add RinCast to SteamVR automatically</span></label>
+      <h2 id="controllerModeLabel" data-i18n="vr.controllerMode">Controller compatibility</h2>
+      <div class="options inline" role="radiogroup" aria-labelledby="controllerModeLabel" aria-describedby="controllerModeHint">
+        <label><input type="radio" name="controllerMode" data-setting="controllerMode" value="native"><span data-i18n="vr.controllerNative">Native controllers</span></label>
+        <label><input type="radio" name="controllerMode" data-setting="controllerMode" value="touch"><span data-i18n="vr.controllerTouch">Oculus Touch</span></label>
+      </div>
+      <p class="note" id="controllerModeHint" data-i18n="vr.controllerModeHint">Uses the controller profiles reported by your headset. Choose Oculus Touch only for games that need compatibility mode. After changing this, restart SteamVR.</p>
       <div id="runtimeRow">
         <h2 id="runtimeLabel" data-i18n="vr.runtime">OpenXR games run through</h2>
         <div class="options inline" id="runtimeSeg" role="radiogroup" aria-labelledby="runtimeLabel" aria-describedby="runtimeNote">

@@ -1,0 +1,164 @@
+{
+  "to_controller_type": "pico_controller",
+  "layouts": [
+    {
+      "simulate_render_model": false,
+      "priority": 100,
+      "from_controller_type": "oculus_touch",
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "to": "/user/hand/left/input/trigger",
+          "from": "/user/hand/left/input/trigger"
+        },
+        {
+          "to": "/user/hand/left/input/grip",
+          "from": "/user/hand/left/input/grip"
+        },
+        {
+          "to": "/user/hand/left/input/joystick",
+          "from": "/user/hand/left/input/joystick"
+        },
+        {
+          "to": "/user/hand/left/input/x",
+          "mirror": false,
+          "from": "/user/hand/left/input/x"
+        },
+        {
+          "to": "/user/hand/left/input/y",
+          "mirror": false,
+          "from": "/user/hand/left/input/y"
+        },
+        {
+          "to": "/user/hand/right/input/trigger",
+          "from": "/user/hand/right/input/trigger"
+        },
+        {
+          "to": "/user/hand/right/input/grip",
+          "from": "/user/hand/right/input/grip"
+        },
+        {
+          "to": "/user/hand/right/input/joystick",
+          "from": "/user/hand/right/input/joystick"
+        },
+        {
+          "to": "/user/hand/right/input/a",
+          "mirror": false,
+          "from": "/user/hand/right/input/a"
+        },
+        {
+          "to": "/user/hand/right/input/b",
+          "mirror": false,
+          "from": "/user/hand/right/input/b"
+        }
+      ],
+      "simulate_controller_type": false
+    },
+    {
+      "simulate_render_model": false,
+      "priority": 100,
+      "from_controller_type": "knuckles",
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "to": "/user/hand/left/input/trigger",
+          "from": "/user/hand/left/input/trigger"
+        },
+        {
+          "to": "/user/hand/left/input/grip",
+          "from": "/user/hand/left/input/grip"
+        },
+        {
+          "to": "/user/hand/left/input/joystick",
+          "from": "/user/hand/left/input/thumbstick"
+        },
+        {
+          "to": "/user/hand/left/input/x",
+          "mirror": false,
+          "from": "/user/hand/left/input/a"
+        },
+        {
+          "to": "/user/hand/left/input/y",
+          "mirror": false,
+          "from": "/user/hand/left/input/b"
+        },
+        {
+          "to": "/user/hand/right/input/trigger",
+          "from": "/user/hand/right/input/trigger"
+        },
+        {
+          "to": "/user/hand/right/input/grip",
+          "from": "/user/hand/right/input/grip"
+        },
+        {
+          "to": "/user/hand/right/input/joystick",
+          "from": "/user/hand/right/input/thumbstick"
+        },
+        {
+          "to": "/user/hand/right/input/a",
+          "mirror": false,
+          "from": "/user/hand/right/input/a"
+        },
+        {
+          "to": "/user/hand/right/input/b",
+          "mirror": false,
+          "from": "/user/hand/right/input/b"
+        }
+      ],
+      "simulate_controller_type": false
+    },
+    {
+      "simulate_render_model": false,
+      "priority": 100,
+      "from_controller_type": "khr_generic_controller",
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "to": "/user/hand/left/input/trigger",
+          "from": "/user/hand/left/input/trigger"
+        },
+        {
+          "to": "/user/hand/left/input/grip",
+          "from": "/user/hand/left/input/grip"
+        },
+        {
+          "to": "/user/hand/left/input/joystick",
+          "from": "/user/hand/left/input/thumbstick"
+        },
+        {
+          "to": "/user/hand/left/input/x",
+          "mirror": false,
+          "from": "/user/hand/left/input/primary"
+        },
+        {
+          "to": "/user/hand/left/input/y",
+          "mirror": false,
+          "from": "/user/hand/left/input/secondary"
+        },
+        {
+          "to": "/user/hand/right/input/trigger",
+          "from": "/user/hand/right/input/trigger"
+        },
+        {
+          "to": "/user/hand/right/input/grip",
+          "from": "/user/hand/right/input/grip"
+        },
+        {
+          "to": "/user/hand/right/input/joystick",
+          "from": "/user/hand/right/input/thumbstick"
+        },
+        {
+          "to": "/user/hand/right/input/a",
+          "mirror": false,
+          "from": "/user/hand/right/input/primary"
+        },
+        {
+          "to": "/user/hand/right/input/b",
+          "mirror": false,
+          "from": "/user/hand/right/input/secondary"
+        }
+      ],
+      "simulate_controller_type": false
+    }
+  ]
+}

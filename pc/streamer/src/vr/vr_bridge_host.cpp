@@ -30,7 +30,9 @@ bool VrBridgeHost::Start() {
     m_gpu = DescribeAdapter(adapter.Get());
     m_device = CreateDevice(adapter.Get());
     if (!m_device) return false;
-    m_shared->config.adapterLuid = m_gpu.luid;
+    rcvr::DisplayConfig initialConfig{};
+    initialConfig.adapterLuid = m_gpu.luid;
+    rcvr::WriteDisplayConfig(m_shared, initialConfig);
 
     // Restore the last headset configuration so SteamVR can start before a
     // headset connects (it then shows as "standby").
@@ -49,6 +51,7 @@ bool VrBridgeHost::Start() {
             strncpy_s(c.headsetModel, j.value("model", "Quest").c_str(), _TRUNCATE);
             c.renderEyeWidth = j.value("renderEyeWidth", 0u);
             c.renderEyeHeight = j.value("renderEyeHeight", 0u);
+            // Only the display is restored. Controller identities require this session's headset data.
             if (c.eyeWidth && c.eyeHeight) Configure(c);
         } catch (...) {
         }
@@ -118,11 +121,36 @@ bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height) {
     return true;
 }
 
+void VrBridgeHost::SetControllerProfiles(const std::string& left, const std::string& right) {
+    std::lock_guard lock(m_mutex);
+    if (!m_shared) return;
+    const std::string profiles[] = {left, right};
+    auto config = m_shared->config;
+    bool changed = false;
+    for (int hand = 0; hand < 2; ++hand)
+        if (profiles[hand] != config.controllerProfiles[hand]) {
+            strncpy_s(config.controllerProfiles[hand], profiles[hand].c_str(), _TRUNCATE);
+            changed = true;
+            RC_LOGI("Headset controller profile (%s): %s", hand == 0 ? "left" : "right", profiles[hand].c_str());
+        }
+    if (changed) rcvr::WriteDisplayConfig(m_shared, config);
+}
+
+void VrBridgeHost::SetTouchControllers(bool touch) {
+    std::lock_guard lock(m_mutex);
+    if (m_shared) {
+        auto config = m_shared->config;
+        config.touchControllers = touch;
+        rcvr::WriteDisplayConfig(m_shared, config);
+    }
+}
+
 bool VrBridgeHost::Configure(const rcvr::DisplayConfig& config) {
     std::lock_guard lock(m_mutex);
     m_driftNsPerS = 0;  // another session, maybe another headset: learn its drift afresh
     rcvr::DisplayConfig c = config;
     c.adapterLuid = m_gpu.luid;
+    c.touchControllers = SettingsStore::Get().Snapshot().controllerMode == "touch";
     const auto& old = m_shared->config;
     const bool resolutionChanged = !m_hasConfig || old.eyeWidth != c.eyeWidth || old.eyeHeight != c.eyeHeight;
     // What SteamVR renders at, which it only takes on when it starts.
@@ -133,8 +161,7 @@ bool VrBridgeHost::Configure(const rcvr::DisplayConfig& config) {
     const bool displayChanged = resolutionChanged || old.refreshRate != c.refreshRate ||
                                 std::memcmp(old.fovTan, c.fovTan, sizeof(c.fovTan)) != 0;
     if (resolutionChanged && !CreateTextures(c.eyeWidth * 2, c.eyeHeight)) return false;
-    m_shared->config = c;
-    MemoryBarrier();
+    rcvr::WriteDisplayConfig(m_shared, c);
     if (displayChanged) InterlockedIncrement(&m_shared->configGeneration);
     m_hasConfig = true;
 
@@ -163,20 +190,33 @@ rcvr::DisplayConfig VrBridgeHost::LastConfig() const {
 }
 
 void VrBridgeHost::SetHeadsetConnected(bool connected) {
-    if (m_shared) InterlockedExchange(&m_shared->headsetConnected, connected ? 1 : 0);
+    std::lock_guard lock(m_mutex);
+    if (!m_shared) return;
+    InterlockedExchange(&m_shared->headsetConnected, connected ? 1 : 0);
+    if (!connected) {
+        auto config = m_shared->config;
+        std::memset(config.controllerProfiles, 0, sizeof(config.controllerProfiles));
+        rcvr::WriteDisplayConfig(m_shared, config);
+        rcvr::WriteTracking(m_shared, rcvr::TrackingSnapshot{});
+        for (int hand = 0; hand < 2; ++hand) rcvr::WriteHand(m_shared, hand, rcvr::HandSnapshot{});
+        rcvr::WriteBody(m_shared, rcvr::BodySnapshot{});
+    }
 }
 
 void VrBridgeHost::PublishTracking(const rcvr::TrackingSnapshot& snapshot) {
+    std::lock_guard lock(m_mutex);
     if (!m_shared) return;
     rcvr::WriteTracking(m_shared, snapshot);
     SetEvent(m_trackingEvent);
 }
 
 void VrBridgeHost::PublishBody(const rcvr::BodySnapshot& snapshot) {
+    std::lock_guard lock(m_mutex);
     if (m_shared) rcvr::WriteBody(m_shared, snapshot);
 }
 
 void VrBridgeHost::PublishHand(int hand, const rcvr::HandSnapshot& snapshot) {
+    std::lock_guard lock(m_mutex);
     if (m_shared) rcvr::WriteHand(m_shared, hand, snapshot);
 }
 

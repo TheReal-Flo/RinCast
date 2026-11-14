@@ -13,6 +13,7 @@
 
 #include "../settings.h"
 #include "../util.h"
+#include "../settings.h"
 #include "rc/platform.h"
 
 namespace rcs::steamvr {
@@ -75,7 +76,10 @@ static void StartForcedDriverWatch();
 static std::atomic<int64_t> g_launchNs{0};
 
 void Launch() {
+    if (IsRunning()) return;
     g_launchNs = rc::NowNs();
+    // Register the resource-only driver before SteamVR scans resource roots.
+    if (SettingsStore::Get().Snapshot().autoRegisterSteamVrDriver) RegisterDriver();
     ForceRinCastDriver();
     ShellExecuteW(nullptr, L"open", L"steam://rungameid/250820", nullptr, nullptr, SW_SHOWNORMAL);
 }
@@ -117,57 +121,77 @@ fs::path DriverDirectory() {
 }
 
 static fs::path OpenVrPathsFile() {
-    wchar_t buf[MAX_PATH];
-    GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    wchar_t buf[MAX_PATH]{};
+    const auto length = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    if (!length || length >= MAX_PATH) return DataDir().parent_path() / L"openvr" / L"openvrpaths.vrpath";
     return fs::path(buf) / "openvr" / "openvrpaths.vrpath";
 }
 
-bool IsDriverRegistered() {
+static bool IsDriverPathRegistered(const fs::path& wanted) {
     std::vector<uint8_t> bytes;
     if (!ReadFileBytes(OpenVrPathsFile(), bytes)) return false;
     try {
-        const json j = json::parse(bytes.begin(), bytes.end());
-        const fs::path want = DriverDirectory();
-        for (const auto& d : j.value("external_drivers", json::array())) {
-            std::error_code ec;
-            if (fs::equivalent(fs::path(Widen(d.get<std::string>())), want, ec)) return true;
+        const auto paths = json::parse(bytes.begin(), bytes.end());
+        const auto drivers = paths.value("external_drivers", json::array());
+        if (!drivers.is_array()) return false;
+        for (const auto& driver : drivers) {
+            std::error_code error;
+            if (driver.is_string() && fs::equivalent(fs::path(Widen(driver.get<std::string>())), wanted, error)) return true;
         }
     } catch (...) {
     }
     return false;
 }
 
-bool RegisterDriver() {
-    if (IsDriverRegistered()) return true;
-    const fs::path dir = DriverDirectory();
-    if (!fs::exists(dir / "driver.vrdrivermanifest")) {
-        RC_LOGW("SteamVR driver not found at %s", Narrow(dir.wstring()).c_str());
+bool IsDriverRegistered() { return IsDriverPathRegistered(DriverDirectory()); }
+
+static bool RegisterDriverPath(const fs::path& directory) {
+    if (IsDriverPathRegistered(directory)) return true;
+    if (!fs::exists(directory / "driver.vrdrivermanifest")) return false;
+    // vrpathreg owns SteamVR's bookkeeping and can initialize a missing paths file.
+    if (auto runtime = SteamVrPath()) {
+        const auto tool = *runtime / "bin" / "win64" / "vrpathreg.exe";
+        if (fs::exists(tool)) {
+            RunHidden(L"\"" + tool.wstring() + L"\" adddriver \"" + directory.wstring() + L"\"");
+            if (IsDriverPathRegistered(directory)) return true;
+        }
+    }
+    std::vector<uint8_t> bytes;
+    if (!ReadFileBytes(OpenVrPathsFile(), bytes)) return false;
+    try {
+        auto paths = json::parse(bytes.begin(), bytes.end());
+        auto drivers = paths.value("external_drivers", json::array());
+        if (!drivers.is_array()) return false;
+        drivers.push_back(Narrow(directory.wstring()));
+        paths["external_drivers"] = drivers;
+        return WriteFileAtomic(OpenVrPathsFile(), paths.dump(1, '\t'));
+    } catch (...) {
         return false;
     }
-    // Preferred: vrpathreg, which also handles SteamVR's own bookkeeping.
-    if (auto svr = SteamVrPath()) {
-        const fs::path vrpathreg = *svr / "bin" / "win64" / "vrpathreg.exe";
-        if (fs::exists(vrpathreg)) {
-            RunHidden(L"\"" + vrpathreg.wstring() + L"\" adddriver \"" + dir.wstring() + L"\"");
-            if (IsDriverRegistered()) return true;
-        }
-    }
-    // Fallback: edit openvrpaths.vrpath directly.
-    std::vector<uint8_t> bytes;
-    json j = json::object();
-    if (ReadFileBytes(OpenVrPathsFile(), bytes)) {
-        try {
-            j = json::parse(bytes.begin(), bytes.end());
-        } catch (...) {
-        }
-    }
-    auto drivers = j.value("external_drivers", json::array());
-    if (!drivers.is_array()) drivers = json::array();
-    drivers.push_back(Narrow(dir.wstring()));
-    j["external_drivers"] = drivers;
-    std::error_code ec;
-    fs::create_directories(OpenVrPathsFile().parent_path(), ec);
-    return WriteFileAtomic(OpenVrPathsFile(), j.dump(1, '\t'));
+}
+
+static bool RegisterNativeControllerResources() {
+    const auto root = DataDir() / L"native-controller-resources";
+    std::error_code error;
+    fs::create_directories(root / L"resources" / L"rendermodels", error);
+    if (error || !WriteFileAtomic(root / L"driver.vrdrivermanifest", json{{"name", "rincast_native"},
+                                                                          {"directory", ""},
+                                                                          {"resourceOnly", true},
+                                                                          {"alwaysActivate", true},
+                                                                          {"hmd_presence", json::array()}}
+                                                                         .dump(2)))
+        return false;
+    return RegisterDriverPath(root);
+}
+
+bool RegisterDriver() {
+    static std::mutex registrationMutex;
+    std::lock_guard lock(registrationMutex);
+    const bool resourcesRegistered = RegisterNativeControllerResources();
+    if (!resourcesRegistered) RC_LOGW("Could not register native controller model resources");
+    const bool driverRegistered = RegisterDriverPath(DriverDirectory());
+    if (!driverRegistered) RC_LOGW("Could not register RinCast SteamVR driver");
+    return resourcesRegistered && driverRegistered;
 }
 
 // ---- Making sure SteamVR started by RinCast runs RinCast's driver ----
@@ -222,7 +246,9 @@ static std::string DriverName(const fs::path& dir) {
 static void PutOurDriverFirst() {
     const fs::path ours = DriverDirectory();
     if (!fs::exists(ours / "driver.vrdrivermanifest")) return;
-    if (!IsDriverRegistered() && !RegisterDriver()) return;
+    // RegisterDriver also registers the native controller models, and fails if only they do.
+    if (!IsDriverRegistered()) RegisterDriver();
+    if (!IsDriverRegistered()) return;
     json j;
     if (!ReadJsonFile(OpenVrPathsFile(), j)) return;
     auto drivers = j.value("external_drivers", json::array());

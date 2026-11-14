@@ -39,6 +39,7 @@
     X(xrGetInstanceProperties)             \
     X(xrPollEvent)                         \
     X(xrStringToPath)                      \
+    X(xrPathToString)                      \
     X(xrGetSystem)                         \
     X(xrGetSystemProperties)               \
     X(xrEnumerateViewConfigurationViews)   \

@@ -218,6 +218,7 @@ void VrStream::Run() {
     bool halfRate = false, skipNext = false;
     m_sender.SetPacing(m_config.pace);
     uint64_t lastFrameIndex = 0;
+    LONG lastProducerPid = 0;
     int64_t lastFrameNs = 0;
     bool streaming = false;
     rcvr::ProducerKind lastProducer = rcvr::ProducerKind::None;
@@ -253,6 +254,15 @@ void VrStream::Run() {
         if (streaming && !m_paused) LogFrameFlow(now);
 
         const rcvr::ProducerKind producer = m_bridge->ActiveProducer();
+        const LONG producerPid = shared->producerPid;
+        if (producerPid != lastProducerPid) {
+            // Each producer starts its frame counter at zero. A SteamVR restart
+            // must not leave us discarding its frames as older than the previous run.
+            lastProducerPid = producerPid;
+            lastFrameIndex = 0;
+            motion.Reset();
+            m_sender.RequestKeyframe();
+        }
         const std::string app = m_bridge->ApplicationName();
         const bool fresh = now - lastFrameNs < 1'000'000'000LL;
         if (streaming && !fresh) {
