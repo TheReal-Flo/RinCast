@@ -2,6 +2,10 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <chrono>
+#include <fstream>
 #include <android_native_app_glue.h>
 #include <sys/system_properties.h>
 #else
@@ -134,6 +138,7 @@ void App::Init() {
     m_settingsPath = Platform::FilesDir() + "/settings.json";
     m_settings = HeadsetSettings::Load(m_settingsPath);
     SetLanguage(m_settings.language, Platform::SystemLocale());
+    StartScreenshotWatch();
     {
         rc::crypto::IdentitySeed seed{};
         if (!rc::HexDecode(m_settings.deviceSecret, seed.data(), seed.size())) {
@@ -159,7 +164,12 @@ void App::Init() {
         m_settings.vrScaleOfPanel = true;
         SaveSettings();
     }
-    Platform::RequestPermissions(m_headset->StartupPermissions());
+    std::vector<std::string> startup = m_headset->StartupPermissions();
+    // Storage is asked for with the rest, after the first frame (see the frame loop).
+    Platform::RequestPermissions(startup);
+    // Some systems grant storage quietly (PICO), others need the user (Quest): check
+    // once the home screen is up, after the permission dialog had its chance.
+    m_storageNoticeAt = m_settings.autoSendScreenshots ? 5.f : 0.f;
     m_input.Init(m_xr, m_headset->Controllers());
     m_sky.Init(m_assets);
     m_music.Load(m_assets);
@@ -217,6 +227,8 @@ void App::Init() {
 void App::Shutdown() {
     if (!m_initialized) return;
     m_initialized = false;
+    // Stop the screenshot poll before anything it touches goes away.
+    if (m_screenshotThread.joinable()) m_screenshotThread.join();
     {
         std::lock_guard lock(m_poseMutex);
         m_poseThreadStop = true;
@@ -435,6 +447,156 @@ void App::DisconnectNow() {
     EnterMode(Mode::Home);
 }
 
+void App::StartScreenshotWatch() {
+    m_screenshotThread = std::thread([this] {
+        // inotify attaches to shared storage without complaint and then never fires:
+        // the folder is a FUSE mount. Poll instead; a screenshot folder is small.
+        // Where system screenshots land: PICO uses Pictures/Screenshots, Quest puts them
+        // in Oculus/Screenshots, most other devices in DCIM/Screenshots. Watch them all.
+        const char* dirs[] = {"/storage/emulated/0/Pictures/Screenshots", "/storage/emulated/0/DCIM/Screenshots",
+                              "/storage/emulated/0/Oculus/Screenshots"};
+        auto newest = [](const char* dir, std::string& name, int64_t& mtime, bool& opened) {
+            opened = false;
+            DIR* d = opendir(dir);
+            if (!d) return false;
+            opened = true;
+            bool found = false;
+            while (dirent* e = readdir(d)) {
+                const std::string n = e->d_name;
+                const bool image = n.size() > 5 && (n.rfind(".jpeg") == n.size() - 5 ||
+                                                     n.rfind(".jpg") == n.size() - 4 ||
+                                                     n.rfind(".png") == n.size() - 4);
+                if (!image) continue;
+                struct stat st{};
+                if (fstatat(dirfd(d), e->d_name, &st, 0) != 0) continue;
+                if (!found || st.st_mtime > mtime || (st.st_mtime == mtime && n > name)) {
+                    name = n;
+                    mtime = st.st_mtime;
+                    found = true;
+                }
+            }
+            closedir(d);
+            return found;
+        };
+        // Start from what's already in the folders: a fresh app start must not replay history.
+        std::string lastName;
+        int64_t lastMtime = 0, lastSeenNs = 0;
+        for (const char* dir : dirs) {
+            std::string n;
+            int64_t t = 0;
+            bool opened = false;
+            const bool found = newest(dir, n, t, opened);
+            if (!opened) {
+                if (errno == ENOENT)
+                    RC_LOGI("Screenshot: %s doesn't exist yet", dir);
+                else
+                    RC_LOGW("Screenshot: can't open %s (errno %d) — is the storage permission granted?", dir, errno);
+            } else if (!found)
+                RC_LOGI("Screenshot: %s readable, no images in it yet", dir);
+            if (found && (lastName.empty() || t > lastMtime || (t == lastMtime && n > lastName))) {
+                lastName = std::string(dir) + "/" + n;
+                lastMtime = t;
+            }
+        }
+        RC_LOGI("Screenshot: polling %s, %s and %s", dirs[0], dirs[1], dirs[2]);
+        std::string stuckName;  // a file that keeps refusing to be read whole
+        int stuckCount = 0;
+        while (!m_exit) {
+            // Wake often enough to notice shutdown within ~100 ms.
+            for (int i = 0; i < 12 && !m_exit; i++)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // One at a time: wait for the PC to confirm the last one before sending the next.
+            if (m_shotSending) {
+                if (rc::NowNs() - m_shotSendingSince < 20'000'000'000LL) continue;
+                RC_LOGW("Screenshot: no confirmation after 20 s, sending the next one anyway");
+                m_shotSending = false;
+            }
+            for (const char* dir : dirs) {
+                std::string name;
+                int64_t mtime = 0;
+                bool opened = false;
+                if (!newest(dir, name, mtime, opened)) continue;
+                const std::string full = std::string(dir) + "/" + name;
+                const bool isNew = mtime > lastMtime || (mtime == lastMtime && full > lastName);
+                const bool fresh = !(full == lastName && rc::NowNs() - lastSeenNs < 2'000'000'000LL);
+                if (!isNew || !fresh) continue;
+                // Only remember the file once it has been read whole: the system capture
+                // grows it for a moment, and a tick landing inside the write must not
+                // mark the screenshot as handled before it ever went out.
+                if (SendScreenshot(full, name)) {
+                    lastName = full;
+                    lastMtime = mtime;
+                    lastSeenNs = rc::NowNs();
+                    stuckName.clear();
+                    stuckCount = 0;
+                } else if (full == stuckName && ++stuckCount > 8) {
+                    RC_LOGE("Screenshot: giving up on %s after repeated failures", name.c_str());
+                    lastName = full;
+                    lastMtime = mtime;
+                    stuckName.clear();
+                    stuckCount = 0;
+                } else {
+                    stuckName = full;
+                }
+            }
+        }
+    });
+}
+
+bool App::SendScreenshot(const std::string& path, const std::string& name) {
+    if (!m_settings.autoSendScreenshots) {
+        RC_LOGW("Screenshot: auto-send is off, not sending %s", name.c_str());
+        return true;  // a decision, not a failure: don't keep retrying
+    }
+    struct stat before{};
+    if (stat(path.c_str(), &before) != 0) {
+        RC_LOGW("Screenshot: couldn't stat %s", name.c_str());
+        return false;
+    }
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        RC_LOGW("Screenshot: couldn't read %s", name.c_str());
+        return false;
+    }
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();
+    // A file that grew (or vanished) under us was caught mid-write; the next tick sees it done.
+    struct stat after{};
+    if (stat(path.c_str(), &after) != 0 || data.size() != size_t(after.st_size) || after.st_size == 0) {
+        RC_LOGI("Screenshot: %s still being written (%zu of %lld bytes)", name.c_str(), data.size(),
+                after.st_size > 0 ? (long long)after.st_size : (long long)before.st_size);
+        return false;
+    }
+    if (m_client.SendQueueChunks() > 4096) {
+        // The link is still draining earlier screenshots: defer rather than pile on.
+        RC_LOGW("Screenshot: control queue backed up, deferring %s", name.c_str());
+        return false;
+    }
+    RC_LOGI("Screenshot: sending %s (%zu bytes)", name.c_str(), data.size());
+    m_shotSending = true;
+    m_shotSendingSince = rc::NowNs();
+    m_client.SendControl({{"type", "screenshot.begin"}, {"name", name}, {"size", data.size()}});
+    // Paced: a screenshot may take a few seconds, but must not take the control channel from
+    // the input and tracking messages that share it. The hex doubles the bytes on the wire, so
+    // 600 KB/s of picture is about 10 Mbps there.
+    constexpr double kBytesPerSecond = 600.0 * 1024.0;
+    const int64_t started = rc::NowNs();
+    size_t sent = 0;
+    for (size_t off = 0; off < data.size(); off += 262144) {
+        const size_t n = std::min<size_t>(262144, data.size() - off);
+        m_client.SendControl({{"type", "screenshot.data"}, {"data", rc::HexEncode(data.data() + off, n)}});
+        sent += n;
+        const int64_t due = started + int64_t(double(sent) / kBytesPerSecond * 1e9);
+        while (!m_exit && rc::NowNs() < due) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (m_exit) {
+            m_shotSending = false;
+            return false;
+        }
+    }
+    m_client.SendControl({{"type", "screenshot.end"}, {"name", name}});
+    return true;
+}
+
 void App::LaunchSteamVr() {
     m_client.SendControl({{"type", rc::msg::kLaunchSteamVr}});
     EnterMode(Mode::LaunchingVr);
@@ -549,6 +711,8 @@ void App::RunAction(const std::string& action) {
     } else if (action == "vr.restartSteamVR") {
         m_client.SendControl({{"type", action}});
         EnterMode(Mode::LaunchingVr);
+    } else if (action == "app.storage") {
+        Platform::OpenStorageSettings();
     } else if (!action.empty()) {
         m_client.SendControl({{"type", action}});
     }
@@ -988,6 +1152,13 @@ void App::HandleControl(const json& m) {
         }
         for (auto& old : m_games) old.image.Destroy();
         m_games = std::move(games);
+    } else if (type == "screenshot.saved") {
+        m_shotSending = false;
+        const bool ok = m.value("ok", false);
+        const std::string saved = m.value("name", "");
+        const int64_t bytes = m.value("size", int64_t(0));
+        if (ok) RC_LOGI("Screenshot: the PC saved %s (%lld bytes)", saved.c_str(), (long long)bytes);
+        else RC_LOGW("Screenshot: the PC couldn't save it");
     } else if (type == "games.image") {
         for (auto& g : m_games)
             if (g.id == m.value("id", "") && !g.image.id) DecodeImage(m.value("data", ""), g.image);
@@ -1180,6 +1351,20 @@ void App::Frame() {
     const float dt = std::clamp(float(now - m_lastFrameNs) / 1e9f, 0.001f, 0.1f);
     m_lastFrameNs = now;
     m_time += dt;
+    if (!m_requestedStorage && m_time > 2.0f) {
+        // A couple of seconds in, never before the first frames: PICO answers a permission
+        // request by taking the screen over, and doing that during startup made updates look
+        // broken (a black screen was all that showed).
+        m_requestedStorage = true;
+        std::vector<std::string> ask{"android.permission.RECORD_AUDIO"};
+        if (m_settings.autoSendScreenshots) ask.push_back("android.permission.READ_EXTERNAL_STORAGE");
+        Platform::RequestPermissions(ask);
+        if (m_settings.autoSendScreenshots) m_storageNoticeAt = m_time + 5.f;
+    }
+    if (m_storageNoticeAt > 0 && m_time >= m_storageNoticeAt) {
+        m_storageNoticeAt = -1;
+        if (!Platform::ScreenshotStorageOk()) PostNotice(Tr("notice.storage"), "warning", "app.storage");
+    }
 
     FrameState frame;
     // Lighthouse trackers calibrated against the headset (Space Calibrator) need a space that
@@ -2128,10 +2313,22 @@ void App::LatchVideo(const FrameState& frame, bool late) {
         m_stats.decodeMs = decode;
         if (vr && m_serverStats.contains("vr")) {
             m_stats.mbps = m_serverStats["vr"].value("mbps", 0.0);
+            m_stats.targetKbps = m_serverStats["vr"].value("bitrateKbps", 0.0);
+            m_stats.pcEncodeMs = m_serverStats["vr"].value("encodeMs", 0.0);
+            m_stats.pcFramesLost = m_serverStats["vr"].value("framesLost", 0);
         } else if (m_serverStats.contains("desktop")) {
-            double mbps = 0;
-            for (const auto& d : m_serverStats["desktop"]) mbps += d.value("mbps", 0.0);
+            double mbps = 0, target = 0, encode = 0;
+            int lost = 0;
+            for (const auto& d : m_serverStats["desktop"]) {
+                mbps += d.value("mbps", 0.0);
+                target += d.value("bitrateKbps", 0.0);
+                encode = std::max(encode, d.value("encodeMs", 0.0));
+                lost += d.value("framesLost", 0);
+            }
             m_stats.mbps = mbps;
+            m_stats.targetKbps = target;
+            m_stats.pcEncodeMs = encode;
+            m_stats.pcFramesLost = lost;
         }
         const char* names[] = {"H.264", "HEVC", "AV1"};
         m_stats.codec = vr ? names[int(m_vrCodec) % 3]

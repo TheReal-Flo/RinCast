@@ -72,6 +72,7 @@ struct HeadsetSettings {
     std::string lastPc;
     std::string lastPcAddress;          // where it answered, for networks that drop broadcasts
     bool autoConnect = false;           // connect to lastPc as soon as it's found
+    bool autoSendScreenshots = true;    // headset screenshots land on the PC automatically
     bool autoLaunchSteamVr = false;     // start SteamVR on the PC on connecting
     bool usbCable = false;              // use a USB cable to the PC when one is plugged in
     std::string manualPc;               // for networks that block discovery

@@ -8,6 +8,8 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <atomic>
+#include <thread>
 #include <string>
 #include <thread>
 #include <vector>
@@ -97,6 +99,8 @@ class App {
     void LaunchSteamVr();
     void LaunchGame(const std::string& id);
     void ExitVr(bool byUser = false);
+    void StartScreenshotWatch();
+    bool SendScreenshot(const std::string& path, const std::string& name);
     void Recenter();
     // Applies the curve and distance settings to the screens where they are now.
     void UpdateScreenShape(float previousDistance);
@@ -136,6 +140,8 @@ class App {
     const std::deque<Notice>& Notices() const { return m_notices; }
     struct Stats {
         double fps = 0, latencyMs = 0, decodeMs = 0, mbps = 0, rttMs = 0;
+        double targetKbps = 0, pcEncodeMs = 0;  // PC side: the bitrate it aims at, and its encode time
+        int pcFramesLost = 0;
         std::string codec;
         int width = 0, height = 0;
         double stageMs[kStageCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};  // -1: not measured
@@ -188,6 +194,7 @@ class App {
     XrContext m_xr;
     XrInput m_input;
     std::unique_ptr<Headset> m_headset;
+    std::thread m_screenshotThread;  // polls the screenshots folders; joined at shutdown
     bool m_facePermissionAsked = false;
     bool m_gazePermissionAsked = false;
     void UpdateFace(const FrameState& frame);
@@ -207,7 +214,10 @@ class App {
     void ReleaseMicInBackground();
 
     bool m_initialized = false;
-    bool m_exit = false;
+    std::atomic<bool> m_exit = false;
+    // One screenshot at a time: the PC confirms each with screenshot.saved before the next.
+    std::atomic<bool> m_shotSending = false;
+    int64_t m_shotSendingSince = 0;
     bool m_disconnectRequested = false;
     Mode m_mode = Mode::Home;
     float m_modeTime = 0;
@@ -251,6 +261,8 @@ class App {
     float m_gamesRequestedAt = -100;
     bool m_gamesAnswered = false;
     float m_noPcsSince = -1;
+    float m_storageNoticeAt = 0;      // app time to check storage once at (0/-1: done or n/a)
+    bool m_requestedStorage = false;  // asked for the storage permission this session
     float m_abHeld = 0;
     float m_gripsHeld = 0;  // both grips, for the keyboard
     std::string m_spokenProblem;

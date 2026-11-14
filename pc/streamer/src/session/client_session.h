@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,6 +20,9 @@
 #include "rc/protocol.h"
 
 namespace rcs {
+
+// Defined in settings.cpp: PICO's model codes ("A8110") read as product names ("PICO 4").
+std::string HeadsetName(const std::string& model);
 
 class DesktopStream;
 class VrStream;
@@ -68,6 +72,11 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     const std::string& DeviceKey() const { return m_hello.deviceKey; }
     const std::string& DeviceName() const { return m_hello.deviceName; }
     const std::string& Model() const { return m_hello.model; }
+    // "PICO 4" instead of "A8110"; the device's own name when nothing better is known.
+    std::string DisplayName() const {
+        const std::string name = HeadsetName(m_hello.model);
+        return name.empty() ? m_hello.deviceName : name;
+    }
     const std::string& ClientPublicKeyHex() const { return m_clientPk; }
     const std::vector<uint8_t>& WelcomePacket() const { return m_welcome; }
     int64_t LastReceiveNs() const { return m_connection->LastReceiveNs(); }
@@ -140,7 +149,7 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     std::string m_vrState = "idle";
     std::string m_vrProducer;
     std::string m_vrApp;
-    int64_t m_steamVrLaunchNs = 0;
+    std::atomic<int64_t> m_steamVrLaunchNs = 0;  // written from VR threads, read on the worker
     // Matching SteamVR's resolution: the size the VR stream was started for, a new one
     // SteamVR has rendered at since, for how many ticks (s) it held, and when the stream
     // last restarted to follow one.
@@ -151,6 +160,14 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     void FollowSteamVrResolution();
     int64_t m_connectedAtNs = 0;
     json m_clientStats;
+    bool m_shotActive = false;
+    std::string m_shotName;
+    // Written as the chunks arrive, not kept in memory: a screenshot can be a few megabytes,
+    // and a dropped session must not leave half a picture behind under the real name.
+    std::ofstream m_shotFile;
+    std::string m_shotTemp;
+    uint64_t m_shotCap = 0, m_shotWritten = 0;
+    void ResetShot();
     uint32_t m_lastMouseMonitor = 0;
 };
 
