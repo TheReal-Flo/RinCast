@@ -2,6 +2,88 @@
 
 Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.2.1 - 2026-11-14
+
+### Added
+
+- "Start SteamVR automatically" in the headset's settings, next to auto connect: connecting to
+  the PC goes straight into SteamVR instead of the desktop. A reconnect after a dropped
+  connection still comes back to where you were.
+- Foveated encoding on headsets without eye tracking, such as the Quest 3: full detail in a
+  square at each lens centre, larger than the one that follows the eyes, and half the pixels
+  around it, toward the edges the lens blurs anyway. About a third less to encode, send and
+  decode, so lower encode and decode times and fewer bits needed for the same sharpness where
+  you look.
+
+### Changed
+
+- Fresher head and controller poses in SteamVR games. Poses reached the PC 5 to 6 ms before
+  SteamVR took one; the PC now tells the headset how long they wait, and the headset holds each
+  pose back by that much, less a margin for Wi-Fi, and samples it again just before sending.
+  Games render with a pose about 2 ms newer, and fewer of their frames go without a new pose
+  (2 to 4% instead of 7 to 11%). The headset's log says every five seconds how long poses are
+  held and how long they still waited on the PC; developers can turn it off with
+  `adb shell setprop debug.rincast.pose_hold 0`.
+- High frame rates reach the headset when the game keeps up. The PC converted and encoded each
+  frame before taking the next, so a frame took both times, and with a busy GPU the conversion
+  also waited behind the game's own work: at 120 Hz a game at 120 fps arrived at 75 to 85. The
+  next frame now converts while the one before it encodes, and the frame copy in the SteamVR
+  driver and the conversion ask the GPU for a higher priority. Sending a frame (and on internet
+  connections, spreading it over time) no longer keeps the encoder from starting on the next
+  one. The streamer's log says every 10 seconds how many frames the game made, how many were
+  encoded and where the rest went.
+- When the encoder can't keep up with the refresh rate, SteamVR and OpenXR games are held to the
+  rate it manages, instead of rendering frames that are thrown away: the GPU time goes to
+  encoding, and the frames that arrive come at an even pace. The streamer converts each frame
+  just before the encoder is free, so converted frames don't queue up behind it.
+- A little less time between a game's frame being picked up and shown ("Compositor and
+  display"). The game's picture is picked up as the last thing before the frame goes to the
+  headset's compositor, no longer before the menus are drawn too, and the GPU starts on it at
+  once and no longer loads the previous picture before drawing over it. Most of that stage is the
+  headset's own compositor and display, which an app can't shorten. The headset's log says every
+  five seconds where a frame's time went.
+- The headset runs much cooler. It asked for sustained high CPU and GPU levels while
+  connected, and got them before connecting too, as a Quest app that asks for nothing does: on a
+  Quest that pins the CPU at level 4 and keeps the GPU at 3 or more. It asks for sustained low
+  now, which the headset still raises to the same levels when the work needs them.
+- Menus and windows are no longer drawn again every frame when nothing on them changes: only
+  while pointed at, animating or fading, and otherwise ten times a second. An unchanged window
+  isn't copied to its layer again either.
+- The game's picture and the monitors go into their layers as the video has them, with the
+  GPU's sRGB writes switched off, instead of decoding every pixel to linear light for the GPU to
+  encode right back: the same picture for less work.
+
+### Fixed
+
+- The view and the controllers no longer jump several times a second in VR. When two frames
+  finished decoding between the same two refreshes (one a little late, the next on time), the
+  late one was lost and the refresh before repeated its picture. Frames now reach the display in
+  order, a late one shows a refresh later, and a stream left running a frame behind skips one
+  after half a second to catch up.
+- VR no longer stutters when you move because the display ran at another rate than the game. The
+  headset asked for its refresh rate once and never checked: a Quest could stay at 72 Hz while
+  the PC rendered 90 frames a second, so one frame in five was never shown. It now asks again
+  until the display gets there, and if the display stays elsewhere (the headset keeps its own
+  rate, or lowers it when hot), the PC renders at the rate the display really runs at. A rate
+  the headset couldn't read no longer counts as 72 Hz, and the headset's log says why the
+  display is elsewhere: lowered by the headset itself, with how hot it is (Meta's first step
+  against heat is 72 Hz), or set by the developer setting debug.oculus.refreshRate.
+- SteamVR started more frames than the headset shows. While the stream nudged its timing to
+  match the headset's display, the driver could signal the vsync it had just passed a second
+  time: 160 to 190 a second at 120 Hz. Each vsync now comes at least half a frame after the last,
+  and SteamVR gets exactly as many as the display shows.
+- SteamVR started from RinCast always runs RinCast's driver. RinCast names it in SteamVR's
+  settings as the headset's driver until SteamVR closes, so another streaming app's driver can't
+  take over, and puts your previous setting back afterwards. When more than one RinCast copy is
+  registered (an older install, a development build), the streamer's own copy is the one loaded.
+  SteamVR started without RinCast picks its headset as before.
+- A sharper, calmer VR picture when the game renders above the stream's resolution, as SteamVR
+  does by default on a fast GPU (often 150%). Shrinking it to the stream took one sample per
+  pixel and skipped most of the game's pixels, so fine detail shimmered and edges crawled; each
+  pixel now averages the ones it covers, in the SteamVR driver and in the OpenXR runtime.
+- A controller that goes to sleep while held still stays where it was last seen in games,
+  instead of disappearing until it's moved again.
+
 ## 1.2.0 - 2026-11-09
 
 Update both the headset app and the PC: the new resolution range and most fixes need both.

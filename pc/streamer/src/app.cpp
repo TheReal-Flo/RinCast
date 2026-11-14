@@ -115,6 +115,7 @@ bool App::Init() {
         return false;
     }
     m_cloud.Start(&m_server);
+    steamvr::WatchForcedDriver();
 
     if (settings.autoRegisterSteamVrDriver && steamvr::SteamVrPath()) {
         RunAsync([] { steamvr::RegisterDriver(); });

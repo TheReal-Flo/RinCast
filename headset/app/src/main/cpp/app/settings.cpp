@@ -22,6 +22,7 @@ json HeadsetSettings::ToJson() const {
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
             {"autoConnect", autoConnect},
+            {"autoLaunchSteamVr", autoLaunchSteamVr},
             {"usbCable", usbCable},
             {"refreshRate", refreshRate},
             {"codec", codec},
@@ -90,6 +91,7 @@ void HeadsetSettings::FromJson(const json& j) {
     get("matchSteamVr", matchSteamVr);
     get("gazeFoveation", gazeFoveation);
     get("autoConnect", autoConnect);
+    get("autoLaunchSteamVr", autoLaunchSteamVr);
     get("usbCable", usbCable);
     get("refreshRate", refreshRate);
     get("codec", codec);

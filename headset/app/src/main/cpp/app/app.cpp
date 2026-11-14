@@ -207,6 +207,8 @@ void App::Init() {
     m_client.SetCallbacks(cb);
 
     CreateWindows();
+    m_poseThreadStop = false;
+    m_poseThread = std::thread([this] { PoseThread(); });
     m_lastFrameNs = rc::NowNs();
     m_initialized = true;
     RC_LOGI("RinCast %s ready", kVersion);
@@ -215,6 +217,13 @@ void App::Init() {
 void App::Shutdown() {
     if (!m_initialized) return;
     m_initialized = false;
+    {
+        std::lock_guard lock(m_poseMutex);
+        m_poseThreadStop = true;
+        m_heldPose.reset();
+    }
+    m_poseCv.notify_all();
+    if (m_poseThread.joinable()) m_poseThread.join();
     m_client.Disconnect();
     m_discovery.Stop();
     m_cloud.Stop();
@@ -236,11 +245,45 @@ void App::ApplyStreamSettings() {
     m_xr.SetRefreshRate(m_settings.refreshRate);
     m_audio.SetVolume(m_settings.volume);
     m_mic.SetGain(m_settings.micVolume);
+    // A new rate gets its own chance before the PC is told the display is elsewhere.
+    m_displayHzForPc = 0;
+    m_displayOffSince = -1;
     if (m_client.GetState() == StreamClient::State::Connected)
-        m_client.SendControl({{"type", rc::msg::kUpdateSettings}, {"settings", m_settings.StreamSettingsJson()}});
+        m_client.SendControl({{"type", rc::msg::kUpdateSettings}, {"settings", StreamSettingsForPc()}});
     if (m_settings.micPassthrough && m_client.GetState() == StreamClient::State::Connected && !m_mic.Running())
         m_mic.Start([this](const uint8_t* d, size_t n) { m_client.SendAudio(d, n); });
     if (!m_settings.micPassthrough) m_mic.Stop();
+}
+
+json App::StreamSettingsForPc() {
+    json s = m_settings.StreamSettingsJson();
+    if (m_displayHzForPc > 0) s["refreshRate"] = m_displayHzForPc;
+    // Without eye tracking, foveated encoding keeps a larger square fixed at the lens centre.
+    s["eyesTracked"] = GazeSupported();
+    return s;
+}
+
+// The PC renders at the rate it's told. When the display stays at another one (the runtime
+// keeps its own, or lowers it when hot), frames at the wrong rate stutter: some are never
+// shown, or some twice. Tell the PC what the display really runs at, and the setting again
+// once the display gets there.
+void App::FollowDisplayRate() {
+    // Without the extension, or when it can't be read, the rate isn't known: leave the setting.
+    if (m_time < m_displayCheckAt || !m_xr.Running() || !m_xr.HasExtension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)) return;
+    m_displayCheckAt = m_time + 1.f;
+    const float hz = m_xr.RefreshRate();
+    if (hz <= 0) return;
+    const bool off = std::fabs(hz - m_settings.refreshRate) > 0.5f;
+    if (!off) m_displayOffSince = -1;
+    else if (m_displayOffSince < 0) m_displayOffSince = m_time;
+    // KeepRefreshRate asks again every two seconds: give it a few tries first.
+    const float forPc = off && m_time - m_displayOffSince > 6.f ? hz : off ? m_displayHzForPc : 0;
+    if (std::fabs(forPc - m_displayHzForPc) < 0.5f) return;
+    m_displayHzForPc = forPc;
+    RC_LOGI("The PC renders at %.0f Hz: the display is at %.0f, %.0f asked for", forPc > 0 ? forPc : m_settings.refreshRate,
+            hz, m_settings.refreshRate);
+    if (m_client.GetState() == StreamClient::State::Connected)
+        m_client.SendControl({{"type", rc::msg::kUpdateSettings}, {"settings", StreamSettingsForPc()}});
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +294,7 @@ void App::SendHello() {
     // (The display description is also sent in client.info once connected.)
 }
 
-static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettings& s, const FrameState* frame) {
+static json HelloJson(XrContext& xr, const Headset& headset, const json& settings, const FrameState* frame) {
     json fov = json::array();
     float ipd = 0.063f;
     if (frame) {
@@ -283,7 +326,7 @@ static json HelloJson(XrContext& xr, const Headset& headset, const HeadsetSettin
             {"decoders",
              {{"h264", dec.h264}, {"hevc", dec.hevc}, {"hevc10", dec.hevc10}, {"av1", dec.av1}, {"av110", dec.av110},
               {"maxWidth", dec.maxWidth}, {"maxHeight", dec.maxHeight}}},
-            {"settings", s.StreamSettingsJson()}};
+            {"settings", settings}};
 }
 
 static FrameState g_lastFrame;
@@ -302,7 +345,7 @@ void App::ConnectLan(const DiscoveredPc& pc) {
     // A link-local address means nothing on another day or cable.
     if (!pc.viaUsb) m_settings.lastPcAddress = pc.address.IpString();
     SaveSettings();
-    m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+    m_client.Connect(t, HelloJson(m_xr, *m_headset, StreamSettingsForPc(), g_haveFrame ? &g_lastFrame : nullptr));
     EnterMode(Mode::Connecting);
 }
 
@@ -650,7 +693,18 @@ void App::EnterMode(Mode m) {
 //   adb shell setprop debug.rincast.ui home,keyboard       windows to show (others are hidden)
 //   adb shell setprop debug.rincast.tab 2                  page of the main panel
 //   adb shell setprop debug.rincast.pc 10.0.2.2            extra PC address to probe
-// On Linux the same come from the environment: DEBUG_RINCAST_PC, DEBUG_RINCAST_TAB, DEBUG_RINCAST_UI.
+// And for measuring a VR stream's timing against the headset's log ("VR frame timing", "VR
+// frame arrival"), changed while it runs:
+//   adb shell setprop debug.rincast.prelatch_ms 1          that much extra work before the game's
+//                                                          picture is picked up (0 to 5 ms): does
+//                                                          the headset wake the app earlier for it?
+//   adb shell setprop debug.rincast.slip 1                 ask the PC to let waiting pictures run
+//                                                          out (SteamVR games); off by default, as
+//                                                          a picture waiting measured faster
+//   adb shell setprop debug.rincast.pose_hold 0            send poses as soon as they are located,
+//                                                          not held back for SteamVR's pickup
+// On Linux the same come from the environment: DEBUG_RINCAST_PC, DEBUG_RINCAST_TAB, DEBUG_RINCAST_UI,
+// DEBUG_RINCAST_PRELATCH_MS, DEBUG_RINCAST_SLIP, DEBUG_RINCAST_POSE_HOLD.
 static void DebugProperty(const char* name, char (&value)[92]) {
 #ifdef __ANDROID__
     __system_property_get(name, value);
@@ -687,6 +741,27 @@ void App::PollDebugProperties() {
             ToggleWindow(id, list.find(std::string(",") + id + ",") != std::string::npos);
         RC_LOGI("debug.rincast.ui = %s", m_debugUi.c_str());
     }
+    value[0] = 0;
+    DebugProperty("debug.rincast.prelatch_ms", value);
+    if (const float ms = std::clamp(float(std::atof(value)), 0.f, 5.f); ms != m_debugPreLatchMs) {
+        m_debugPreLatchMs = ms;
+        RC_LOGI("debug.rincast.prelatch_ms = %.1f: that much extra work before the game's picture is picked up", ms);
+    }
+    value[0] = 0;
+    DebugProperty("debug.rincast.slip", value);
+    if (const bool slip = value[0] == '1'; slip != m_debugSlip) {
+        m_debugSlip = slip;
+        RC_LOGI("debug.rincast.slip = %d: the PC is %s to let waiting pictures run out", int(slip),
+                slip ? "asked" : "never asked");
+    }
+    value[0] = 0;
+    DebugProperty("debug.rincast.pose_hold", value);
+    if (const bool hold = value[0] != '0'; hold != m_debugPoseHold) {
+        m_debugPoseHold = hold;
+        m_poseHoldNs = 0;
+        RC_LOGI("debug.rincast.pose_hold = %d: poses are %s", int(hold),
+                hold ? "held back until just before SteamVR takes them" : "sent as soon as located");
+    }
 }
 
 void App::UpdateMode(float dt) {
@@ -706,7 +781,7 @@ void App::UpdateMode(float dt) {
         case Mode::Connecting:
             if (clientState == StreamClient::State::Connected) {
                 // Introduce ourselves, then show the desktop.
-                json info = HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr);
+                json info = HelloJson(m_xr, *m_headset, StreamSettingsForPc(), g_haveFrame ? &g_lastFrame : nullptr);
                 info["type"] = rc::msg::kClientInfo;
                 m_client.SendControl(info);
                 Platform::SetStreamingLocks(true);
@@ -715,12 +790,19 @@ void App::UpdateMode(float dt) {
                 m_mic.SetGain(m_settings.micVolume);
                 if (m_settings.micPassthrough)
                     m_mic.Start([this](const uint8_t* d, size_t n) { m_client.SendAudio(d, n); });
-                m_client.SendControl({{"type", rc::msg::kStartDesktop}});
+                // Straight into SteamVR when asked, but not on a reconnect: one that comes back
+                // while a game runs goes back into it anyway (kVrState), and one that comes back
+                // on the desktop stays there.
+                const bool launchSteamVr = m_settings.autoLaunchSteamVr && !Reconnecting();
+                if (!launchSteamVr) m_client.SendControl({{"type", rc::msg::kStartDesktop}});
                 m_problem.clear();
                 m_retryUntil = 0;
                 m_retryAttempt = 0;
                 if (m_settings.uiSounds) Platform::PlaySound(Platform::Sound::Connected);
-                EnterMode(Mode::Desktop);
+                if (launchSteamVr)
+                    LaunchSteamVr();
+                else
+                    EnterMode(Mode::Desktop);
             } else if (clientState == StreamClient::State::Failed) {
                 m_problem = m_client.StatusText();
                 if (m_settings.uiSounds && !Reconnecting()) Platform::PlaySound(Platform::Sound::Problem);
@@ -853,7 +935,7 @@ void App::HandleControl(const json& m) {
         };
         endpoints(m.value("rendezvous", json::array()), t.rendezvous);
         endpoints(m.value("locals", json::array()), t.pcLocalAddrs);
-        m_client.Connect(t, HelloJson(m_xr, *m_headset, m_settings, g_haveFrame ? &g_lastFrame : nullptr));
+        m_client.Connect(t, HelloJson(m_xr, *m_headset, StreamSettingsForPc(), g_haveFrame ? &g_lastFrame : nullptr));
     } else if (type == "_haptic") {
         m_input.Vibrate(m.value("hand", 0), m.value("amplitude", 0.f), std::max(0.02f, m.value("duration", 0.05f)),
                         m.value("frequency", 0.f) > 0 ? m.value("frequency", 0.f) : XR_FREQUENCY_UNSPECIFIED);
@@ -911,6 +993,8 @@ void App::HandleControl(const json& m) {
             if (g.id == m.value("id", "") && !g.image.id) DecodeImage(m.value("data", ""), g.image);
     } else if (type == rc::msg::kServerStats) {
         m_serverStats = m;
+    } else if (type == rc::msg::kVrPoseWait) {
+        OnPoseWait(m);
     } else if (type == rc::msg::kNotice) {
         PostNotice(m.value("text", ""), m.value("level", "info"), m.value("action", ""));
     }
@@ -1010,6 +1094,11 @@ void App::ConfigureVrStream(const json& s) {
     CreateVrSwapchain();
     m_vrHasFrame = false;
     m_motionMoves = false;
+    // A new stream starts with nothing waiting and nothing known about its timing.
+    m_behindSinceNs = m_slipUntilNs = m_slipRetryNs = m_queueKeptUntilNs = 0;
+    m_slips.clear();
+    m_arrivalSpread.clear();
+    m_queueWanted = 1;
 }
 
 void App::CreateVrSwapchain() {
@@ -1096,7 +1185,10 @@ void App::Frame() {
     // Lighthouse trackers calibrated against the headset (Space Calibrator) need a space that
     // stays put; the local floor moves whenever the headset recenters.
     m_xr.SetPreferStage(m_headset->PreferStageSpace() || m_settings.fixedPlaySpace);
+    m_xr.KeepRefreshRate();
+    FollowDisplayRate();
     if (!m_xr.BeginFrame(frame)) return;
+    const int64_t wokeNs = rc::NowNs();
     g_lastFrame = frame;
     g_haveFrame = true;
     const bool firstFrame = m_head.position.y == 0 && m_head.position.x == 0;
@@ -1113,11 +1205,6 @@ void App::Frame() {
         m_spokenProblem = m_problem;
         if (m_settings.readAloud && !m_problem.empty()) Platform::Speak("Connection problem. " + m_problem);
     }
-    const bool streaming = m_client.GetState() == StreamClient::State::Connected;
-    if (streaming != m_streamingPerformance) {
-        m_streamingPerformance = streaming;
-        m_xr.SetStreamingPerformance(streaming);
-    }
     if (m_disconnectRequested) DisconnectNow();
     UpdateMode(dt);
     UpdateInput(frame, dt);
@@ -1128,8 +1215,11 @@ void App::Frame() {
         m_headset->StopBody();
         m_input.SetSimultaneous(false);
     }
+    // The monitors' pictures, for what is drawn with them below. The game's picture waits for
+    // the late latch: nothing drawn in between needs it.
     m_vrLatched = false;
-    LatchVideo(frame);
+    m_vrLatchNs = 0;
+    LatchVideo(frame, false);
 
     // Environment / passthrough.
     const Environment env = EnvironmentFromKey(m_settings.environment);
@@ -1153,20 +1243,160 @@ void App::Frame() {
     if (Window* kbw = m_windows.Find("keyboard"); kbw && kbw->visible) m_keyboard.Size(*kbw);
     m_windows.RenderCanvases(dt, m_time);
     UpdateUiLayers();
-    if (frame.shouldRender && uiLayer) RenderEyes(frame, dt);
-    // Late latch: frames decoded while we rendered still make it into this frame's
-    // compositor layers (VR stream, monitor layers) instead of waiting a whole frame.
+    if (frame.shouldRender && uiLayer) {
+        RenderEyes(frame, dt);
+        // The GPU starts on the eye images now instead of when the frame is handed in, so the
+        // game's picture, drawn last, isn't queued behind work that could already be done.
+        glFlush();
+    }
+    SteerVrTiming(frame);
+    // Late latch: the game's picture is picked up here and nowhere earlier, as the last thing
+    // before the frame is handed in, and frames decoded while we rendered still make it into
+    // this frame's compositor layers (VR stream, monitor layers) instead of waiting a whole
+    // frame. The headset starts our frame just early enough for everything from here on to be
+    // done in time: whatever sits between this and xrEndFrame is time a picture waits.
+    // A test of exactly that (debug.rincast.prelatch_ms): work added before the pickup. If
+    // "woken ... before the display" in the log grows by as much, the headset counts all of
+    // the frame, and what runs before the pickup today is worth moving out of it.
+    if (m_debugPreLatchMs > 0 && m_mode == Mode::Vr) {
+        const int64_t until = rc::NowNs() + int64_t(m_debugPreLatchMs * 1e6f);
+        while (rc::NowNs() < until) {
+        }
+    }
     m_lateLatchNs = rc::NowNs();
-    LatchVideo(frame);
+    LatchVideo(frame, true);
     {
         const double lead = double(m_xr.ToMonotonicNs(frame.predictedDisplayTime) - m_lateLatchNs);
         if (lead > 0 && lead < 1e8) m_latchLeadNs = m_latchLeadNs > 0 ? m_latchLeadNs * 0.95 + lead * 0.05 : lead;
     }
-    SteerVrTiming(frame);
     if (m_mode == Mode::Vr && m_settings.frameGeneration && !m_vrLatched) GenerateFrame(frame);
     BuildLayers(frame);
     const bool alpha = m_xr.PassthroughActive() || !m_underlays.empty();
     m_xr.EndFrame(frame, m_underlays, alpha, m_overlays, uiLayer);
+    LogVrTiming(frame, wokeNs);
+}
+
+#ifndef GL_TIME_ELAPSED_EXT
+#define GL_TIME_ELAPSED_EXT 0x88BF
+#endif
+#ifndef GL_GPU_DISJOINT_EXT
+#define GL_GPU_DISJOINT_EXT 0x8FBB
+#endif
+
+// The GPU's time for the game's picture, measured on one frame at a time: a result is read
+// when it is ready, a frame or two later, and never waited for.
+void App::TimeVrDraw(bool begin) {
+    if (!m_vrTimerChecked) {
+        m_vrTimerChecked = true;
+        const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+        if (extensions && std::strstr(extensions, "GL_EXT_disjoint_timer_query")) glGenQueries(1, &m_vrTimer);
+    }
+    if (!m_vrTimer) return;
+    if (begin) {
+        if (m_vrTimerPending) {
+            GLuint available = 0;
+            glGetQueryObjectuiv(m_vrTimer, GL_QUERY_RESULT_AVAILABLE, &available);
+            if (!available) return;
+            m_vrTimerPending = false;
+            GLuint ns = 0;
+            glGetQueryObjectuiv(m_vrTimer, GL_QUERY_RESULT, &ns);
+            GLint disjoint = 0;
+            glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+            if (!disjoint) {
+                m_timingGpuNs += double(ns);
+                m_timingGpuFrames++;
+            }
+        }
+        glBeginQuery(GL_TIME_ELAPSED_EXT, m_vrTimer);
+        m_vrTimerRunning = true;
+    } else if (m_vrTimerRunning) {
+        glEndQuery(GL_TIME_ELAPSED_EXT);
+        m_vrTimerRunning = false;
+        m_vrTimerPending = true;
+    }
+}
+
+void App::LogVrTiming(const FrameState& frame, int64_t wokeNs) {
+    const int64_t now = rc::NowNs();
+    if (m_mode != Mode::Vr) {
+        m_timingLogNs = now;
+        m_timingFrames = m_timingGpuFrames = 0;
+        m_timingWakeLeadNs = m_timingLatchNs = m_timingSubmitNs = m_timingGpuNs = 0;
+        m_flowDisplays = m_flowShown = m_flowLate = 0;
+        m_flowDecodedStart = 0;
+        m_flowDecodeMaxMs = 0;
+        m_flowSlackMs.clear();
+        m_flowWaiting[0] = m_flowWaiting[1] = m_flowWaiting[2] = 0;
+        m_flowSlips = 0;
+        return;
+    }
+    if (m_vrLatchNs) {
+        m_timingWakeLeadNs += double(m_xr.ToMonotonicNs(frame.predictedDisplayTime) - wokeNs);
+        m_timingLatchNs += double(m_vrLatchNs - wokeNs);
+        m_timingSubmitNs += double(now - m_vrLatchNs);
+        m_timingFrames++;
+    }
+    m_flowDisplays++;
+    if (m_vrLatched) m_flowShown++;
+    if (now - m_timingLogNs < 5'000'000'000LL) return;
+    m_timingLogNs = now;
+    uint32_t decoded = 0;
+    {
+        std::lock_guard lock(m_decoderMutex);
+        auto it = m_decoders.find(rc::kVrStreamId);
+        if (it != m_decoders.end() && it->second) decoded = it->second->DecodedFrames();
+    }
+    if (m_flowDisplays && decoded >= m_flowDecodedStart && m_flowDecodedStart) {
+        // Decoded but never shown: skipped to catch up (see VideoDecoder::Latch). A display
+        // without a new picture repeats the last one (or a generated one).
+        const int n = int(decoded - m_flowDecodedStart);
+        RC_LOGI("VR frame flow over %d displays: %d decoded, %d shown, %d never shown, %d displays "
+                "repeated, %d decoded after their latch; slowest decode %.1f ms",
+                m_flowDisplays, n, m_flowShown, std::max(0, n - m_flowShown), m_flowDisplays - m_flowShown, m_flowLate,
+                m_flowDecodeMaxMs);
+        // How far ahead poses are predicted, and where that time goes (the last second's stages).
+        std::string stages;
+        for (int i = 0; i < kStageCount; i++) {
+            if (m_stats.stageMs[i] < 0) continue;
+            char part[48];
+            snprintf(part, sizeof(part), "%s%s %.1f", stages.empty() ? "" : ", ", kLatencyStages[i].key, m_stats.stageMs[i]);
+            stages += part;
+        }
+        RC_LOGI("VR prediction: %.1f ms past the display time, %.1f ms from the pose to its display; %s",
+                m_pipelineLatencyMs, m_stats.latencyMs, stages.empty() ? "stages not measured yet" : stages.c_str());
+    }
+    if (m_flowSlackMs.size() >= 20) {
+        // When frames were decoded against the late latch: what the margin has to cover. Folded
+        // into one display period, from 20% of one early to 80% late against the target, so a
+        // frame later than that reads as early; "after it" below is the part that can be told.
+        std::sort(m_flowSlackMs.begin(), m_flowSlackMs.end());
+        const auto at = [&](double part) { return m_flowSlackMs[size_t(part * double(m_flowSlackMs.size() - 1))]; };
+        RC_LOGI("VR frame arrival: decoded %.1f ms before the latch in the middle, 5%% of frames under %.1f ms, 1%% under "
+                "%.1f ms, the latest %.1f ms (below 0: after it); margin %.1f ms, %s; taken with 0, 1, 2 newer pictures "
+                "waiting: %d, %d, %d; the PC let them run out %d times",
+                at(0.5), at(0.05), at(0.01), m_flowSlackMs.front(), m_phaseMarginNs / 1e6,
+                m_queueWanted ? "one picture may wait" : "no picture meant to wait", m_flowWaiting[0],
+                m_flowWaiting[1], m_flowWaiting[2], m_flowSlips);
+    }
+    if (now - m_poseWaitAtNs < 5'000'000'000LL)
+        RC_LOGI("VR poses: held back %.1f ms before sending; on the PC they waited %.1f ms for SteamVR to take "
+                "them, the 2%% that waited least %.1f ms (below 0: missed one)",
+                m_poseHoldNs / 1e6, double(m_poseWaitNs) / 1e6, double(m_poseWaitLowNs) / 1e6);
+    m_flowSlackMs.clear();
+    m_flowWaiting[0] = m_flowWaiting[1] = m_flowWaiting[2] = 0;
+    m_flowSlips = 0;
+    m_flowDecodedStart = decoded;
+    m_flowDisplays = m_flowShown = m_flowLate = 0;
+    m_flowDecodeMaxMs = 0;
+    if (m_timingFrames) {
+        const double n = m_timingFrames * 1e6;
+        RC_LOGI("VR frame timing at %.0f Hz: woken %.1f ms before the display, the picture picked up %.2f ms after "
+                "waking and handed in %.2f ms later, drawn in %.2f ms of GPU time (%d measured)",
+                m_xr.RefreshRate(), m_timingWakeLeadNs / n, m_timingLatchNs / n, m_timingSubmitNs / n,
+                m_timingGpuFrames ? m_timingGpuNs / (m_timingGpuFrames * 1e6) : 0.0, m_timingGpuFrames);
+    }
+    m_timingFrames = m_timingGpuFrames = 0;
+    m_timingWakeLeadNs = m_timingLatchNs = m_timingSubmitNs = m_timingGpuNs = 0;
 }
 
 void App::UpdateInput(const FrameState& frame, float dt) {
@@ -1347,32 +1577,116 @@ void App::UpdateInput(const FrameState& frame, float dt) {
     (void)frame;
 }
 
+static void PutHead(rc::TrackingPayload& t, const Pose& p, const Vec3& lin, const Vec3& ang) {
+    t.hmd.orientation[0] = p.orientation.x;
+    t.hmd.orientation[1] = p.orientation.y;
+    t.hmd.orientation[2] = p.orientation.z;
+    t.hmd.orientation[3] = p.orientation.w;
+    t.hmd.position[0] = p.position.x;
+    t.hmd.position[1] = p.position.y;
+    t.hmd.position[2] = p.position.z;
+    std::memcpy(t.hmdLinearVelocity, &lin, sizeof(float) * 3);
+    std::memcpy(t.hmdAngularVelocity, &ang, sizeof(float) * 3);
+}
+
+template <typename Controller>
+static void PutGrip(Controller& c, const Pose& g, const Vec3& lin, const Vec3& ang) {
+    c.pose.orientation[0] = g.orientation.x;
+    c.pose.orientation[1] = g.orientation.y;
+    c.pose.orientation[2] = g.orientation.z;
+    c.pose.orientation[3] = g.orientation.w;
+    c.pose.position[0] = g.position.x;
+    c.pose.position[1] = g.position.y;
+    c.pose.position[2] = g.position.z;
+    std::memcpy(c.linearVelocity, &lin, sizeof(float) * 3);
+    std::memcpy(c.angularVelocity, &ang, sizeof(float) * 3);
+}
+
+void App::PoseThread() {
+    std::unique_lock lock(m_poseMutex);
+    while (!m_poseThreadStop) {
+        if (!m_heldPose) {
+            m_poseCv.wait(lock);
+            continue;
+        }
+        const int64_t wait = m_heldPose->sendAtNs - rc::NowNs();
+        if (wait > 0) {
+            m_poseCv.wait_for(lock, std::chrono::nanoseconds(wait));
+            continue;
+        }
+        HeldPose p = *m_heldPose;
+        m_heldPose.reset();
+        lock.unlock();
+        SendPose(p);
+        lock.lock();
+    }
+}
+
+// Head and controllers located again for the same display time, now that it is later: what
+// the PC renders with is that much fresher, and predicted that much less far ahead.
+void App::SendPose(HeldPose& p) {
+    rc::TrackingPayload& t = p.t;
+    if (p.relocateHead || p.relocateGrip[0] || p.relocateGrip[1]) {
+        t.sampleTimeNs = uint64_t(rc::NowNs());
+        Pose pose;
+        Vec3 lin, ang;
+        if (p.relocateHead && m_xr.LocateSpace(m_xr.ViewSpace(), p.target, pose, &lin, &ang)) PutHead(t, pose, lin, ang);
+        for (int h = 0; h < 2; h++)
+            if (p.relocateGrip[h] && m_input.LocateGrip(h, p.target, pose, &lin, &ang)) PutGrip(t.controllers[h], pose, lin, ang);
+    }
+    m_client.SendTracking(t, p.hasGaze ? &p.gaze : nullptr);
+    std::lock_guard lock(m_trackingSentMutex);
+    m_trackingSent[t.targetDisplayTimeNs] = int64_t(t.sampleTimeNs);
+    while (m_trackingSent.size() > 512) m_trackingSent.erase(m_trackingSent.begin());
+}
+
+// The PC's report of how long poses waited there for SteamVR. Held back by that much, they
+// would arrive just in time; the 2% that waited least are kept 1 ms early, as Wi-Fi delays
+// some packets more than others, and one that misses leaves the game a pose a frame old.
+void App::OnPoseWait(const json& m) {
+    const int64_t period = m.value("periodNs", int64_t(0));
+    m_poseWaitNs = m.value("waitNs", int64_t(0));
+    m_poseWaitLowNs = m.value("lowNs", int64_t(0));
+    m_poseWaitAtNs = rc::NowNs();
+    if (!m_debugPoseHold || period <= 0) {
+        m_poseHoldNs = 0;
+        return;
+    }
+    // Later in steps, earlier at once. Each report already counts the hold it was sent with.
+    const double move = double(m_poseWaitLowNs) - 1e6;
+    m_poseHoldNs = std::clamp(m_poseHoldNs + (move > 0 ? 0.5 * move : move), 0.0, 0.7 * double(period));
+}
+
 void App::UpdateTracking(const FrameState& frame) {
     // Predict to when the PC's frame for this pose will reach the display.
     const XrTime target = frame.predictedDisplayTime + XrTime(m_pipelineLatencyMs * 1e6);
-    rc::TrackingPayload t{};
+    HeldPose held;
+    held.target = target;
+    rc::TrackingPayload& t = held.t;
     t.sampleTimeNs = uint64_t(rc::NowNs());
     t.targetDisplayTimeNs = uint64_t(m_xr.ToMonotonicNs(target));
     Pose head;
     Vec3 lin, ang;
     if (m_xr.LocateSpace(m_xr.ViewSpace(), target, head, &lin, &ang)) {
         t.flags |= rc::kTrackHmdValid;
-        t.hmd.orientation[0] = head.orientation.x;
-        t.hmd.orientation[1] = head.orientation.y;
-        t.hmd.orientation[2] = head.orientation.z;
-        t.hmd.orientation[3] = head.orientation.w;
-        t.hmd.position[0] = head.position.x;
-        t.hmd.position[1] = head.position.y;
-        t.hmd.position[2] = head.position.z;
-        std::memcpy(t.hmdLinearVelocity, &lin, sizeof(float) * 3);
-        std::memcpy(t.hmdAngularVelocity, &ang, sizeof(float) * 3);
+        PutHead(t, head, lin, ang);
+        held.relocateHead = true;
     }
     HandInput predicted[2];
     m_input.Locate(target, predicted);
     for (int h = 0; h < 2; h++) {
         const HandInput& in = m_input.Hand(h);
         auto& c = t.controllers[h];
-        if (!in.active) continue;
+        if (!in.active) {
+            // A controller held still goes to sleep after a while, and stops being tracked. Told
+            // so, SteamVR took it away and games lost it (out of view) until it was moved again.
+            // It stays where it was last seen instead, as it does in the headset's own home.
+            if (m_haveControllerPose[h]) {
+                c.flags = rc::kCtrlConnected | rc::kCtrlPoseValid;
+                c.pose = m_controllerPose[h];
+            }
+            continue;
+        }
         c.flags = rc::kCtrlConnected;
         rc::Pose joints[rc::kHandJointCount];
         const auto sendBones = [&] {
@@ -1392,16 +1706,15 @@ void App::UpdateTracking(const FrameState& frame) {
             sendBones();
         } else if (predicted[h].gripValid) {
             c.flags |= rc::kCtrlPoseValid;
-            const Pose& g = predicted[h].grip;
-            c.pose.orientation[0] = g.orientation.x;
-            c.pose.orientation[1] = g.orientation.y;
-            c.pose.orientation[2] = g.orientation.z;
-            c.pose.orientation[3] = g.orientation.w;
-            c.pose.position[0] = g.position.x;
-            c.pose.position[1] = g.position.y;
-            c.pose.position[2] = g.position.z;
-            std::memcpy(c.linearVelocity, &predicted[h].gripLinearVelocity, sizeof(float) * 3);
-            std::memcpy(c.angularVelocity, &predicted[h].gripAngularVelocity, sizeof(float) * 3);
+            PutGrip(c, predicted[h].grip, predicted[h].gripLinearVelocity, predicted[h].gripAngularVelocity);
+            if (!in.isHand) {
+                m_controllerPose[h] = c.pose;
+                m_haveControllerPose[h] = true;
+                held.relocateGrip[h] = true;
+            }
+        } else if (!in.isHand && m_haveControllerPose[h]) {
+            c.flags |= rc::kCtrlPoseValid;  // tracking lost for a moment: where it was last seen
+            c.pose = m_controllerPose[h];
         }
         if (in.isHand) c.flags |= rc::kCtrlHandTracked;
         // Don't leak clicks on the desktop or the overlay into a game still running behind them.
@@ -1446,16 +1759,32 @@ void App::UpdateTracking(const FrameState& frame) {
     // Where the eyes look, for foveated encoding. Now rather than predicted: eyes jump, and the
     // PC keeps every pixel of a square around it.
     const bool foveate = m_settings.gazeFoveation && m_mode == Mode::Vr && GazeSupported();
-    rc::GazePayload gaze{};
     if (!foveate) {
         m_headset->StopGaze();
     } else if (!m_gazePermissionAsked) {
         m_gazePermissionAsked = true;
         Platform::RequestPermissions(m_headset->GazePermissions());
     }
-    m_client.SendTracking(t, foveate && ReadGaze(frame.predictedDisplayTime, gaze) ? &gaze : nullptr);
-    m_trackingSent[t.targetDisplayTimeNs] = int64_t(t.sampleTimeNs);
-    while (m_trackingSent.size() > 512) m_trackingSent.erase(m_trackingSent.begin());
+    held.hasGaze = foveate && ReadGaze(frame.predictedDisplayTime, held.gaze);
+    // Held back only while the PC says how long poses wait there (SteamVR games); otherwise
+    // sent at once, as it always was.
+    const int64_t now = rc::NowNs();
+    if (!m_debugPoseHold || m_mode != Mode::Vr || now - m_poseWaitAtNs > 3'000'000'000LL) m_poseHoldNs = 0;
+    const bool hold = m_poseHoldNs >= 300'000;
+    held.sendAtNs = int64_t(t.sampleTimeNs) + int64_t(m_poseHoldNs);
+    std::optional<HeldPose> previous;
+    {
+        std::lock_guard lock(m_poseMutex);
+        previous = std::exchange(m_heldPose, std::nullopt);
+        if (hold) m_heldPose = held;
+    }
+    if (previous) SendPose(*previous);  // this frame came before the last one's packet went: now
+    if (hold) {
+        m_poseCv.notify_one();
+    } else {
+        held.relocateHead = held.relocateGrip[0] = held.relocateGrip[1] = false;  // just located
+        SendPose(held);
+    }
     UpdateBody(frame);
     UpdateFace(frame);
 }
@@ -1602,6 +1931,7 @@ void App::GenerateFrame(const FrameState& frame) {
     const float perPixel = amount * 0.85f * 127.f * rc::kMotionUnitPixels;
     m_scene.DrawKeptMoved(fbo, m_vrSwapchain.width, m_vrSwapchain.height, perPixel / fieldW, perPixel / fieldH, 1.f, 1.f);
     m_xr.ReleaseImage(m_vrSwapchain);
+    glFlush();  // as for a new frame: the GPU starts now
     m_generatedFrames++;
     const int64_t now = rc::NowNs();
     if (now - m_generatedLogNs > 5'000'000'000LL) {
@@ -1619,7 +1949,7 @@ void App::GenerateFrame(const FrameState& frame) {
     }
 }
 
-void App::LatchVideo(const FrameState& frame) {
+void App::LatchVideo(const FrameState& frame, bool late) {
     // Latching waits for swapchain images and blits: keep the network thread out of that.
     // (Only this thread removes decoders, so the last reference still drops on the GL thread.)
     std::map<uint8_t, std::shared_ptr<VideoDecoder>> decoders;
@@ -1629,10 +1959,17 @@ void App::LatchVideo(const FrameState& frame) {
     }
     for (auto& [id, dec] : decoders) {
         if (!dec) continue;
+        // Taken early, a frame would only sit in its layer while the menus are drawn, and one
+        // decoded in that time would wait for the next display.
+        if (id == rc::kVrStreamId && !late) continue;
         DecodedFrameInfo info;
-        if (!dec->Latch(info)) continue;
+        if (!dec->Latch(info)) {
+            if (id == rc::kVrStreamId) m_behindSinceNs = 0;  // no picture to take: none waited behind one either
+            continue;
+        }
         const int64_t latchNs = rc::NowNs();
         if (id == rc::kVrStreamId) {
+            m_vrLatchNs = latchNs;
             const bool haveMeta = info.metadata.size() >= sizeof(rc::VrFrameMetadata);
             if (haveMeta) std::memcpy(&m_vrMeta, info.metadata.data(), sizeof(m_vrMeta));
             if (m_vrFoveated && info.metadata.size() >= sizeof(rc::VrFrameMetadata) + sizeof(rc::VrFoveationMetadata)) {
@@ -1644,6 +1981,7 @@ void App::LatchVideo(const FrameState& frame) {
             if (m_settings.upscaling != m_vrUpscaleSetting && m_vrSwapchain.handle) CreateVrSwapchain();
             if (m_vrSwapchain.handle) {
                 const GLuint fbo = m_xr.AcquireImage(m_vrSwapchain);
+                TimeVrDraw(true);
                 // Generating a frame needs the last picture afterwards, too.
                 const bool keep = m_settings.frameGeneration && m_scene.UpscalerReady();
                 if (m_vrUpscaled || keep) {
@@ -1655,7 +1993,11 @@ void App::LatchVideo(const FrameState& frame) {
                     m_scene.BlitExternal(dec->Texture(), m_vrSwapchain.width, m_vrSwapchain.height, dec->Crop(), 0, 0, 1, 1,
                                          foveation);
                 }
+                TimeVrDraw(false);
                 m_xr.ReleaseImage(m_vrSwapchain);
+                // The GPU starts on the picture now, while the rest of the frame is put
+                // together, not when the frame is handed in.
+                glFlush();
             }
             m_vrHasFrame = true;
             m_vrLatched = true;
@@ -1666,9 +2008,14 @@ void App::LatchVideo(const FrameState& frame) {
             const int64_t displayNs = m_xr.ToMonotonicNs(frame.predictedDisplayTime);
             const double errorMs = double(displayNs - int64_t(m_vrMeta.trackingTimestampNs)) / 1e6;
             if (std::fabs(errorMs) < 200) m_pipelineLatencyMs = std::clamp(m_pipelineLatencyMs + errorMs * 0.05, 15.0, 120.0);
-            auto it = m_trackingSent.find(m_vrMeta.trackingTimestampNs);
-            if (it != m_trackingSent.end()) {
-                const double latency = double(displayNs - it->second) / 1e6;
+            int64_t sampledNs = 0;
+            {
+                std::lock_guard lock(m_trackingSentMutex);
+                auto it = m_trackingSent.find(m_vrMeta.trackingTimestampNs);
+                if (it != m_trackingSent.end()) sampledNs = it->second;
+            }
+            if (sampledNs) {
+                const double latency = double(displayNs - sampledNs) / 1e6;
                 m_latencySum += latency;
                 m_latencyCount++;
                 if (haveMeta && info.receivedNs && info.decodedNs && m_client.HasClockOffset()) {
@@ -1679,7 +2026,7 @@ void App::LatchVideo(const FrameState& frame) {
                     const double up = m_client.Stats().rttMs / 2;
                     double s[kStageCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
                     s[kStageUplink] = up;
-                    s[kStageGame] = double(m_vrMeta.pcSubmitNs - offset - it->second) / 1e6 - up;
+                    s[kStageGame] = double(m_vrMeta.pcSubmitNs - offset - sampledNs) / 1e6 - up;
                     s[kStageEncoderWait] = double(m_vrMeta.pcEncodeStartNs - m_vrMeta.pcSubmitNs) / 1e6;
                     s[kStageEncode] = double(m_vrMeta.pcEncodeEndNs - m_vrMeta.pcEncodeStartNs) / 1e6;
                     s[kStageDownlink] = double(info.receivedNs - (m_vrMeta.pcEncodeEndNs - offset)) / 1e6;
@@ -1691,15 +2038,22 @@ void App::LatchVideo(const FrameState& frame) {
             }
             // Where this frame landed against the moment it should have been ready: the late
             // latch, less a margin. Folded into one display period, since a frame that just
-            // missed it is the same story as one a whole period too early.
-            if (m_latchLeadNs > 0 && info.decodedNs && frame.period > 0) {
+            // missed it is the same story as one a whole period too early. Not while the PC
+            // moves its frames to let waiting pictures run out: they land all over the period.
+            if (m_latchLeadNs > 0 && info.decodedNs && frame.period > 0 && latchNs >= m_slipUntilNs) {
                 const double period = double(frame.period);
                 const double target = double(displayNs) - m_latchLeadNs - m_phaseMarginNs;
                 double e = std::fmod(double(info.decodedNs) - target, period);
                 if (e >= period / 2) e -= period;
                 if (e < -period / 2) e += period;
                 m_phaseErrors.push_back(e);
+                if (e > m_phaseMarginNs) m_flowLate++;
+                // For the log, folded the way SteerVrTiming folds lateness (frames run late far
+                // more than early): up to 80% of a period late, up to 20% early.
+                const double late = std::fmod(e + 1.2 * period, period) - 0.2 * period;
+                m_flowSlackMs.push_back(float((m_phaseMarginNs - late) / 1e6));
             }
+            CatchUpVr(*dec, info.waiting, frame);
         } else {
             Window* w = m_windows.Find("monitor-" + std::to_string(id));
             if (!w) continue;
@@ -1766,6 +2120,8 @@ void App::LatchVideo(const FrameState& frame) {
         for (auto& [id, dec] : decoders) {
             if (!dec) continue;
             const double d = dec->AverageDecodeMs();
+            const double slowest = dec->TakeMaxDecodeMs();
+            if (id == rc::kVrStreamId) m_flowDecodeMaxMs = std::max(m_flowDecodeMaxMs, slowest);
             m_client.ReportDecode(id, d, m_stats.latencyMs);
             if ((id == rc::kVrStreamId) == vr) decode = std::max(decode, d);
         }
@@ -1795,6 +2151,14 @@ void App::SteerVrTiming(const FrameState& frame) {
     const int64_t now = rc::NowNs();
     if (m_mode != Mode::Vr || frame.period <= 0) {
         m_phaseErrors.clear();
+        m_arrivalSpread.clear();
+        m_queueWanted = 1;
+        m_phaseSentNs = now;
+        return;
+    }
+    // While the PC moves its frames later (CatchUpVr), there is nothing to steer by.
+    if (now < m_slipUntilNs) {
+        m_phaseErrors.clear();
         m_phaseSentNs = now;
         return;
     }
@@ -1819,10 +2183,125 @@ void App::SteerVrTiming(const FrameState& frame) {
         spread += d * d;
     }
     spread = std::sqrt(spread / double(m_phaseErrors.size()));
+    // How much later than the average each frame came, kept for five seconds. Frames run late
+    // far more than early (everything on the way can only add time), so one that seems most
+    // of a period early counts as the rest of it late: -20% to +80% of a period.
+    for (double e : m_phaseErrors) {
+        const double late = std::fmod(e - mean + 1.2 * period, period) - 0.2 * period;
+        m_arrivalSpread.push_back({now, float(late)});
+    }
+    while (!m_arrivalSpread.empty() && now - m_arrivalSpread.front().first > 5'000'000'000LL) m_arrivalSpread.pop_front();
     m_phaseErrors.clear();
-    const double margin = std::clamp(2.5 * spread, 2e6, 0.4 * period);
-    m_phaseMarginNs = m_phaseMarginNs * 0.7 + margin * 0.3;
+    // The margin that all but one of those frames would have made. If it stays well under a
+    // period, it replaces the picture kept waiting: frames then reach the display that much
+    // after decoding, not that plus a whole frame. Otherwise one picture waiting is what covers
+    // the late ones, with the narrow margin it always had. A PC that can't let waiting
+    // pictures run out keeps the timing it had.
+    float latest = -1e30f, second = -1e30f;
+    for (const auto& [when, late] : m_arrivalSpread) {
+        if (late > latest) {
+            second = latest;
+            latest = late;
+        } else if (late > second) {
+            second = late;
+        }
+    }
+    const bool known = m_arrivalSpread.size() >= 100 && now - m_arrivalSpread.front().first > 2'000'000'000LL;
+    const double needed = double(second) + 0.5e6;
+    const double widest = 0.8 * period;
+    // Once it fits it may grow to the widest; to start fitting it has to be clearly narrower.
+    const bool fits = known && PcSlips() && needed <= (m_queueWanted == 0 ? widest : 0.75 * period);
+    m_queueWanted = fits && now >= m_queueKeptUntilNs ? 0 : 1;
+    if (m_queueWanted == 0) {
+        // Wider at once, narrower slowly: a margin too narrow costs a repeated picture, one
+        // too wide a millisecond.
+        const double margin = std::clamp(needed, 2e6, widest);
+        m_phaseMarginNs += (margin - m_phaseMarginNs) * (margin > m_phaseMarginNs ? 0.5 : 0.15);
+    } else {
+        const double margin = std::clamp(2.5 * spread, 2e6, 0.4 * period);
+        m_phaseMarginNs = m_phaseMarginNs * 0.7 + margin * 0.3;
+    }
     m_client.SendControl({{"type", rc::msg::kVrPhase}, {"shiftNs", int64_t(-mean)}});
+}
+
+// A newer picture waiting at display after display: the stream runs a frame behind. With a
+// margin wide enough for how arrivals vary (m_queueWanted 0) that frame is time lost, and with
+// two waiting one of them always is. The decoder gets rid of them by skipping (VideoDecoder::
+// Latch), which shows, and the next late frame then repeats a picture: about once a second on
+// Wi-Fi. A PC that can is asked instead to make its frames a little later for a moment, each a
+// few percent after the one before: the display takes the waiting ones faster than new ones
+// come, every frame is shown, and the timing ends up where it was, one display earlier. The
+// numbers here were chosen on a model of this (frames arriving with Wi-Fi's kind of variation):
+// about the latency the skipping gave, with a fifth of the repeated pictures and no skipped ones.
+void App::CatchUpVr(VideoDecoder& decoder, int waiting, const FrameState& frame) {
+    const int64_t now = rc::NowNs();
+    m_flowWaiting[std::clamp(waiting, 0, 2)]++;
+    if (!PcSlips() || frame.period <= 0) return;  // the decoder's own way
+    if (now < m_slipUntilNs) {
+        m_slipLeast = std::min(m_slipLeast, waiting);
+        decoder.HoldCatchUp(m_slipUntilNs + 100'000'000LL);
+        return;
+    }
+    if (m_slipUntilNs) {
+        // It has had its time. Never fewer waiting than before: moving SteamVR's vsync didn't
+        // move this game's frames, so the decoder's own way it is, for a while.
+        m_slipUntilNs = 0;
+        m_behindSinceNs = 0;
+        if (std::min(m_slipLeast, waiting) >= m_slipFrom) {
+            m_slipRetryNs = now + 60'000'000'000LL;
+            RC_LOGW("VR frames: still %d waiting after the PC was asked to let them run out; skipping them instead "
+                    "for the next minute", waiting);
+        }
+    }
+    if (waiting == 0) {
+        m_behindSinceNs = 0;
+        return;
+    }
+    if (now < m_slipRetryNs) return;
+    // Either the one waiting is wanted, or the PC is about to be asked: no skipping.
+    decoder.HoldCatchUp(now + 1'000'000'000LL);
+    // Looked at 150 ms at a time: more waiting than wanted at four displays in five. Not at
+    // every one, or a single late frame would start the count again, as it did for the decoder.
+    if (!m_behindSinceNs) {
+        m_behindSinceNs = now;
+        m_behindLeast = waiting;
+        m_behindLatches = m_behindOver = 0;
+    }
+    m_behindLeast = std::min(m_behindLeast, waiting);
+    m_behindLatches++;
+    if (waiting > m_queueWanted) m_behindOver++;
+    if (now - m_behindSinceNs < 150'000'000LL) return;
+    const int over = m_behindOver, latches = m_behindLatches, least = m_behindLeast;
+    m_behindSinceNs = 0;  // the next 150 ms count anew
+    if (latches < 5 || over * 5 < latches * 4) return;
+    // With no picture meant to wait, each time one does again is a frame that came later than
+    // the margin, and a repeated picture. More than five times in 15 s is more often than the
+    // margin was sized for (a decode that takes two frames' time looks early in the spread, not
+    // late): one stays waiting for half a minute, which covers those.
+    while (!m_slips.empty() && now - m_slips.front() > 15'000'000'000LL) m_slips.pop_front();
+    if (m_queueWanted == 0) {
+        if (m_slips.size() >= 5) {
+            m_queueKeptUntilNs = now + 30'000'000'000LL;
+            m_queueWanted = 1;
+            m_slips.clear();
+            RC_LOGI("VR frames: a picture waited again six times in 15 s after running out; one is kept waiting for 30 s");
+            return;
+        }
+        m_slips.push_back(now);
+    }
+    const int excess = std::max(1, least - m_queueWanted);
+    const int64_t slip = int64_t(excess) * frame.period;
+    // The time the PC takes for it, and for the frames made since to get here.
+    const int64_t takes = int64_t(double(slip) / rc::kVrPhaseSlipRate) + 300'000'000LL;
+    m_client.SendControl({{"type", rc::msg::kVrPhase}, {"slipNs", slip}});
+    m_slipUntilNs = now + takes;
+    m_slipFrom = std::max(least, m_queueWanted + 1);
+    m_slipLeast = m_slipFrom;
+    m_flowSlips++;
+    decoder.HoldCatchUp(m_slipUntilNs + 100'000'000LL);
+    RC_LOGI("VR frames: %d waiting at %d of %d displays (%d wanted); the PC makes its frames %.1f ms later over the "
+            "next %.0f ms",
+            m_slipFrom, over, latches, m_queueWanted, double(slip) / 1e6, double(takes) / 1e6);
 }
 
 void App::AddStages(const double (&ms)[kStageCount]) {
@@ -1916,11 +2395,24 @@ void App::UpdateUiLayers() {
         const bool layer = m_settings.sharpLayers && !w.canvasLayer && !w.removed && w.visible && w.appear > 0.01f &&
                            w.curveRadius == 0 && w.rt.fbo && used < kMaxUiLayers;
         w.layerBacked = false;
-        if (!layer) continue;
+        if (!layer) {
+            w.layerCurrent = false;
+            continue;
+        }
         XrSwapchainGl& sc = m_uiLayers[w.id];
         const int width = w.rt.color.width, height = w.rt.color.height;
         if (sc.handle && (sc.width != width || sc.height != height)) m_xr.DestroySwapchain(sc);
-        if (!sc.handle && !m_xr.CreateSwapchain(width, height, GL_SRGB8_ALPHA8, 1, false, sc)) continue;
+        if (!sc.handle) {
+            w.layerCurrent = false;
+            if (!m_xr.CreateSwapchain(width, height, GL_SRGB8_ALPHA8, 1, false, sc)) continue;
+        }
+        // A layer shows the image last released into it: an unchanged canvas needn't be copied
+        // again every frame.
+        if (w.layerCurrent && !w.canvasRedrawn) {
+            w.layerBacked = true;
+            used++;
+            continue;
+        }
         // Pixel for pixel: the canvas was just drawn at this size. While it fades in or out, the
         // canvas goes in at that opacity instead, so the window is sharp from its first frame.
         const GLuint fbo = m_xr.AcquireImage(sc);
@@ -1936,6 +2428,7 @@ void App::UpdateUiLayers() {
         }
         m_xr.ReleaseImage(sc);
         w.layerBacked = true;
+        w.layerCurrent = w.appear >= 0.995f;
         used++;
     }
     // Windows that are gone or hidden give their images back.

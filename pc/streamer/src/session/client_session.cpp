@@ -211,6 +211,7 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
                 std::memcpy(d.pose.angularVelocity, c.angularVelocity, sizeof(float) * 3);
             }
             App::Get().Bridge().PublishTracking(s);
+            MeasurePoseWait(s.receivedPcNs);
             // Where the eyes look comes after the poses, from headsets doing foveated encoding.
             if (size >= sizeof(t) + sizeof(rc::GazePayload)) {
                 rc::GazePayload g;
@@ -367,6 +368,7 @@ void ClientSession::HandleMessage(const json& m) {
         const bool videoChanged = before.codec != after.codec || before.tenBit != after.tenBit ||
                                   before.vrQuality != after.vrQuality || before.vrScale != after.vrScale ||
                                   before.matchSteamVr != after.matchSteamVr || before.gazeFoveation != after.gazeFoveation ||
+                                  before.eyesTracked != after.eyesTracked ||
                                   before.frameGeneration != after.frameGeneration || before.refreshRate != after.refreshRate ||
                                   before.vrBitrateMbps != after.vrBitrateMbps ||
                                   before.adaptiveBitrate != after.adaptiveBitrate;
@@ -418,7 +420,8 @@ void ClientSession::HandleMessage(const json& m) {
         return;
     }
     if (type == rc::msg::kVrPhase) {
-        App::Get().Bridge().ShiftVsync(m.value("shiftNs", int64_t(0)));
+        if (const int64_t slip = m.value("slipNs", int64_t(0)); slip > 0) App::Get().Bridge().SlipVsync(slip);
+        else App::Get().Bridge().ShiftVsync(m.value("shiftNs", int64_t(0)));
         return;
     }
     if (type == rc::msg::kListGames) {
@@ -482,6 +485,7 @@ void ClientSession::ApplyClientInfo(const json& m) {
         m_settings.vrScale = s.value("vrScale", m_settings.vrScale);
         m_settings.matchSteamVr = s.value("matchSteamVr", m_settings.matchSteamVr);
         m_settings.gazeFoveation = s.value("gazeFoveation", m_settings.gazeFoveation);
+        m_settings.eyesTracked = s.value("eyesTracked", m_settings.eyesTracked);  // headsets before 1.2.1 only foveate tracked
         m_settings.frameGeneration = s.value("frameGeneration", m_settings.frameGeneration);
         m_settings.refreshRate = s.value("refreshRate", m_settings.refreshRate);
         m_settings.vrBitrateMbps = s.value("vrBitrateMbps", m_settings.vrBitrateMbps);
@@ -519,6 +523,44 @@ rc::VideoCodec ClientSession::ChooseCodec(bool forVr) const {
 
 // ---------------------------------------------------------------------------
 
+void ClientSession::MeasurePoseWait(int64_t receivedNs) {
+    int64_t wait = 0, period = 0;
+    if (!App::Get().Bridge().PoseWaitNs(receivedNs, wait, period)) {
+        m_poseWaits.clear();
+        return;
+    }
+    if (period != m_poseWaitPeriodNs) m_poseWaits.clear();
+    m_poseWaitPeriodNs = period;
+    m_poseWaits.push_back(wait);
+    if (receivedNs - m_poseWaitSentNs < 1'000'000'000LL) return;
+    m_poseWaitSentNs = receivedNs;
+    if (m_poseWaits.size() < 30) {
+        m_poseWaits.clear();
+        return;
+    }
+    // Averaged as angles on the period's circle: a pose that just missed a pickup waits almost
+    // a whole period, and is the same story as one that just made it.
+    const double p = double(period), k = 6.283185307 / p;
+    double sinSum = 0, cosSum = 0;
+    for (int64_t w : m_poseWaits) {
+        sinSum += std::sin(double(w) * k);
+        cosSum += std::cos(double(w) * k);
+    }
+    double mean = std::atan2(sinSum, cosSum) / k;
+    if (mean < 0) mean += p;
+    // Each one against that, within half a period either way; the 2% that waited least.
+    std::vector<double> waited;
+    waited.reserve(m_poseWaits.size());
+    for (int64_t w : m_poseWaits) waited.push_back(mean + std::fmod(double(w) - mean + 1.5 * p, p) - p / 2);
+    m_poseWaits.clear();
+    const size_t low = waited.size() / 50;
+    std::nth_element(waited.begin(), waited.begin() + low, waited.end());
+    SendControl({{"type", rc::msg::kVrPoseWait},
+                 {"waitNs", int64_t(mean)},
+                 {"lowNs", int64_t(waited[low])},
+                 {"periodNs", period}});
+}
+
 void ClientSession::SendServerInfo() {
     const Settings s = SettingsStore::Get().Snapshot();
     const EncoderCaps& caps = App::Get().Caps();
@@ -532,6 +574,7 @@ void ClientSession::SendServerInfo() {
         {"os", WindowsVersion()},
         {"gpu", App::Get().Gpu().name},
         {"vrBitrateMbps", s.vrBitrateMbps},
+        {"vrPhaseSlip", true},  // "slipNs" in vr.phase is understood
         {"encoder",
          {{"backend", caps.backend}, {"h264", caps.h264}, {"hevc", caps.hevc}, {"av1", caps.av1},
           {"hevc10", caps.hevc10}, {"av110", caps.av110}}},
@@ -657,6 +700,8 @@ void ClientSession::StopDesktop() {
         std::lock_guard lock(m_mutex);
         old.swap(m_desktop);
     }
+    // Said, so the log shows whether a monitor's encoder was still running next to VR's.
+    if (!old.empty()) RC_LOGI("Desktop: stopped %zu monitor stream(s)", old.size());
     old.clear();
 }
 
@@ -752,9 +797,11 @@ void ClientSession::StartVr() {
     cfg.twoPass = pc.twoPassEncoding;
     cfg.motionField = st.frameGeneration;
     if (st.gazeFoveation) {
-        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth);
-        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight);
-        RC_LOGI("VR stream: foveated, encoding %ux%u per eye", cfg.foveatedEyeWidth, cfg.foveatedEyeHeight);
+        cfg.foveaSize = st.eyesTracked ? Foveator::kFoveaSize : Foveator::kFixedFoveaSize;
+        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth, cfg.foveaSize);
+        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight, cfg.foveaSize);
+        RC_LOGI("VR stream: foveated %s, encoding %ux%u per eye", st.eyesTracked ? "where the eyes look" : "at the lens centre",
+                cfg.foveatedEyeWidth, cfg.foveatedEyeHeight);
     }
     RC_LOGI("VR stream: %s bitrate, up to %u kbps%s", cfg.adaptive ? "adaptive" : "fixed", cfg.bitrateKbps,
             cfg.startBitrateKbps ? (", starting at " + std::to_string(cfg.startBitrateKbps) + " kbps").c_str() : "");
@@ -773,7 +820,7 @@ void ClientSession::StartVr() {
                      {"tenBit", cfg.tenBit}};
     // See rc::VrFoveationMetadata.
     if (cfg.foveatedEyeWidth)
-        vrStream["foveation"] = {{"eyeWidth", cfg.foveatedEyeWidth}, {"eyeHeight", cfg.foveatedEyeHeight}, {"size", Foveator::kFoveaSize}};
+        vrStream["foveation"] = {{"eyeWidth", cfg.foveatedEyeWidth}, {"eyeHeight", cfg.foveatedEyeHeight}, {"size", cfg.foveaSize}};
     SendControl({{"type", rc::msg::kStreamConfig}, {"kind", "vr"}, {"streams", json::array({vrStream})}});
     vr->Start();
     {

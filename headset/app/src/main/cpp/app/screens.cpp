@@ -653,8 +653,8 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
     changed |= CheckRow(ui, c, "handsgames", Tr("vr.handsInGames"), s.handsInGames, Tr("vr.handsHint"));
     if (device.FaceSupported(app.Xr()))
         changed |= CheckRow(ui, c, "face", Tr("vr.faceTracking"), s.faceTracking, device.FaceHint());
-    if (app.GazeSupported())
-        changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation, Tr("vr.foveatedHint"));
+    changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation,
+                        Tr(app.GazeSupported() ? "vr.foveatedHint" : "vr.foveatedFixedHint"));
     return changed;
 }
 
@@ -901,6 +901,7 @@ bool PageGeneral(Ui& ui, const Rect& body) {
     Column c{body.x + w + gap, body.y - scroll, w};
     Section(ui, c, Tr("general.connectingSection"));
     changed |= CheckRow(ui, c, "autoconnect", Tr("general.autoConnect"), s.autoConnect, Tr("general.autoConnectHint"));
+    changed |= CheckRow(ui, c, "autosteamvr", Tr("general.autoSteamVr"), s.autoLaunchSteamVr, Tr("general.autoSteamVrHint"));
     {
         // The headset asks once whether RinCast may use the cable.
         using U = Platform::UsbNetwork;
