@@ -3,7 +3,23 @@
 #include <cstring>
 #include <vector>
 
+#ifndef GL_FRAMEBUFFER_SRGB_EXT
+#define GL_FRAMEBUFFER_SRGB_EXT 0x8DB9  // GL_EXT_sRGB_write_control
+#endif
+
 namespace rv {
+
+// Video into an sRGB layer image without the hardware's sRGB encoding, for as long as it's in
+// scope (see m_rawSrgbWrites): the shaders' ToLayer() then leaves the gamma-encoded values alone.
+struct RawSrgbWrites {
+    explicit RawSrgbWrites(bool on) : on(on) {
+        if (on) glDisable(GL_FRAMEBUFFER_SRGB_EXT);
+    }
+    ~RawSrgbWrites() {
+        if (on) glEnable(GL_FRAMEBUFFER_SRGB_EXT);
+    }
+    bool on;
+};
 
 // Panel: a strip grid with u in [0,1] across, v in [0,1] down. The vertex
 // shader bends it around a vertical cylinder centred `radius` behind the
@@ -156,11 +172,12 @@ uniform samplerExternalOES uTex;
 uniform vec4 uCrop;  // visible part of the decoder buffer: offset.xy, scale.zw
 in vec2 vUv;
 out vec4 oColor;
-// Layer swapchains are sRGB: linearize the gamma-encoded video first.
+// Layer swapchains are sRGB: ToLayer() linearizes the gamma-encoded video, or with sRGB writes
+// off leaves it as it is.
 void main() {
     vec2 uv = Foveate(vec2(vUv.x, 1.0 - vUv.y));
     vec3 g = texture(uTex, uCrop.xy + uv * uCrop.zw).rgb;
-    oColor = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
+    oColor = vec4(ToLayer(g), 1.0);
 }
 )";
 // The video as it is, gamma-encoded: the upscaler's input. External textures can't be gathered.
@@ -176,7 +193,7 @@ void main() {
 )";
 // Snapdragon Game Super Resolution 1, RGBA mode, from Qualcomm's sgsr1_shader_mobile.frag.
 // Copyright (c) 2025, Qualcomm Innovation Center, Inc. SPDX-License-Identifier: BSD-3-Clause
-// Adapted: names, and the result is linearized for the sRGB swapchain.
+// Adapted: names, and the result goes through ToLayer() for the sRGB swapchain.
 static const char* kGsrFs = R"(
 precision mediump float;
 uniform highp vec4 uViewport;  // 1/width, 1/height, width, height
@@ -240,7 +257,7 @@ void main() {
         color.xyz = clamp(color.xyz + deltaY, 0.0, 1.0);
     }
     highp vec3 g = color.xyz;
-    oColor = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
+    oColor = vec4(ToLayer(g), 1.0);
 }
 )";
 static const char* kKeptFs = R"(
@@ -249,7 +266,7 @@ in vec2 vUv;
 out vec4 oColor;
 void main() {
     vec3 g = texture(uTex, vUv).rgb;
-    oColor = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
+    oColor = vec4(ToLayer(g), 1.0);
 }
 )";
 // The kept picture has its top at v = 0; so does the motion field, whose y points down.
@@ -267,7 +284,7 @@ void main() {
     float eye = step(0.5, vUv.x);
     uv.x = clamp(uv.x, eye * 0.5, 0.5 + eye * 0.5);
     vec3 g = texture(uTex, vec2(uv.x, 1.0 - uv.y)).rgb;
-    oColor = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
+    oColor = vec4(ToLayer(g), 1.0);
 }
 )";
 static const char* kBlit2DFs = R"(
@@ -288,13 +305,22 @@ bool SceneRenderer::Init() {
     ok &= m_panelExt.Build(kPanelVs, extFs.c_str(), "panelExt");
     ok &= m_beam.Build(kBeamVs, kBeamFs, "beam");
     ok &= m_dot.Build(kDotVs, kDotFs, "dot");
-    const std::string blitExt = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kFoveateFs + kBlitExtFs;
-    const std::string blitExtGamma = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kFoveateFs + kBlitExtGammaFs;
+    // The video is gamma encoded and the layer images are sRGB. With sRGB writes switched off
+    // (GL_EXT_sRGB_write_control) its values go in as they are; otherwise every pixel is decoded
+    // to linear (three pow()s) for the hardware to encode right back, for the same bytes.
+    const char* glExtensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    m_rawSrgbWrites = glExtensions && std::strstr(glExtensions, "GL_EXT_sRGB_write_control");
+    const std::string toLayer = m_rawSrgbWrites
+        ? "vec3 ToLayer(vec3 g) { return g; }\n"
+        : "vec3 ToLayer(vec3 g) { return mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)); }\n";
+    const std::string ext = "#extension GL_OES_EGL_image_external_essl3 : require\n";
+    const std::string blitExt = ext + toLayer + kFoveateFs + kBlitExtFs;
+    const std::string blitExtGamma = ext + kFoveateFs + kBlitExtGammaFs;
     // Optional: without it, upscaling just stays off.
     m_upscalerReady = m_blitExtGamma.Build(kBlitVs, blitExtGamma.c_str(), "blitExtGamma");
-    m_upscalerReady = m_gsr.Build(kBlitVs, kGsrFs, "gsr") && m_upscalerReady;
-    m_upscalerReady = m_kept.Build(kBlitVs, kKeptFs, "kept") && m_upscalerReady;
-    m_upscalerReady = m_keptMoved.Build(kBlitVs, kKeptMovedFs, "keptMoved") && m_upscalerReady;
+    m_upscalerReady = m_gsr.Build(kBlitVs, (toLayer + kGsrFs).c_str(), "gsr") && m_upscalerReady;
+    m_upscalerReady = m_kept.Build(kBlitVs, (toLayer + kKeptFs).c_str(), "kept") && m_upscalerReady;
+    m_upscalerReady = m_keptMoved.Build(kBlitVs, (toLayer + kKeptMovedFs).c_str(), "keptMoved") && m_upscalerReady;
     ok &= m_blitExt.Build(kBlitVs, blitExt.c_str(), "blitExt");
     ok &= m_blit2D.Build(kBlitVs, kBlit2DFs, "blit2d");
 
@@ -401,6 +427,16 @@ void SceneRenderer::ControllerOrb(const Pose& aim, const Color& c) {
     Dot(aim.position, toEye, 0.012f, c);
 }
 
+// Before a draw that covers the whole bound image: what it held isn't needed. Without this a
+// tiled GPU, as the headsets have, first loads the old picture into every tile it is about to
+// draw over, and for the game's picture that is millions of pixels read for nothing in the
+// part of the frame the compositor waits for.
+static void DiscardTarget() {
+    const GLenum colour = GL_COLOR_ATTACHMENT0;
+    glDisable(GL_SCISSOR_TEST);
+    glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &colour);
+}
+
 // The squeeze of a foveated VR frame, or none.
 static void SetFoveation(const Program& p, const VideoFoveation* f) {
     glUniform1i(p.Uniform("uFoveated"), f ? 1 : 0);
@@ -415,6 +451,8 @@ void SceneRenderer::BlitExternal(GLuint texture, int width, int height, const fl
     glViewport(0, 0, width, height);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
+    if (u0 == 0 && v0 == 0 && u1 == 1 && v1 == 1) DiscardTarget();
+    RawSrgbWrites raw(m_rawSrgbWrites);
     m_blitExt.Use();
     glUniform4f(m_blitExt.Uniform("uRect"), u0, v0, u1, v1);
     glUniform4fv(m_blitExt.Uniform("uCrop"), 1, crop ? crop : kFull);
@@ -449,6 +487,7 @@ void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int 
     glBindVertexArray(EmptyVao());
     glBindFramebuffer(GL_FRAMEBUFFER, m_gsrFbo);
     glViewport(0, 0, width, height);
+    DiscardTarget();
     m_blitExtGamma.Use();
     glUniform4f(m_blitExtGamma.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4fv(m_blitExtGamma.Uniform("uCrop"), 1, crop ? crop : kFull);
@@ -462,6 +501,8 @@ void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int 
 void SceneRenderer::DrawKeptUpscaled(GLuint dstFbo, int dstW, int dstH) {
     glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
     glViewport(0, 0, dstW, dstH);
+    DiscardTarget();
+    RawSrgbWrites raw(m_rawSrgbWrites);
     m_gsr.Use();
     glUniform4f(m_gsr.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4f(m_gsr.Uniform("uViewport"), 1.f / m_gsrWidth, 1.f / m_gsrHeight, float(m_gsrWidth), float(m_gsrHeight));
@@ -475,6 +516,8 @@ void SceneRenderer::DrawKeptUpscaled(GLuint dstFbo, int dstW, int dstH) {
 void SceneRenderer::DrawKept(GLuint dstFbo, int dstW, int dstH) {
     glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
     glViewport(0, 0, dstW, dstH);
+    DiscardTarget();
+    RawSrgbWrites raw(m_rawSrgbWrites);
     m_kept.Use();
     glUniform4f(m_kept.Uniform("uRect"), 0, 0, 1, 1);
     glActiveTexture(GL_TEXTURE0);
@@ -487,6 +530,8 @@ void SceneRenderer::DrawKept(GLuint dstFbo, int dstW, int dstH) {
 void SceneRenderer::DrawKeptMoved(GLuint dstFbo, int dstW, int dstH, float scaleX, float scaleY, float fieldU, float fieldV) {
     glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
     glViewport(0, 0, dstW, dstH);
+    DiscardTarget();
+    RawSrgbWrites raw(m_rawSrgbWrites);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     m_keptMoved.Use();

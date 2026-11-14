@@ -25,12 +25,11 @@ void VideoSender::SetMaxBitrate(uint32_t kbps) {
 }
 
 void VideoSender::Send(const EncodedFrame& frame, const void* metadata, uint16_t metadataSize, uint8_t extraFlags,
-                       double encodeMs) {
+                       double encodeMs, bool lossAnswer) {
     uint8_t flags = extraFlags;
     if (frame.keyframe) flags |= rc::kVideoKeyframe;
-    const bool recovery = m_nextIsRecovery && !frame.keyframe;
+    const bool recovery = lossAnswer && !frame.keyframe;
     if (recovery) flags |= rc::kVideoRecovery;
-    m_nextIsRecovery = false;
     const uint32_t index = ++m_frameIndex;
     {
         std::lock_guard lock(m_lossMutex);

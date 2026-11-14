@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <utility>
 
 #include "../encode/encoder.h"
 #include "rc/connection.h"
@@ -30,7 +31,14 @@ class VideoSender {
 
     // Sends one encoded frame with metadata.
     void Send(const EncodedFrame& frame, const void* metadata, uint16_t metadataSize, uint8_t extraFlags,
-              double encodeMs);
+              double encodeMs) {
+        Send(frame, metadata, metadataSize, extraFlags, encodeMs, TakeRecovery());
+    }
+    // For sending on another thread than the encoding: whether the frame BeginFrame was just
+    // called for answers a loss (kVideoRecovery). Take it right after encoding, pass it to Send.
+    bool TakeRecovery() { return std::exchange(m_nextIsRecovery, false); }
+    void Send(const EncodedFrame& frame, const void* metadata, uint16_t metadataSize, uint8_t extraFlags,
+              double encodeMs, bool recovery);
 
     void RequestKeyframe() { m_keyframeRequested = true; }
     // True if the headset is waiting for a frame (keyframe or loss recovery), so one

@@ -46,6 +46,7 @@ struct ClientStreamSettings {
     float vrScale = 0;                // pixels per eye against the headset's own; 0 = from vrQuality
     bool matchSteamVr = false;        // stream at the size SteamVR renders at
     bool gazeFoveation = false;       // foveated encoding around where the eyes look
+    bool eyesTracked = true;          // false: the headset can't track them; fixed at the lens centre
     float refreshRate = 90;
     int vrBitrateMbps = 0;            // 0 = PC default
     int desktopBitrateMbps = 0;
@@ -112,8 +113,13 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     void LaunchSteamVr();
     void UpdateAudio();
     void ApplyClientInfo(const json& m);
+    void MeasurePoseWait(int64_t receivedNs);
 
     std::unique_ptr<rc::Connection> m_connection;
+    // Network thread only: how long each tracking packet waited for SteamVR to take a pose,
+    // reported to the headset once a second (rc::msg::kVrPoseWait).
+    std::vector<int64_t> m_poseWaits;
+    int64_t m_poseWaitPeriodNs = 0, m_poseWaitSentNs = 0;
     HelloInfo m_hello;
     std::string m_clientPk;
     std::vector<uint8_t> m_welcome;

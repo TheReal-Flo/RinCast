@@ -49,6 +49,11 @@ struct Window {
     RenderTarget chromeRt;
     bool needsRedraw = true;
     uint64_t lastHash = 0;
+    // When the canvas was last drawn and pointed at (WindowManager::RenderCanvases), the time
+    // since that its next drawing animates by, and whether it was drawn this frame.
+    float lastRedrawTime = -1e9f, lastPointedTime = -1e9f, pendingDt = 0;
+    bool canvasRedrawn = false;
+    bool layerCurrent = false;  // its compositor layer already shows the canvas, fully faded in
 
     // Video content (kind == Video)
     GLuint videoTexture = 0;

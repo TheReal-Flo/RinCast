@@ -385,7 +385,9 @@ inline constexpr const char* kText = "input.text";
 inline constexpr const char* kGamepad = "input.gamepad";
 inline constexpr const char* kRecenter = "vr.recenter";
 inline constexpr const char* kStats = "stats.client";
-inline constexpr const char* kVrPhase = "vr.phase";                 // "shiftNs": move the VR frame timing, + = later
+// "shiftNs": move the VR frame timing, + = later. Or "slipNs": move it later by that much,
+// spread over time (kVrPhaseSlipRate), for a PC whose server.info says "vrPhaseSlip".
+inline constexpr const char* kVrPhase = "vr.phase";
 // PC -> headset
 inline constexpr const char* kServerInfo = "server.info";
 inline constexpr const char* kSettings = "settings";
@@ -395,6 +397,16 @@ inline constexpr const char* kVrState = "vr.state";                 // idle / la
 inline constexpr const char* kStreamConfig = "stream.config";       // codec + resolution per stream
 inline constexpr const char* kServerStats = "stats.server";
 inline constexpr const char* kNotice = "notice";
+// Once a second while SteamVR takes poses: how long tracking packets waited on the PC before
+// the driver picked one up for a frame. "waitNs" for most of them (the circular average over
+// one vsync period), "lowNs" for the 2% that waited least (below 0: missed it), "periodNs".
+// A headset may hold its poses back by up to that much less a margin, and sample them later.
+inline constexpr const char* kVrPoseWait = "vr.poseWait";
 }  // namespace msg
+
+// How fast the PC moves its VR frame timing for a "slipNs": 3% of the time that passes, so a
+// whole frame at 120 Hz takes 280 ms and the game runs 3% slow for that long. The headset
+// waits that out before it steers the timing again.
+inline constexpr double kVrPhaseSlipRate = 0.03;
 
 }  // namespace rc
