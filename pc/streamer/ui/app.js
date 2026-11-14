@@ -632,18 +632,45 @@ function renderDependents() {
   setOff($("#micRow"), state.settings.audioDevices === "system");
 }
 
+// Steam's devices come with Steam, under Valve's terms: the user accepts those here
+// before RinCast installs the devices, or downloads Steam when it's missing.
 let installingSteamAudio = false;
+const audioError = (r, fallback) =>
+  r.error?.startsWith("audio.") ? t(r.error, { code: r.code }) : r.error || t(fallback, { code: r.code });
+
+$("#acceptSteamTerms").onchange = () => renderAudio();
+$("#steamTermsLink").onclick = (e) => {
+  e.preventDefault();  // inside the checkbox's label: reading isn't accepting
+  send({ type: "openUrl", url: "https://store.steampowered.com/subscriber_agreement/" });
+};
+$("#steamAudioRecheck").onclick = async () => {
+  $("#audioInstallStatus").textContent = "";
+  await request({ type: "getState" });
+};
 
 $("#installSteamAudio").onclick = async () => {
-  if (installingSteamAudio) return;
+  if (installingSteamAudio || !$("#acceptSteamTerms").checked) return;
   installingSteamAudio = true;
   renderAudio();
   $("#audioInstallStatus").textContent = t("audio.installing");
   try {
-    const r = await request({ type: "installSteamAudio" }, 90000);
-    $("#audioInstallStatus").textContent = r.ok ? t("audio.installDone") :
-      (r.error?.startsWith("audio.install") ? t(r.error, { code: r.code }) : r.error || t("audio.installFailed", { code: r.code }));
+    const r = await request({ type: "installSteamAudio", acceptSteamTerms: true }, 90000);
+    $("#audioInstallStatus").textContent = r.ok ? t("audio.installDone") : audioError(r, "audio.installFailed");
     await request({ type: "getState" });
+  } finally {
+    installingSteamAudio = false;
+    renderAudio();
+  }
+};
+
+$("#installSteam").onclick = async () => {
+  if (installingSteamAudio || !$("#acceptSteamTerms").checked) return;
+  installingSteamAudio = true;
+  renderAudio();
+  $("#audioInstallStatus").textContent = t("audio.steamDownloading");
+  try {
+    const r = await request({ type: "installSteam", acceptSteamTerms: true }, 120000);
+    $("#audioInstallStatus").textContent = r.ok ? t("audio.steamStarted") : audioError(r, "audio.steamDownloadFailed");
   } finally {
     installingSteamAudio = false;
     renderAudio();
@@ -654,7 +681,20 @@ function renderAudio() {
   if (!state) return;
   const a = state.system.audioDriver;
   const steam = a.steam || {};
-  $("#installSteamAudio").disabled = installingSteamAudio || (steam.speaker && steam.microphone);
+  // Only while Steam's devices are missing. Without Steam's driver packages the way
+  // there is Steam itself; on ARM there's no way, only the explanation.
+  const missingSteam = !(steam.speaker && steam.microphone);
+  const supported = steam.supported !== false;
+  const packages = !!steam.packages;
+  const accepted = $("#acceptSteamTerms").checked;
+  $("#steamAudioSetup").hidden = !missingSteam;
+  $("#steamAudioIntro").textContent = !supported ? t("audio.installUnsupported") :
+    packages ? t("audio.setupPackages") : t("audio.setupNoSteam");
+  $("#acceptSteamTerms").closest("label").hidden = !supported;
+  $("#installSteamAudio").hidden = !supported || !packages;
+  $("#installSteam").hidden = !supported || packages;
+  $("#steamAudioRecheck").hidden = !supported || packages;
+  $("#installSteamAudio").disabled = $("#installSteam").disabled = installingSteamAudio || !accepted;
   const active = a.active || {};
   const row = (ok, name, inUse) => [name, ok ? (inUse ? t("audio.inUse") : t("audio.installed")) : t("audio.notInstalled"), ok ? "" : "no"];
   const rows = [

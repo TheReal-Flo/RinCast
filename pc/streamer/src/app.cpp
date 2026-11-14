@@ -271,7 +271,8 @@ json App::StateJson() {
             {"active", Narrow(openxr::ActiveRuntime())}}},
           {"audioDriver",
            {{"speaker", drv.speaker}, {"microphone", drv.microphone}, {"microphoneFeed", drv.microphoneFeed},
-            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed}}},
+            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed},
+                       {"packages", audio::SteamDriverPackagesPresent()}, {"supported", audio::SteamDevicesSupported()}}},
             {"active", {{"speaker", route.speakerSet}, {"microphone", route.micSet}}}}},
           {"addresses", m_cloud.LanAddresses()},
           {"vpnAddresses", vpnAddresses},
@@ -419,7 +420,23 @@ void App::HandleUiMessage(const std::string& text) {
             const std::string err = m_cloud.ApproveHeadsetCode(code);
             reply({{"ok", err.empty()}, {"error", err}});
         });
-    } else if (type == "installSteamAudio") {
+    } else if (type == "installSteamAudio" || type == "installSteam") {
+        // Steam's devices and Steam itself come under Valve's terms, which the user
+        // accepts on the Audio page first. Not only a disabled button: checked here too.
+        if (!m.value("acceptSteamTerms", false)) {
+            reply({{"ok", false}, {"error", "audio.termsRequired"}});
+            return;
+        }
+        if (type == "installSteam") {
+            RunAsync([=] {
+                const int code = audio::DownloadAndStartSteamSetup();
+                const char* error = code == 0 ? "" :
+                    code == int(TRUST_E_NOSIGNATURE) ? "audio.steamUntrusted" :
+                    code == ERROR_CANCELLED ? "audio.steamCancelled" : "audio.steamDownloadFailed";
+                reply({{"ok", code == 0}, {"error", error}, {"code", code}});
+            });
+            return;
+        }
         if (m_installingSteamAudio.exchange(true)) {
             reply({{"ok", false}, {"error", "audio.installBusy"}});
             return;

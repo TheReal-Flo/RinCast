@@ -2,18 +2,103 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <softpub.h>
+#include <urlmon.h>
 #include <wincrypt.h>
+#include <wintrust.h>
+#include <filesystem>
 #include <string>
 
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "wintrust.lib")
 
 namespace rcs::audio {
 
-int InstallSteamDevices() {
+namespace {
+
+// Valve's own link to the installer, the one store.steampowered.com/about offers.
+constexpr wchar_t kSteamSetupUrl[] = L"https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe";
+
+std::filesystem::path SteamDriverDir() {
+    PWSTR common = nullptr;
+    std::filesystem::path dir;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramFilesCommonX86, 0, nullptr, &common)))
+        dir = std::filesystem::path(common) / L"Steam" / L"drivers" / L"Windows10" / L"x64";
+    CoTaskMemFree(common);
+    return dir;
+}
+
+// A valid Authenticode signature whose signer is Valve. Anything else isn't started.
+bool SignedByValve(const std::wstring& file) {
+    WINTRUST_FILE_INFO fileInfo{sizeof(fileInfo)};
+    fileInfo.pcwszFilePath = file.c_str();
+    WINTRUST_DATA data{sizeof(data)};
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &fileInfo;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    bool valve = false;
+    if (WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data) == ERROR_SUCCESS) {
+        CRYPT_PROVIDER_DATA* provider = WTHelperProvDataFromStateData(data.hWVTStateData);
+        CRYPT_PROVIDER_SGNR* signer = provider ? WTHelperGetProvSignerFromChain(provider, 0, FALSE, 0) : nullptr;
+        CRYPT_PROVIDER_CERT* cert = signer ? WTHelperGetProvCertFromChain(signer, 0) : nullptr;
+        if (cert && cert->pCert) {
+            wchar_t org[256] = {};
+            CertGetNameStringW(cert->pCert, CERT_NAME_ATTR_TYPE, 0, const_cast<char*>(szOID_ORGANIZATION_NAME), org,
+                               ARRAYSIZE(org));
+            valve = std::wstring(org) == L"Valve Corp.";
+        }
+    }
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data);
+    return valve;
+}
+
+}  // namespace
+
+bool SteamDevicesSupported() {
     SYSTEM_INFO systemInfo{};
     GetNativeSystemInfo(&systemInfo);
-    if (systemInfo.wProcessorArchitecture != PROCESSOR_ARCHITECTURE_AMD64)
-        return ERROR_NOT_SUPPORTED;
+    return systemInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64;
+}
+
+bool SteamDriverPackagesPresent() {
+    const auto dir = SteamDriverDir();
+    std::error_code ec;
+    return !dir.empty() && std::filesystem::exists(dir / L"SteamStreamingSpeakers.inf", ec) &&
+           std::filesystem::exists(dir / L"SteamStreamingMicrophone.inf", ec);
+}
+
+int DownloadAndStartSteamSetup() {
+    wchar_t temp[MAX_PATH];
+    if (!GetTempPathW(MAX_PATH, temp)) return int(GetLastError());
+    const std::filesystem::path dir = std::filesystem::path(temp) / L"RinCast";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::wstring file = (dir / L"SteamSetup.exe").wstring();
+    // Never start an older or foreign copy that happens to sit there.
+    DeleteFileW(file.c_str());
+    if (const HRESULT hr = URLDownloadToFileW(nullptr, kSteamSetupUrl, file.c_str(), 0, nullptr); FAILED(hr))
+        return int(hr);
+    if (!SignedByValve(file)) {
+        DeleteFileW(file.c_str());
+        return int(TRUST_E_NOSIGNATURE);
+    }
+    // Steam's setup asks for administrator rights itself and shows Steam's own terms.
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.lpVerb = L"open";
+    sei.lpFile = file.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei)) return int(GetLastError());
+    return 0;
+}
+
+int InstallSteamDevices() {
+    if (!SteamDevicesSupported()) return ERROR_NOT_SUPPORTED;
     // No downloaded scripts, user-supplied paths or command interpolation. Resolve
     // the Steam service's shared driver directory inside the elevated process.
     static constexpr wchar_t script[] = LR"PS(

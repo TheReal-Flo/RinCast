@@ -113,14 +113,21 @@ RinCast's devices if they're installed, otherwise Steam's.
 | RinCast Speaker & Microphone | Only with a signed driver package (or test signing) | Yes |
 | Default devices | Always | No |
 
-**Installing Steam's devices (x64 Windows).** In the streamer's **Audio** page, click
-**Install Steam audio devices** and accept the Windows administrator prompt.
-Only a separate PowerShell process runs elevated; RinCast stays unelevated.
-The installer uses Steam's local driver packages from
-`%CommonProgramFiles(x86)%\Steam\drivers\Windows10\x64`, without a
-Remote Play session or downloading drivers. Install or repair Steam first if
-these packages are missing. RinCast checks that both devices are available;
-Windows may request a restart. Reconnect the headset after installation.
+**Installing Steam's devices (x64 Windows).** While they're missing, the streamer's
+**Audio** page shows how to add them. They come with Steam and are covered by
+Valve's [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/),
+so RinCast asks you to accept it first.
+
+- **Steam is installed:** click **Install Steam audio devices** and accept the
+  Windows administrator prompt. Only a separate PowerShell process runs elevated;
+  RinCast stays unelevated. It installs Steam's own driver packages from
+  `%CommonProgramFiles(x86)%\Steam\drivers\Windows10\x64`, without a Remote Play
+  session. RinCast checks that both devices are available; Windows may request a
+  restart. Reconnect the headset after installation.
+- **Steam isn't installed, or its driver packages are missing:** click **Download and
+  install Steam**. RinCast downloads Steam's installer from Valve, starts it only if
+  it's signed by Valve, and leaves the rest to Steam's own setup. Afterwards, click
+  **Check again** and install the devices as above.
 
 If the devices still don't appear, check **Settings → System → Sound → All sound
 devices** and allow them if disabled. **Default devices** still provides PC
