@@ -94,6 +94,8 @@ listeners.push((msg) => {
       if (msg.connected) toast(t("toast.connected", { name: msg.deviceName }));
       else if (msg.reason !== "replaced") toast(t("toast.disconnected", { name: msg.deviceName }));
       break;
+    case "screenshots":
+      break;  // the list lives in the folder, not in this window
     case "approval":
       if (state) state.pendingApproval = msg;
       showApproval(msg);
@@ -144,12 +146,12 @@ $$("#nav button").forEach((b) =>
 );
 
 // ---------------------------------------------------------------- settings binding
-function bindSettings() {
+function bindSettings(evenFocused = false) {
   $$("[data-setting]").forEach((el) => {
     const v = state.settings[el.dataset.setting];
     if (el.type === "checkbox") el.checked = !!v;
     else if (el.type === "radio") el.checked = String(v) === el.value;
-    else if (document.activeElement !== el) el.value = v ?? "";
+    else if (evenFocused || document.activeElement !== el) el.value = v ?? "";
     if (el.type === "range") updateRangeLabel(el);
   });
 }
@@ -185,7 +187,7 @@ function commitSetting(el) {
   request({ type: "setSettings", settings: { [key]: value } }).then((r) => {
     if (r.ok === false || !r.settings) {
       settingError(el, r.error || t("err.save"));
-      if (state) bindSettings();  // back to what actually applies
+      if (state) bindSettings(true);  // back to what actually applies, even under the cursor
       return;
     }
     if (state) state.settings = r.settings;
@@ -206,6 +208,18 @@ function wireSetting(el) {
   });
 }
 $$("[data-setting]").forEach(wireSetting);
+
+// The screenshots folder is picked in a real Windows dialog, not typed by hand.
+$("#screenshotBrowse").onclick = async () => {
+  const input = $("#screenshotDir");
+  const r = await request({ type: "pickFolder", start: input.value });
+  if (!r?.ok || !r.path) return;  // cancelled, or the design-preview mock has no dialog
+  input.value = r.path;
+  commitSetting(input);
+};
+
+// Opens whichever folder is configured, or the default one when the field is empty.
+$("#openShotsFolder").onclick = () => send({ type: "openScreenshots" });
 
 // ---------------------------------------------------------------- language
 const languageSelect = $("#language");
@@ -456,6 +470,8 @@ function renderLive(s) {
 }
 
 // The headset times each stage a frame goes through; together they make up the latency.
+// The wait for the next screen refresh is left out: it's the display's own cadence,
+// nothing here acts on it.
 const STAGES = [
   ["uplink", "stage.uplink"],
   ["game", "stage.game"],
@@ -465,12 +481,13 @@ const STAGES = [
   ["downlink", "stage.downlink"],
   ["decode", "stage.decode"],
   ["nextFrame", "stage.nextFrame"],
-  ["compositor", "stage.compositor"],
 ];
 
 function renderStages(s) {
   const got = s.client?.latencyStages || {};
-  const rows = STAGES.filter(([key]) => typeof got[key] === "number");
+  // Stages under half a millisecond stay hidden: a clock a little off pushes some of
+  // them negative, and they read as zeros.
+  const rows = STAGES.filter(([key]) => typeof got[key] === "number" && got[key] >= 0.5);
   $("#stagesBox").hidden = !rows.length;
   if (!rows.length) return;
   const total = rows.reduce((sum, [key]) => sum + Math.max(got[key], 0), 0) || 1;
@@ -483,6 +500,7 @@ function renderStages(s) {
 
 // Live numbers while connected, for the pages that don't have them already.
 function renderStatus() {
+  if (!state) return;  // pushes can arrive before the first state reply
   const el = $("#status");
   const s = state.session;
   const onHome = $("#nav [aria-current]")?.dataset.page === "home";
@@ -614,10 +632,69 @@ function renderDependents() {
   setOff($("#micRow"), state.settings.audioDevices === "system");
 }
 
+// Steam's devices come with Steam, under Valve's terms: the user accepts those here
+// before RinCast installs the devices, or downloads Steam when it's missing.
+let installingSteamAudio = false;
+const audioError = (r, fallback) =>
+  r.error?.startsWith("audio.") ? t(r.error, { code: r.code }) : r.error || t(fallback, { code: r.code });
+
+$("#acceptSteamTerms").onchange = () => renderAudio();
+$("#steamTermsLink").onclick = (e) => {
+  e.preventDefault();  // inside the checkbox's label: reading isn't accepting
+  send({ type: "openUrl", url: "https://store.steampowered.com/subscriber_agreement/" });
+};
+$("#steamAudioRecheck").onclick = async () => {
+  $("#audioInstallStatus").textContent = "";
+  await request({ type: "getState" });
+};
+
+$("#installSteamAudio").onclick = async () => {
+  if (installingSteamAudio || !$("#acceptSteamTerms").checked) return;
+  installingSteamAudio = true;
+  renderAudio();
+  $("#audioInstallStatus").textContent = t("audio.installing");
+  try {
+    const r = await request({ type: "installSteamAudio", acceptSteamTerms: true }, 90000);
+    $("#audioInstallStatus").textContent = r.ok ? t("audio.installDone") : audioError(r, "audio.installFailed");
+    await request({ type: "getState" });
+  } finally {
+    installingSteamAudio = false;
+    renderAudio();
+  }
+};
+
+$("#installSteam").onclick = async () => {
+  if (installingSteamAudio || !$("#acceptSteamTerms").checked) return;
+  installingSteamAudio = true;
+  renderAudio();
+  $("#audioInstallStatus").textContent = t("audio.steamDownloading");
+  try {
+    const r = await request({ type: "installSteam", acceptSteamTerms: true }, 120000);
+    $("#audioInstallStatus").textContent = r.ok ? t("audio.steamStarted") : audioError(r, "audio.steamDownloadFailed");
+  } finally {
+    installingSteamAudio = false;
+    renderAudio();
+  }
+};
+
 function renderAudio() {
   if (!state) return;
   const a = state.system.audioDriver;
   const steam = a.steam || {};
+  // Only while Steam's devices are missing. Without Steam's driver packages the way
+  // there is Steam itself; on ARM there's no way, only the explanation.
+  const missingSteam = !(steam.speaker && steam.microphone);
+  const supported = steam.supported !== false;
+  const packages = !!steam.packages;
+  const accepted = $("#acceptSteamTerms").checked;
+  $("#steamAudioSetup").hidden = !missingSteam;
+  $("#steamAudioIntro").textContent = !supported ? t("audio.installUnsupported") :
+    packages ? t("audio.setupPackages") : t("audio.setupNoSteam");
+  $("#acceptSteamTerms").closest("label").hidden = !supported;
+  $("#installSteamAudio").hidden = !supported || !packages;
+  $("#installSteam").hidden = !supported || packages;
+  $("#steamAudioRecheck").hidden = !supported || packages;
+  $("#installSteamAudio").disabled = $("#installSteam").disabled = installingSteamAudio || !accepted;
   const active = a.active || {};
   const row = (ok, name, inUse) => [name, ok ? (inUse ? t("audio.inUse") : t("audio.installed")) : t("audio.notInstalled"), ok ? "" : "no"];
   const rows = [
@@ -884,6 +961,7 @@ function mock(msg) {
     session: demo === "connected" || demo === "lowbandwidth" ? { deviceName: "Quest 3", model: "Meta Quest 3", address: "192.168.1.42", remote: demo === "lowbandwidth", connectedSeconds: 1460, rttMs: demo === "lowbandwidth" ? 42.6 : 3.4, vrState: "running", vrApp: "Half-Life: Alyx",
       headsetBitrateMbps: 0, headsetCodec: "auto", vr: { fps: demo === "lowbandwidth" ? 45 : 90, encodeMs: 3.1, mbps: demo === "lowbandwidth" ? 7 : 182, codec: "HEVC", eyeWidth: 1536, eyeHeight: 1632, refreshRate: 90, latencyMs: demo === "lowbandwidth" ? 96 : 38 }, desktop: [],
       client: { latencyStages: demo === "lowbandwidth" ? { uplink: 21.3, game: 12.1, encoderWait: 0.7, encode: 4.4, downlink: 41.8, decode: 4.6, nextFrame: 3.1, compositor: 8 } : { uplink: 1.7, game: 11.4, encoderWait: 0.6, encode: 4.1, downlink: 5.3, decode: 4.2, nextFrame: 2.9, compositor: 7.8 } } } : null,
+    screenshots: [{ name: "Screenshot_2026.11.11-12.00.00.jpg", path: "" }, { name: "Screenshot_2026.11.11-11.59.30.jpg", path: "" }],
     pendingApproval: demo === "approval" ? { deviceId: "x", deviceName: "Quest 3", model: "Meta Quest 3", address: "192.168.1.42" } : null,
   };
   setTimeout(() => {

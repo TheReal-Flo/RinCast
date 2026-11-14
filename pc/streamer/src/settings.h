@@ -54,9 +54,11 @@ struct Settings {
     // VR
     std::string openxrRuntime = "steamvr";  // rincast | steamvr (what we make active while streaming)
     bool autoRegisterSteamVrDriver = true;
+    std::string controllerMode = "native";  // native | touch (SteamVR compatibility)
 
     // Cloud
     std::string cloudUrl = "https://rincast.com";
+    std::string screenshotDir;          // headset screenshots land here (Pictures\RinCast unless set)
     bool allowRemote = true;
     std::string cloudRefreshTokenProtected;  // DPAPI
     std::string cloudUserName;
@@ -79,5 +81,10 @@ class SettingsStore {
     mutable std::mutex m_mutex;
     Settings m_settings;
 };
+
+// Where screenshots go when nothing is set: Pictures\RinCast.
+std::string DefaultScreenshotDir();
+// "PICO 4" for PICO's model codes ("A8110"); other headsets report their product name.
+std::string HeadsetName(const std::string& model);
 
 }  // namespace rcs

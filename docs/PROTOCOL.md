@@ -67,6 +67,36 @@ Hello and Welcome both carry a random nonce. Session keys are derived as
 
 Stream id 0 carries VR. Ids 1–15 are desktop monitors.
 
+### Controller identity and aiming
+
+`Hello` and `client.info` may include `controllerProfiles`, an array of two OpenXR
+interaction profile paths (left, right). An empty string means that no active profile
+is available. Updated headsets refresh this while tracking with reliable control:
+
+```json
+{"type":"controller.profiles","controllerProfiles":["/interaction_profiles/bytedance/pico4_controller","/interaction_profiles/bytedance/pico4_controller"]}
+```
+
+The PC uses these reported profiles for native controller identity; it does not infer
+them from `model`. Unknown or missing profiles are not substituted. Explicit Touch
+compatibility is a PC-side choice. Native mode requires an updated headset app.
+
+Tracking datagrams retain the existing `TrackingPayload` prefix. They can append
+`GazePayload` (28 bytes), then `BatteryPayload` (28 bytes, see [Battery status](#battery-status)),
+then `ControllerAimPayload` (60 bytes):
+
+```
+validMask u32 | left aim Pose (28 B) | right aim Pose (28 B)
+```
+
+Bits 0 and 1 mark valid left/right aim poses, located in the same app space and at
+the same predicted time as the grip poses in the prefix. Each pose contains quaternion
+`x,y,z,w` followed by position `x,y,z` (all float32). The gaze and battery blocks are
+always present before aim, zero-filled when unavailable (a battery block without its
+magic means unknown battery state). Older receivers can ignore
+the extra suffix, and newer receivers accept old packets without aim. Truncated or
+non-finite aim data is not used for calibration. The wire protocol remains version 3.
+
 ### Loss recovery
 Frames are predicted from earlier frames, so the headset stops feeding the decoder at
 the first missing frame. It keeps showing the last good picture and sends
@@ -112,6 +142,40 @@ link-local only. The headset sends its discovery probe to `ff02::1` (every devic
 on that interface, from a socket bound to that network. The streamer joins `ff02::1` on every
 adapter, again as adapters appear, and answers on an IPv6-only socket on the discovery port. The
 stream then runs to that link-local address, with its scope, like any local connection.
+
+## Battery status
+
+Tracking datagrams may append a zero-filled `GazePayload` (28 bytes, when no gaze
+is available), followed by the optional 28-byte `BatteryPayload`:
+
+```
+magic u32 (0x54424352, RCBT) | headset BatteryState | left BatteryState | right BatteryState
+BatteryState: level float32 (0..1) | flags u32
+```
+
+Flag bits are level valid (1), charging known (2), and charging (4). Each device
+is validated separately; non-finite and out-of-range values are unavailable.
+Missing, truncated or unrecognized battery extensions mean unknown battery state.
+Older receivers can ignore the suffix; wire protocol version remains 3.
+
+The APK samples on its render thread once a second and copies the snapshot to
+its tracking thread under a mutex. PICO's OpenXR `/input/battery/value` returns
+coarse integer levels 1..5, mapped to 20..100%; zero/inactive is unknown. Android
+provides headset charge and charging state for PICO and Quest. USB power alone
+is not interpreted as charging. No Quest controller battery API is registered.
+
+The PC bridge ABI is version 8: update the PC streamer and driver together.
+The driver retains last-reported charge through tracking pauses while the headset
+session stays connected. New invalid samples and disconnects clear the properties.
+Controller battery state is never assigned to tracked bare hands.
+
+Quest's internal controller-status APIs require
+`com.oculus.permission.READ_CONTROLLER_STATUS` (or its
+`horizonos.permission.READ_CONTROLLER_STATUS` equivalent). On the tested Quest 3S
+firmware these are `signature|preinstalled` permissions: a normal installed APK
+cannot obtain them, including through a runtime permission request. The current
+Quest OpenXR runtime does not expose battery state. RinCast therefore leaves
+Quest controller batteries unknown rather than using VrApi, ADB, or another process.
 
 ## Face tracking
 

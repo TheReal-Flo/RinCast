@@ -21,7 +21,7 @@ inline constexpr wchar_t kSharedMemoryName[] = L"Local\\RinCastVRBridge.v1";
 inline constexpr wchar_t kFrameReadyEventName[] = L"Local\\RinCastVRFrameReady.v1";
 inline constexpr wchar_t kTrackingEventName[] = L"Local\\RinCastVRTracking.v1";
 inline constexpr uint32_t kMagic = 0x42564352;  // 'RCVB'
-inline constexpr uint32_t kVersion = 5;
+inline constexpr uint32_t kVersion = 9;
 inline constexpr int kFrameSlots = 3;
 inline constexpr int kHapticsRing = 32;
 inline constexpr int kBodyTrackers = 10;  // rc::kBodyTrackerCount
@@ -47,6 +47,13 @@ struct BridgeController {
     float grip;
     float thumbstick[2];
     BridgePose pose;    // grip pose
+    uint32_t aimValid;
+    BridgePose aim;  // OpenXR aim pose, predicted at the same time as grip
+};
+
+struct BridgeBattery {
+    float level;
+    uint32_t flags;  // rc::BatteryFlags
 };
 
 struct TrackingSnapshot {
@@ -58,6 +65,7 @@ struct TrackingSnapshot {
     uint32_t reserved;
     BridgePose hmd;
     BridgeController controllers[2];
+    BridgeBattery battery[3];  // headset, left, right
 };
 
 struct BodySnapshot {
@@ -85,6 +93,8 @@ struct DisplayConfig {
     // matching SteamVR's resolution, the stream follows what it renders instead. 0 = eyeWidth.
     uint32_t renderEyeWidth;
     uint32_t renderEyeHeight;
+    uint32_t touchControllers;        // 0 = native headset controllers, 1 = Oculus Touch compatibility
+    char controllerProfiles[2][256];  // active OpenXR interaction profiles reported by the headset
 };
 
 struct FrameSlot {
@@ -114,6 +124,7 @@ struct Shared {
     volatile LONG64 streamerHeartbeatNs;   // QPC ns, updated ~10 Hz
     volatile LONG headsetConnected;        // a headset is connected and in (or entering) VR mode
     volatile LONG configGeneration;        // bumped whenever config / textures change
+    volatile LONG64 configSeqlock;         // protects the full display/controller config
     DisplayConfig config;
     wchar_t textureNames[kFrameSlots][64];
     uint32_t textureWidth;                 // = 2 * eyeWidth
@@ -150,6 +161,30 @@ struct Shared {
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------------
+
+// Writers are serialized by VrBridgeHost's mutex.
+inline void WriteDisplayConfig(Shared* s, const DisplayConfig& config) {
+    InterlockedIncrement64(&s->configSeqlock);
+    MemoryBarrier();
+    std::memcpy(&s->config, &config, sizeof(config));
+    MemoryBarrier();
+    InterlockedIncrement64(&s->configSeqlock);
+}
+
+inline bool ReadDisplayConfig(const Shared* s, DisplayConfig& config) {
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        const LONG64 before = s->configSeqlock;
+        if (before & 1) {
+            YieldProcessor();
+            continue;
+        }
+        MemoryBarrier();
+        std::memcpy(&config, &s->config, sizeof(config));
+        MemoryBarrier();
+        if (before == s->configSeqlock) return true;
+    }
+    return false;
+}
 
 inline void WriteTracking(Shared* s, const TrackingSnapshot& snap) {
     InterlockedIncrement64(&s->trackingSeqlock);  // -> odd
@@ -313,6 +348,30 @@ class BridgeClient {
     }
 
     void AbandonSlot(int slot) { InterlockedExchange(&m_shared->slots[slot].state, kSlotFree); }
+
+    // Pacing to the encoder: whether the streamer still has to take the frame published in
+    // `slot` as `frameIndex`. While a headset streams, the streamer takes a frame only when its
+    // encoder is about to want one, so a producer that waits for this before starting its next
+    // frame renders at the rate the encoder keeps up with, not frames that would be replaced.
+    bool Untaken(int slot, uint64_t frameIndex) const {
+        if (!m_shared || slot < 0 || slot >= kFrameSlots) return false;
+        const volatile FrameSlot& fs = m_shared->slots[slot];
+        return fs.state == kSlotReady && fs.frameIndex == frameIndex;
+    }
+    // Waits while Untaken, up to timeoutNs; false if it timed out.
+    bool WaitTaken(int slot, uint64_t frameIndex, int64_t timeoutNs) const {
+        const int64_t start = QpcNowNs();
+        while (Untaken(slot, frameIndex)) {
+            const int64_t waited = QpcNowNs() - start;
+            if (waited > timeoutNs) return false;
+            // Usually it's taken right away: spin briefly before giving up the CPU.
+            if (waited < 500'000) YieldProcessor();
+            else Sleep(1);
+        }
+        return true;
+    }
+    // Whether holding the producer for the streamer makes sense: a headset streams from it.
+    bool Streaming() const { return m_shared && m_shared->headsetConnected && StreamerAlive(); }
 
     void PushHaptic(uint32_t hand, float duration, float frequency, float amplitude) {
         if (!m_shared) return;

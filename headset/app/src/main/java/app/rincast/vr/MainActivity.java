@@ -3,6 +3,7 @@ package app.rincast.vr;
 import android.Manifest;
 import android.app.NativeActivity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
@@ -34,20 +35,36 @@ import java.util.UUID;
  * Native code calls these methods through JNI.
  */
 public class MainActivity extends NativeActivity {
+    // Packed level (low byte) and charging status; -1 means unavailable.
+    public int getHeadsetBattery() {
+        Intent state = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (state == null || !state.getBooleanExtra(android.os.BatteryManager.EXTRA_PRESENT, true)) return -1;
+        int level = state.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+        int scale = state.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+        if (level < 0 || scale <= 0 || level > scale) return -1;
+        int status = state.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, android.os.BatteryManager.BATTERY_STATUS_UNKNOWN);
+        boolean known = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_DISCHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_NOT_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+        return Math.round(100f * level / scale) | (known ? 256 : 0) |
+            (status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ? 512 : 0);
+    }
     static {
         System.loadLibrary("rincast");
     }
 
     private WifiManager.WifiLock wifiLock;
+    private WifiManager.WifiLock wifiHighPerfLock;
     private WifiManager.MulticastLock multicastLock;
     private PowerManager.WakeLock wakeLock;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 1);
-        }
+        // Permissions are asked for by the native side once the first frame is up: PICO's VR
+        // permission screen takes over the display, and asking here (before anything is drawn)
+        // is what left the app looking like it wouldn't open after an update.
     }
 
     @Override
@@ -166,6 +183,13 @@ public class MainActivity extends NativeActivity {
                 wifiLock = wifi.createWifiLock(mode, "rincast:stream");
                 wifiLock.acquire();
             }
+            // The low-latency lock only counts while Android sees the app in the foreground
+            // with the screen on, which headsets don't all report while it's in VR. Holding the
+            // high-performance one as well keeps the radio out of power save there too.
+            if (wifiHighPerfLock == null && wifi != null && Build.VERSION.SDK_INT >= 29) {
+                wifiHighPerfLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "rincast:stream-hp");
+                wifiHighPerfLock.acquire();
+            }
             if (multicastLock == null && wifi != null) {
                 multicastLock = wifi.createMulticastLock("rincast:discovery");
                 multicastLock.acquire();
@@ -177,6 +201,7 @@ public class MainActivity extends NativeActivity {
             }
         } else {
             if (wifiLock != null) { wifiLock.release(); wifiLock = null; }
+            if (wifiHighPerfLock != null) { wifiHighPerfLock.release(); wifiHighPerfLock = null; }
             if (multicastLock != null) { multicastLock.release(); multicastLock = null; }
             if (wakeLock != null) { wakeLock.release(); wakeLock = null; }
         }
@@ -228,10 +253,33 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    /** Whether the app can read the shared storage the screenshots feature needs. */
+    public boolean screenshotStorageOk() {
+        if (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager()) return true;
+        final String p = android.os.Build.VERSION.SDK_INT >= 33
+                ? "android.permission.READ_MEDIA_IMAGES" : Manifest.permission.READ_EXTERNAL_STORAGE;
+        return checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** The system's file-access page for this app, where the screenshots permission lives. */
+    public void openStorageSettings() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                     android.net.Uri.parse("package:" + getPackageName())));
+        } catch (RuntimeException e) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)); }
+            catch (RuntimeException ignored) {}
+        }
+    }
+
     /** Asks for those of the permissions (separated by commas) that aren't granted yet. */
     public void requestPermissionList(String list) {
         final java.util.ArrayList<String> missing = new java.util.ArrayList<>();
         for (String p : list.split(",")) {
+            // Android 13+: READ_EXTERNAL_STORAGE grants nothing any more; reading other
+            // apps' images (the screenshots we send to the PC) needs READ_MEDIA_IMAGES.
+            if (p.equals(Manifest.permission.READ_EXTERNAL_STORAGE) && android.os.Build.VERSION.SDK_INT >= 33)
+                p = "android.permission.READ_MEDIA_IMAGES";
             if (!p.isEmpty() && checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
         }
         if (!missing.isEmpty()) runOnUiThread(() -> requestPermissions(missing.toArray(new String[0]), 2));

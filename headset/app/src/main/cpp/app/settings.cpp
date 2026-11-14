@@ -18,9 +18,12 @@ json HeadsetSettings::ToJson() const {
             {"language", language},
             {"vrQuality", vrQuality},
             {"vrScale", vrScale},
+            {"vrScaleOfPanel", vrScaleOfPanel},
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
             {"autoConnect", autoConnect},
+            {"autoSendScreenshots", autoSendScreenshots},
+            {"autoLaunchSteamVr", autoLaunchSteamVr},
             {"usbCable", usbCable},
             {"refreshRate", refreshRate},
             {"codec", codec},
@@ -83,10 +86,14 @@ void HeadsetSettings::FromJson(const json& j) {
             if (vrQuality == presets[i]) vrScale = scales[i];
     }
     get("vrScale", vrScale);
+    // Saved before 1.2.0: of the runtime's recommended size; App::Init converts it.
+    vrScaleOfPanel = j.value("vrScaleOfPanel", false);
     SetVrScale(vrScale);
     get("matchSteamVr", matchSteamVr);
     get("gazeFoveation", gazeFoveation);
     get("autoConnect", autoConnect);
+    get("autoSendScreenshots", autoSendScreenshots);
+    get("autoLaunchSteamVr", autoLaunchSteamVr);
     get("usbCable", usbCable);
     get("refreshRate", refreshRate);
     get("codec", codec);

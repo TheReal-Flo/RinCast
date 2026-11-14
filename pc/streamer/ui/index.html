@@ -134,6 +134,17 @@
           </div>
           <p class="note" id="audioDevicesHint"></p>
           <p class="note warn" id="audioMissing"></p>
+          <div id="steamAudioSetup" hidden>
+            <h3 data-i18n="audio.setupTitle">Add Steam's audio devices</h3>
+            <p class="note" id="steamAudioIntro"></p>
+            <label class="check"><input type="checkbox" id="acceptSteamTerms"><span data-i18n="audio.acceptTerms">I accept the Steam Subscriber Agreement</span><small><button class="link" id="steamTermsLink" data-i18n="audio.readTerms">Read the agreement</button></small></label>
+            <div class="btns spaced">
+              <button class="btn" id="installSteamAudio" data-i18n="audio.install">Install Steam audio devices</button>
+              <button class="btn" id="installSteam" data-i18n="audio.getSteam">Download and install Steam</button>
+              <button class="btn" id="steamAudioRecheck" data-i18n="audio.checkAgain">Check again</button>
+            </div>
+          </div>
+          <p class="note" id="audioInstallStatus" role="status" aria-live="polite"></p>
         </div>
       </div>
     </section>
@@ -149,6 +160,12 @@
         <button class="btn primary" id="getSteamVR" data-i18n="vr.get">Get SteamVR</button>
       </div>
       <label class="check spaced"><input type="checkbox" data-setting="autoRegisterSteamVrDriver"><span data-i18n="vr.autoRegister">Add RinCast to SteamVR automatically</span></label>
+      <h2 id="controllerModeLabel" data-i18n="vr.controllerMode">Controller compatibility</h2>
+      <div class="options inline" role="radiogroup" aria-labelledby="controllerModeLabel" aria-describedby="controllerModeHint">
+        <label><input type="radio" name="controllerMode" data-setting="controllerMode" value="native"><span data-i18n="vr.controllerNative">Native controllers</span></label>
+        <label><input type="radio" name="controllerMode" data-setting="controllerMode" value="touch"><span data-i18n="vr.controllerTouch">Oculus Touch</span></label>
+      </div>
+      <p class="note" id="controllerModeHint" data-i18n="vr.controllerModeHint">Uses the controller profiles reported by your headset. Choose Oculus Touch only for games that need compatibility mode. After changing this, restart SteamVR.</p>
       <div id="runtimeRow">
         <h2 id="runtimeLabel" data-i18n="vr.runtime">OpenXR games run through</h2>
         <div class="options inline" id="runtimeSeg" role="radiogroup" aria-labelledby="runtimeLabel" aria-describedby="runtimeNote">
@@ -188,6 +205,13 @@
           <select id="language" class="select"></select>
           <label class="check spaced"><input type="checkbox" data-setting="startWithWindows"><span data-i18n="general.startWithWindows">Start with Windows</span></label>
           <label class="check"><input type="checkbox" data-setting="preventSleep"><span data-i18n="general.keepAwake">Keep the PC awake while streaming</span></label>
+          <h3><label for="screenshotDir" data-i18n="general.screenshotDir">Screenshots folder</label></h3>
+          <div class="inputrow">
+            <input type="text" id="screenshotDir" data-setting="screenshotDir" spellcheck="false">
+            <button class="btn" id="screenshotBrowse" data-i18n="general.browse">Browse…</button>
+          </div>
+          <div class="btns spaced"><button class="btn" id="openShotsFolder" data-i18n="general.openFolder">Open folder</button></div>
+          <p class="note" data-i18n="general.screenshotDirNote">Where headset screenshots land on this PC</p>
           <h2 data-i18n="general.networks">Networks</h2>
           <label class="check" id="publicRow"><input type="checkbox" id="allowPublic"><span data-i18n="general.public">Allow headsets on Public networks</span><small id="publicNote"></small></label>
         </div>

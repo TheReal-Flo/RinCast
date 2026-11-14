@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "rc/platform.h"
+#include "rc/battery.h"
 
 namespace rv {
 
@@ -59,6 +60,11 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
     m_touchTrigger = CreateAction(m_set, XR_ACTION_TYPE_BOOLEAN_INPUT, "touch_trigger", "Touch trigger", m_handPath, 2);
     m_touchThumbrest = CreateAction(m_set, XR_ACTION_TYPE_BOOLEAN_INPUT, "touch_thumbrest", "Touch thumbrest", m_handPath, 2);
     m_haptic = CreateAction(m_set, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic", "Haptic", m_handPath, 2);
+    if (xr.HasExtension(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME) ||
+        xr.HasExtension(XR_BD_ULTRA_CONTROLLER_INTERACTION_EXTENSION_NAME)) {
+        m_battery[0] = CreateAction(m_set, XR_ACTION_TYPE_FLOAT_INPUT, "battery_left", "Left controller battery", nullptr, 0);
+        m_battery[1] = CreateAction(m_set, XR_ACTION_TYPE_FLOAT_INPUT, "battery_right", "Right controller battery", nullptr, 0);
+    }
 
     // Eye gaze, where the runtime has it and the headset can track the eyes.
     if (xr.HasExtension(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME)) {
@@ -139,10 +145,21 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
         }
         const XrPath path = Path(inst, profile.path);
         sb.interactionProfile = path;
+        const size_t normalBindings = b.size();
+        if (m_battery[0] && m_battery[1] && std::string(profile.path).find("/interaction_profiles/bytedance/") == 0) {
+            bind(m_battery[0], "/user/hand/left/input/battery/value");
+            bind(m_battery[1], "/user/hand/right/input/battery/value");
+        }
         sb.suggestedBindings = b.data();
         sb.countSuggestedBindings = uint32_t(b.size());
-        XrResult result = xrSuggestInteractionProfileBindings(inst, &sb);
-        if (XR_FAILED(result)) RC_LOGW("Bindings for %s rejected: %d", profile.path, int(result));
+        auto bindingResult = xrSuggestInteractionProfileBindings(inst, &sb);
+        if (XR_FAILED(bindingResult) && b.size() != normalBindings) {
+            // Older PICO runtimes may not expose battery input. Preserve all normal controls.
+            RC_LOGI("Battery binding unavailable for %s (%d)", profile.path, int(bindingResult));
+            sb.countSuggestedBindings = uint32_t(normalBindings);
+            bindingResult = xrSuggestInteractionProfileBindings(inst, &sb);
+        }
+        if (XR_FAILED(bindingResult)) RC_LOGW("Bindings for %s rejected: %d", profile.path, int(bindingResult));
         else m_controllerProfiles.push_back(path);
     }
 
@@ -226,6 +243,35 @@ static float GetFloat(XrSession s, XrAction a, XrPath sub) {
     return XR_SUCCEEDED(xrGetActionStateFloat(s, &gi, &st)) && st.isActive ? st.currentState : 0.f;
 }
 
+std::string XrInput::ControllerProfilePath(int hand) const {
+    if (!m_xr || hand < 0 || hand > 1) return {};
+    XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_FAILED(xrGetCurrentInteractionProfile(m_xr->Session(), m_handPath[hand], &state)) || !state.interactionProfile) return {};
+    char path[XR_MAX_PATH_LENGTH]{};
+    uint32_t length = 0;
+    if (XR_FAILED(xrPathToString(m_xr->Instance(), state.interactionProfile, sizeof(path), &length, path))) return {};
+    return path;
+}
+
+rc::BatteryState XrInput::ControllerBattery(int hand) const {
+    if (hand < 0 || hand > 1 || !m_battery[hand] || m_hands[hand].isHand) return {};
+    XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+    info.action = m_battery[hand];
+    XrActionStateFloat state{XR_TYPE_ACTION_STATE_FLOAT};
+    const auto result = xrGetActionStateFloat(m_xr->Session(), &info, &state);
+#ifndef NDEBUG
+    static float previous[2] = {-1, -1};
+    static int previousActive[2] = {-1, -1};
+    if (previous[hand] != state.currentState || previousActive[hand] != int(state.isActive)) {
+        previous[hand] = state.currentState;
+        previousActive[hand] = int(state.isActive);
+        RC_LOGI("OpenXR battery[%d] result=%d active=%d raw=%.3f", hand, int(result), int(state.isActive), state.currentState);
+    }
+#endif
+    if (XR_FAILED(result) || !state.isActive) return {};
+    return rc::PicoBatteryLevel(state.currentState);
+}
+
 void XrInput::Update(XrTime time) {
     XrActiveActionSet active{m_set, XR_NULL_PATH};
     XrActionsSyncInfo si{XR_TYPE_ACTIONS_SYNC_INFO};
@@ -236,6 +282,11 @@ void XrInput::Update(XrTime time) {
     const XrSession s = m_xr->Session();
     for (int i = 0; i < 2; i++) {
         HandInput& h = m_hands[i];
+        const auto profile = ControllerProfilePath(i);
+        if (profile != m_reportedProfiles[i]) {
+            m_reportedProfiles[i] = profile;
+            RC_LOGI("Runtime controller profile (%s): %s", i == 0 ? "left" : "right", profile.c_str());
+        }
         const XrPath sub = m_handPath[i];
         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
         gi.action = m_aimPose;

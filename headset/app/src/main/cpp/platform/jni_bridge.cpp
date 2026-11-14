@@ -70,6 +70,20 @@ bool Platform::HasMicPermission() {
     return ok;
 }
 
+rc::BatteryState Platform::HeadsetBattery() {
+    JniScope scope;
+    auto* env = scope.env();
+    if (!env) return {};
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID method = env->GetMethodID(cls, "getHeadsetBattery", "()I");
+    const int value = method ? env->CallIntMethod(g_activity, method) : -1;
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return {}; }
+    if (value < 0 || (value & 255) > 100) return {};
+    return {float(value & 255) / 100.f, rc::kBatteryValid |
+        ((value & 256) ? rc::kBatteryChargingKnown : 0u) | ((value & 512) ? rc::kBatteryCharging : 0u)};
+}
+
 void Platform::SetStreamingLocks(bool enable) {
     JniScope scope;
     JNIEnv* env = scope.env();
@@ -133,6 +147,25 @@ void Platform::Speak(const std::string& text) {
     jstring s = env->NewStringUTF(text.c_str());
     env->CallVoidMethod(g_activity, m, s);
     env->DeleteLocalRef(s);
+    env->DeleteLocalRef(cls);
+}
+
+bool Platform::ScreenshotStorageOk() {
+    JniScope scope;
+    JNIEnv* env = scope.env();
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID m = env->GetMethodID(cls, "screenshotStorageOk", "()Z");
+    const jboolean ok = env->CallBooleanMethod(g_activity, m);
+    env->DeleteLocalRef(cls);
+    return ok;
+}
+
+void Platform::OpenStorageSettings() {
+    JniScope scope;
+    JNIEnv* env = scope.env();
+    jclass cls = env->GetObjectClass(g_activity);
+    jmethodID m = env->GetMethodID(cls, "openStorageSettings", "()V");
+    env->CallVoidMethod(g_activity, m);
     env->DeleteLocalRef(cls);
 }
 

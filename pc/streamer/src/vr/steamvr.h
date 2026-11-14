@@ -13,7 +13,11 @@ std::vector<std::filesystem::path> SteamLibraries();
 std::optional<std::filesystem::path> SteamVrPath();
 
 bool IsRunning();
+// Starts SteamVR with this streamer's driver: first among the RinCast copies registered, and
+// named in SteamVR's settings ("forcedDriver") until SteamVR closes again.
 void Launch();
+// Puts SteamVR's own driver choice back if a forced one was left behind; call once at start.
+void WatchForcedDriver();
 void Shutdown();
 void Restart();
 

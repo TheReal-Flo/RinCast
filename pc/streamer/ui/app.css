@@ -190,6 +190,12 @@ select.select:hover { background: var(--row-hover); }
 select.select option { background: #000; color: var(--text); }
 
 .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.shots { list-style: none; margin: 4px 0 10px; padding: 0; }
+.shots li { display: flex; gap: 12px; padding: 7px 10px; border-radius: 3px; cursor: pointer; font-size: 14px; color: var(--muted); }
+.shots li:hover { background: var(--row-hover); color: var(--text); }
+.shots li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inputrow { display: flex; gap: 8px; max-width: 470px; }
+.inputrow input { flex: 1; min-width: 0; max-width: none; }
 .spaced { margin-top: 16px; }
 .btn { font: 600 15px var(--font); color: var(--text); background: var(--control); border: 0; border-radius: 3px; padding: 0 16px; height: 40px; cursor: pointer; white-space: nowrap; }
 .btn:hover { background: var(--control-hover); }

@@ -1,9 +1,9 @@
 // RinCast SteamVR driver.
 //
 // Exposes the streamed headset to SteamVR as an HMD ("virtual display": SteamVR
-// composites and hands us the final side-by-side backbuffer) plus two Quest
-// Touch Plus controllers that reuse SteamVR's built-in Oculus Touch input
-// profile, so games pick their native Quest bindings. Everything is exchanged
+// composites and hands us the final side-by-side backbuffer) plus two tracked
+// controllers using SteamVR's native Pico or Oculus input profiles and models.
+// Everything is exchanged
 // with the RinCast Streamer through the shared-memory VR bridge.
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
@@ -14,20 +14,29 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "controller_models.h"
+#include "native_model_cache.h"
 #include "hand_poses.h"
+#include "nlohmann/json.hpp"
 #include "openvr/openvr_driver.h"
 #include "vr_bridge.h"
+#include "rc/battery.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -37,6 +46,45 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+using namespace rincast::controllers;
+
+class BatteryProperties {
+   public:
+    void Reset() { m_flags = ~0u; }
+    void Update(uint32_t id, rc::BatteryState state) {
+        if (id == vr::k_unTrackedDeviceIndexInvalid) return;
+        state = rc::SanitizeBattery(state);
+        if (m_flags == state.flags && m_level == state.level) return;
+        auto* properties = vr::VRProperties();
+        const auto container = properties->TrackedDeviceToPropertyContainer(id);
+        if (state.flags & rc::kBatteryValid) {
+            properties->SetFloatProperty(container, vr::Prop_DeviceBatteryPercentage_Float, state.level);
+            if (state.flags & rc::kBatteryChargingKnown)
+                properties->SetBoolProperty(container, vr::Prop_DeviceIsCharging_Bool, (state.flags & rc::kBatteryCharging) != 0);
+            else properties->EraseProperty(container, vr::Prop_DeviceIsCharging_Bool);
+            properties->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
+        } else {
+            properties->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, false);
+            properties->EraseProperty(container, vr::Prop_DeviceBatteryPercentage_Float);
+            properties->EraseProperty(container, vr::Prop_DeviceIsCharging_Bool);
+        }
+        m_flags = state.flags;
+        m_level = state.level;
+    }
+   private:
+    uint32_t m_flags = ~0u;
+    float m_level = 0;
+};
+
+rc::BatteryState LiveBattery(const rcvr::TrackingSnapshot& tracking, int device, bool connected) {
+    const auto age = rcvr::QpcNowNs() - tracking.receivedPcNs;
+    // A sleeping headset stops tracking while its network session stays alive.
+    // Battery state is last-reported telemetry, not a pose: retain it until a
+    // new sample invalidates it or the headset/session disconnects.
+    if (!connected || tracking.receivedPcNs <= 0 || age < 0) return {};
+    return {tracking.battery[device].level, tracking.battery[device].flags};
+}
 
 void Log(const char* fmt, ...) {
     char buf[1024];
@@ -84,66 +132,6 @@ std::string DefaultChaperoneJson() {
 // ---------------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------------
-struct Quat {
-    double w, x, y, z;
-};
-Quat Mul(const Quat& a, const Quat& b) {
-    return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z, a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x, a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
-}
-void Rotate(const Quat& q, const double v[3], double out[3]) {
-    const Quat p{0, v[0], v[1], v[2]};
-    const Quat c{q.w, -q.x, -q.y, -q.z};
-    const Quat r = Mul(Mul(q, p), c);
-    out[0] = r.x;
-    out[1] = r.y;
-    out[2] = r.z;
-}
-// Rigid transform: rotation q, then translation t.
-struct RigidPose {
-    Quat q{1, 0, 0, 0};
-    double t[3] = {0, 0, 0};
-};
-RigidPose Compose(const RigidPose& a, const RigidPose& b) {  // a * b: b expressed in a's frame
-    RigidPose r;
-    r.q = Mul(a.q, b.q);
-    Rotate(a.q, b.t, r.t);
-    for (int i = 0; i < 3; i++) r.t[i] += a.t[i];
-    return r;
-}
-RigidPose Invert(const RigidPose& p) {
-    RigidPose r;
-    r.q = {p.q.w, -p.q.x, -p.q.y, -p.q.z};
-    Rotate(r.q, p.t, r.t);
-    for (double& v : r.t) v = -v;
-    return r;
-}
-
-// OpenXR grip pose -> the device ("raw") pose SteamVR expects for this controller.
-// SteamVR's render model (resources/rendermodels/oculus_quest_plus_controller_left)
-// says where the OpenXR grip sits relative to that pose: its "openxr_grip" component,
-// 10.2 cm behind the origin and pitched 20.6 degrees (mirrored for the right hand). That
-// is what SteamVR itself reports as the grip pose to OpenXR games, so mapping the
-// headset's grip pose through it puts the controller exactly where the hand is.
-// (VDXR's calibration, used before, relates grip to Virtual Desktop's own controller
-// pose, not to SteamVR's: 5 cm and 39 degrees off.)
-RigidPose GripToOculus(int hand) {
-    RigidPose gripInDevice;
-    const double half = 20.6 * 3.14159265358979 / 360;
-    gripInDevice.q = {std::cos(half), std::sin(half), 0, 0};
-    gripInDevice.t[0] = hand == 0 ? 0.007 : -0.007;
-    gripInDevice.t[1] = -0.00182941;
-    gripInDevice.t[2] = 0.1019482;
-    return Invert(gripInDevice);  // device pose in grip space
-}
-
-Quat FromEuler(double pitchDeg, double yawDeg, double rollDeg) {
-    const double p = pitchDeg * 3.14159265358979 / 360, y = yawDeg * 3.14159265358979 / 360,
-                 r = rollDeg * 3.14159265358979 / 360;
-    const Quat qx{std::cos(p), std::sin(p), 0, 0}, qy{std::cos(y), 0, std::sin(y), 0}, qz{std::cos(r), 0, 0, std::sin(r)};
-    return Mul(Mul(qy, qx), qz);
-}
-
 vr::DriverPose_t MakePose(const rcvr::BridgePose& p, bool valid, bool connected, double timeOffset, bool withVelocity,
                           const Quat* localRot = nullptr, const double* localPos = nullptr) {
     vr::DriverPose_t pose{};
@@ -151,18 +139,19 @@ vr::DriverPose_t MakePose(const rcvr::BridgePose& p, bool valid, bool connected,
     pose.qDriverFromHeadRotation.w = 1;
     Quat q{p.orientation[3], p.orientation[0], p.orientation[1], p.orientation[2]};
     double pos[3] = {p.position[0], p.position[1], p.position[2]};
+    double offsetWorld[3]{};
     if (localPos) {
-        double off[3];
-        Rotate(q, localPos, off);
-        pos[0] += off[0];
-        pos[1] += off[1];
-        pos[2] += off[2];
+        Rotate(q, localPos, offsetWorld);
+        pos[0] += offsetWorld[0];
+        pos[1] += offsetWorld[1];
+        pos[2] += offsetWorld[2];
     }
     if (localRot) q = Mul(q, *localRot);
     pose.qRotation = {q.w, q.x, q.y, q.z};
+    const auto velocity = OffsetLinearVelocity(p, offsetWorld);
     for (int i = 0; i < 3; i++) {
         pose.vecPosition[i] = pos[i];
-        pose.vecVelocity[i] = withVelocity ? p.linearVelocity[i] : 0;
+        pose.vecVelocity[i] = withVelocity ? velocity[i] : 0;
         pose.vecAngularVelocity[i] = withVelocity ? p.angularVelocity[i] : 0;
     }
     pose.poseTimeOffset = timeOffset;
@@ -205,25 +194,34 @@ vr::VRBoneTransform_t BlendBones(const vr::VRBoneTransform_t& a, const vr::VRBon
 }
 
 // ---------------------------------------------------------------------------
-// Model names
+// Local native model resources
 // ---------------------------------------------------------------------------
-// What SteamVR shows (its device list, Space Calibrator) and some games check: Meta's headsets
-// by the names Quest Link gives them, anything else by its own. (The headset sends Android's
-// model name: "Quest Pro", "Quest 3" ...)
-struct ModelNames {
-    std::string hmd;
-    const char* controllerLeft;   // render models
-    const char* controllerRight;
-};
-
-ModelNames NamesFor(const std::string& model) {
-    if (model == "Quest") return {"Oculus Quest", "oculus_quest_controller_left", "oculus_quest_controller_right"};
-    if (model == "Quest 2") return {"Oculus Quest2", "oculus_quest2_controller_left", "oculus_quest2_controller_right"};
-    if (model == "Quest Pro")
-        return {"Meta Quest Pro", "oculus_quest_plus_controller_left", "oculus_quest_plus_controller_right"};
-    if (model == "Quest 3S") return {"Oculus Quest3S", "oculus_quest_plus_controller_left", "oculus_quest_plus_controller_right"};
-    return {model.empty() || model == "Quest 3" ? "Oculus Quest3" : model, "oculus_quest_plus_controller_left",
-            "oculus_quest_plus_controller_right"};
+std::optional<std::string> PrepareNativePicoModel(int hand, const std::string& sourceModel) {
+    namespace fs = std::filesystem;
+    rcvr::TrackingSnapshot tracking{};
+    if (hand < 0 || hand > 1 || !g_shared || !g_shared->bridge.shared() || !rcvr::ReadTracking(g_shared->bridge.shared(), tracking) ||
+        !tracking.controllers[hand].aimValid)
+        return {};
+    try {
+        const auto sourceName = sourceModel.substr(sourceModel.find('}') + 1);
+        const auto resource = "{vrlink}/rendermodels/" + sourceName + "/" + sourceName + ".json";
+        char sourcePath[4096]{}, cachePath[4096]{};
+        auto* resources = vr::VRResources();
+        const auto sourceSize = resources->GetResourceFullPath(resource.c_str(), "", sourcePath, sizeof(sourcePath));
+        const auto cacheSize = resources->GetResourceFullPath("{rincast_native}/rendermodels", "", cachePath, sizeof(cachePath));
+        if (!sourceSize || sourceSize > sizeof(sourcePath) || !cacheSize || cacheSize > sizeof(cachePath) || !*sourcePath || !*cachePath) {
+            LogEvery5s("Native Pico resources unavailable; register RinCast and restart SteamVR");
+            return {};
+        }
+        const auto source = fs::path(std::u8string(reinterpret_cast<const char8_t*>(sourcePath)));
+        const auto root = fs::path(std::u8string(reinterpret_cast<const char8_t*>(cachePath)));
+        const auto name = CacheNativeModel(source, root, hand, tracking.controllers[hand]);
+        Log("Native PICO model calibrated from headset grip and aim: %s", name.c_str());
+        return "{rincast_native}" + name;
+    } catch (const std::exception& error) {
+        Log("Native PICO model preparation failed: %s", error.what());
+        return {};
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,39 +241,33 @@ class Controller : public vr::ITrackedDeviceServerDriver {
     Controller(int hand, std::string serial, ModelNames names)
         : m_hand(hand), m_serial(std::move(serial)), m_names(std::move(names)) {}
 
+    bool PrepareResources() {
+        std::lock_guard stateLock(m_stateMutex);
+        return !m_names.pico || ApplyNativeModel();
+    }
+
     vr::EVRInitError Activate(uint32_t id) override {
-        m_id = id;
+        std::lock_guard stateLock(m_stateMutex);
+        m_id = vr::k_unTrackedDeviceIndexInvalid;
+        if (m_names.pico && !ApplyNativeModel()) return vr::VRInitError_Driver_Failed;
+        m_battery.Reset();
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
         const bool left = m_hand == 0;
-        props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
-        props->SetStringProperty(c, vr::Prop_ManufacturerName_String, "Oculus");
-        props->SetStringProperty(c, vr::Prop_ModelNumber_String,
-                                 (m_names.hmd + (left ? " (Left Controller)" : " (Right Controller)")).c_str());
-        props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
-        props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ("oculus/" + m_serial).c_str());
-        props->SetStringProperty(c, vr::Prop_RenderModelName_String, left ? m_names.controllerLeft : m_names.controllerRight);
-        props->SetStringProperty(c, vr::Prop_ControllerType_String, "oculus_touch");
-        props->SetStringProperty(c, vr::Prop_InputProfilePath_String, "{oculus}/input/touch_profile.json");
+        ApplyIdentity(c);
         props->SetInt32Property(c, vr::Prop_ControllerRoleHint_Int32,
                                 left ? vr::TrackedControllerRole_LeftHand : vr::TrackedControllerRole_RightHand);
         props->SetInt32Property(c, vr::Prop_DeviceClass_Int32, vr::TrackedDeviceClass_Controller);
         props->SetBoolProperty(c, vr::Prop_DeviceProvidesBatteryStatus_Bool, false);
-        props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceOff_String,
-                                 left ? "{oculus}/icons/cb_left_controller_off.png" : "{oculus}/icons/cb_right_controller_off.png");
-        props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceReady_String,
-                                 left ? "{oculus}/icons/cb_left_controller_ready.png" : "{oculus}/icons/cb_right_controller_ready.png");
-        props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceSearching_String,
-                                 left ? "{oculus}/icons/cb_left_controller_searching.gif" : "{oculus}/icons/cb_right_controller_searching.gif");
 
         auto* in = vr::VRDriverInput();
         auto boolean = [&](const char* path) {
-            vr::VRInputComponentHandle_t h;
+            vr::VRInputComponentHandle_t h{};
             in->CreateBooleanComponent(c, path, &h);
             return h;
         };
         auto scalar = [&](const char* path, vr::EVRScalarUnits units) {
-            vr::VRInputComponentHandle_t h;
+            vr::VRInputComponentHandle_t h{};
             in->CreateScalarComponent(c, path, &h, vr::VRScalarType_Absolute, units);
             return h;
         };
@@ -295,8 +287,12 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         m_stickY = scalar("/input/joystick/y", vr::VRScalarUnits_NormalizedTwoSided);
         m_stickClick = boolean("/input/joystick/click");
         m_stickTouch = boolean("/input/joystick/touch");
-        m_thumbrest = boolean("/input/thumbrest/touch");
+        if (!m_names.pico) m_thumbrest = boolean("/input/thumbrest/touch");
         in->CreateHapticComponent(c, "/output/haptic", &m_haptic);
+        if (m_names.pico) {
+            CreateNativePoseComponents(c);
+            UpdateAim(nullptr, nullptr);
+        }
         // Estimated, as Touch controllers are: the fingers come from what the buttons feel.
         // VRChat reads Partial as Index controllers (fingers curl with the grip, no fist,
         // its Touch gestures off) and only uses a skeleton itself when it's Full, which the
@@ -306,62 +302,178 @@ class Controller : public vr::ITrackedDeviceServerDriver {
                                     vr::VRSkeletalTracking_Estimated, nullptr, 0, &m_skeleton);
         // Games that read the skeleton before the first pose would otherwise get a frozen hand.
         UpdateControllerSkeleton({});
+        m_id = id;
         return vr::VRInitError_None;
     }
 
-    void Deactivate() override { m_id = vr::k_unTrackedDeviceIndexInvalid; }
+    void Deactivate() override {
+        std::lock_guard stateLock(m_stateMutex);
+        m_id = vr::k_unTrackedDeviceIndexInvalid;
+        m_profileKey.clear();
+    }
     void EnterStandby() override {}
     void* GetComponent(const char*) override { return nullptr; }
     void DebugRequest(const char*, char* response, uint32_t size) override {
         if (size) response[0] = 0;
     }
-    vr::DriverPose_t GetPose() override { return m_lastPose; }
+    vr::DriverPose_t GetPose() override {
+        std::lock_guard stateLock(m_stateMutex);
+        return m_lastPose;
+    }
 
-    uint32_t Id() const { return m_id; }
-    vr::VRInputComponentHandle_t HapticHandle() const { return m_haptic; }
+    uint32_t Id() const {
+        std::lock_guard stateLock(m_stateMutex);
+        return m_id;
+    }
+    vr::VRInputComponentHandle_t HapticHandle() const {
+        std::lock_guard stateLock(m_stateMutex);
+        return m_id == vr::k_unTrackedDeviceIndexInvalid ? 0 : m_haptic;
+    }
+
+    void SelectReportedProfile(const rcvr::DisplayConfig& config) {
+        std::lock_guard stateLock(m_stateMutex);
+        if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
+        const std::string key = std::string(config.controllerProfiles[m_hand]) + (config.touchControllers ? ":touch" : ":native");
+        if (key == m_profileKey) return;
+        const auto names = ControllerNamesFor(config.headsetModel, config.controllerProfiles[m_hand], config.touchControllers != 0);
+        m_profileKnown = names.has_value();
+        if (!names) {
+            m_profileKey = key;
+            Log("Unsupported controller profile reported by headset: %s", config.controllerProfiles[m_hand]);
+            return;
+        }
+        m_names = *names;
+        if (m_names.pico && !ApplyNativeModel()) {
+            m_profileKnown = false;
+            return;
+        }
+        m_profileKey = key;
+        if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
+        auto* props = vr::VRProperties();
+        const auto c = props->TrackedDeviceToPropertyContainer(m_id);
+        ApplyIdentity(c);
+        auto* input = vr::VRDriverInput();
+        if (m_names.pico && !m_tipPose) {
+            CreateNativePoseComponents(c);
+        }
+        if (!m_names.pico && !m_thumbrest) input->CreateBooleanComponent(c, "/input/thumbrest/touch", &m_thumbrest);
+        if (m_tipPose) UpdateAim(nullptr, nullptr);
+    }
+
+    void UpdateBattery(const rcvr::TrackingSnapshot& t, bool connected) {
+        const auto flags = t.controllers[m_hand].flags;
+        m_battery.Update(m_id, LiveBattery(t, m_hand + 1, connected && (flags & 1) && !(flags & 4)));
+    }
 
     void Update(const rcvr::TrackingSnapshot& t, const rcvr::HandSnapshot* tracked, bool headsetConnected, double timeOffset) {
+        std::lock_guard stateLock(m_stateMutex);
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         const auto& s = t.controllers[m_hand];
         // While the hand is tracked instead, the hand's own device stands in (VRChat's advice
         // for streaming drivers: one device per kind of input, switched by connected/valid).
-        const bool connected = headsetConnected && (s.flags & 1) && !(s.flags & 4);
+        const bool connected = headsetConnected && m_profileKnown && (s.flags & 1) && !(s.flags & 4);
         const bool valid = connected && (s.flags & 2);
-        // OpenXR grip pose -> SteamVR Oculus Touch "raw" pose.
-        static const RigidPose toOculus[2] = {GripToOculus(0), GripToOculus(1)};
-        const RigidPose& l = toOculus[m_hand];
+        // OpenXR grip pose -> the selected SteamVR model's raw pose.
+        const RigidPose l = GripToDevice(m_hand, m_names.pico);
         m_lastPose = MakePose(s.pose, valid, connected, timeOffset, true, &l.q, l.t);
         vr::VRServerDriverHost()->TrackedDevicePoseUpdated(m_id, m_lastPose, sizeof(m_lastPose));
         if (!connected) return;
 
         auto* in = vr::VRDriverInput();
+        if (m_names.pico) UpdateAim(valid && s.aimValid ? &s : nullptr, &l);
+        const auto boolean = [&](vr::VRInputComponentHandle_t handle, bool value, double offset) {
+            if (handle) in->UpdateBooleanComponent(handle, value, offset);
+        };
+        const auto scalar = [&](vr::VRInputComponentHandle_t handle, float value, double offset) {
+            if (handle) in->UpdateScalarComponent(handle, value, offset);
+        };
         const uint32_t b = s.buttons;
         const bool left = m_hand == 0;
         auto bit = [&](uint32_t mask) { return (b & mask) != 0; };
-        in->UpdateBooleanComponent(m_system, left && bit(1u << 4), 0);  // menu button on left = system
-        in->UpdateBooleanComponent(m_systemTouch, left && bit(1u << 4), 0);
-        in->UpdateBooleanComponent(m_btn1, bit(left ? 1u << 2 : 1u << 0), 0);
-        in->UpdateBooleanComponent(m_btn1Touch, bit(left ? 1u << 18 : 1u << 16), 0);
-        in->UpdateBooleanComponent(m_btn2, bit(left ? 1u << 3 : 1u << 1), 0);
-        in->UpdateBooleanComponent(m_btn2Touch, bit(left ? 1u << 19 : 1u << 17), 0);
-        in->UpdateScalarComponent(m_trigger, s.trigger, 0);
-        in->UpdateBooleanComponent(m_triggerClick, s.trigger > 0.85f, 0);
-        in->UpdateBooleanComponent(m_triggerTouch, bit(1u << 21) || s.trigger > 0.05f, 0);
-        in->UpdateScalarComponent(m_grip, s.grip, 0);
-        in->UpdateBooleanComponent(m_gripClick, s.grip > 0.85f, 0);
-        in->UpdateBooleanComponent(m_gripTouch, s.grip > 0.1f, 0);
-        in->UpdateScalarComponent(m_stickX, s.thumbstick[0], 0);
-        in->UpdateScalarComponent(m_stickY, s.thumbstick[1], 0);
-        in->UpdateBooleanComponent(m_stickClick, bit(1u << 6), 0);
-        in->UpdateBooleanComponent(m_stickTouch, bit(1u << 20) || bit(1u << 6), 0);
-        in->UpdateBooleanComponent(m_thumbrest, bit(1u << 22), 0);
+        boolean(m_system, left && bit(1u << 4), 0);  // menu button on left = system
+        boolean(m_systemTouch, left && bit(1u << 4), 0);
+        boolean(m_btn1, bit(left ? 1u << 2 : 1u << 0), 0);
+        boolean(m_btn1Touch, bit(left ? 1u << 18 : 1u << 16), 0);
+        boolean(m_btn2, bit(left ? 1u << 3 : 1u << 1), 0);
+        boolean(m_btn2Touch, bit(left ? 1u << 19 : 1u << 17), 0);
+        scalar(m_trigger, s.trigger, 0);
+        boolean(m_triggerClick, s.trigger > 0.85f, 0);
+        boolean(m_triggerTouch, bit(1u << 21) || s.trigger > 0.05f, 0);
+        scalar(m_grip, s.grip, 0);
+        boolean(m_gripClick, s.grip > 0.85f, 0);
+        boolean(m_gripTouch, s.grip > 0.1f, 0);
+        scalar(m_stickX, s.thumbstick[0], 0);
+        scalar(m_stickY, s.thumbstick[1], 0);
+        boolean(m_stickClick, bit(1u << 6), 0);
+        boolean(m_stickTouch, bit(1u << 20) || bit(1u << 6), 0);
+        if (m_thumbrest) boolean(m_thumbrest, bit(1u << 22), 0);
         if (tracked) UpdateTrackedSkeleton(*tracked);
         else UpdateControllerSkeleton(s);
     }
 
    private:
+    void ApplyIdentity(vr::PropertyContainerHandle_t c) {
+        auto* props = vr::VRProperties();
+        const bool left = m_hand == 0;
+        props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, m_names.pico ? "pico" : "oculus");
+        props->SetStringProperty(c, vr::Prop_ManufacturerName_String, m_names.pico ? "PICO" : "Oculus");
+        props->SetStringProperty(c, vr::Prop_ModelNumber_String,
+                                 (m_names.hmd + (left ? " (Left Controller)" : " (Right Controller)")).c_str());
+        props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
+        props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ((m_names.pico ? "pico/" : "oculus/") + m_serial).c_str());
+        props->SetStringProperty(c, vr::Prop_RenderModelName_String, (left ? m_names.controllerLeft : m_names.controllerRight).c_str());
+        props->SetStringProperty(c, vr::Prop_ControllerType_String, m_names.pico ? "pico_controller" : "oculus_touch");
+        props->SetStringProperty(c, vr::Prop_InputProfilePath_String,
+                                 m_names.pico ? "{rincast}/input/rincast_pico_profile.json" : "{oculus}/input/touch_profile.json");
+        if (m_names.pico) {
+            const std::string icon =
+                std::string("{vrlink}/icons/") + (left ? "left_" : "right_") + (m_names.picoUltra ? "pico4u_" : "pico4_");
+            props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceOff_String, (icon + "off.png").c_str());
+            props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceReady_String, (icon + "ready.png").c_str());
+            props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceSearching_String, (icon + "searching.gif").c_str());
+        } else {
+            props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceOff_String,
+                                     left ? "{oculus}/icons/cb_left_controller_off.png" : "{oculus}/icons/cb_right_controller_off.png");
+            props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceReady_String,
+                                     left ? "{oculus}/icons/cb_left_controller_ready.png" : "{oculus}/icons/cb_right_controller_ready.png");
+            props->SetStringProperty(
+                c, vr::Prop_NamedIconPathDeviceSearching_String,
+                left ? "{oculus}/icons/cb_left_controller_searching.gif" : "{oculus}/icons/cb_right_controller_searching.gif");
+        }
+    }
+
+    bool ApplyNativeModel() {
+        const auto source = m_hand == 0 ? m_names.controllerLeft : m_names.controllerRight;
+        if (!m_nativeModel.empty() && source == m_nativeModel) return true;
+        if (source != m_sourceModel) {
+            const auto prepared = PrepareNativePicoModel(m_hand, source);
+            if (!prepared) return false;
+            m_sourceModel = source;
+            m_nativeModel = *prepared;
+        }
+        m_names.controllerLeft = m_names.controllerRight = m_nativeModel;
+        return true;
+    }
+
+    void CreateNativePoseComponents(vr::PropertyContainerHandle_t container) {
+        auto* input = vr::VRDriverInput();
+        input->CreatePoseComponent(container, "/pose/tip", &m_tipPose);
+        input->CreatePoseComponent(container, "/pose/openxr_aim", &m_aimPose);
+        input->CreatePoseComponent(container, "/pose/grip", &m_gripPose);
+        input->CreatePoseComponent(container, "/pose/openxr_grip", &m_openxrGripPose);
+        input->CreatePoseComponent(container, "/pose/handgrip", &m_handgripPose);
+    }
+
     void Publish(const vr::VRBoneTransform_t* withController, const vr::VRBoneTransform_t* withoutController) {
+        if (!m_skeleton) return;
         auto* in = vr::VRDriverInput();
+        vr::VRBoneTransform_t nativeWith[rcvr::kHandBones], nativeWithout[rcvr::kHandBones];
+        if (m_names.pico) {
+            RebaseControllerBones(withController, nativeWith, m_hand);
+            RebaseControllerBones(withoutController, nativeWithout, m_hand);
+            withController = nativeWith;
+            withoutController = nativeWithout;
+        }
         in->UpdateSkeletonComponent(m_skeleton, vr::VRSkeletalMotionRange_WithController, withController, rcvr::kHandBones);
         in->UpdateSkeletonComponent(m_skeleton, vr::VRSkeletalMotionRange_WithoutController, withoutController, rcvr::kHandBones);
     }
@@ -418,15 +530,52 @@ class Controller : public vr::ITrackedDeviceServerDriver {
         }
     }
 
+    void UpdateAim(const rcvr::BridgeController* controller, const RigidPose* deviceInGrip) {
+        RigidPose tip, aim;
+        if (controller && deviceInGrip) {
+            tip = aim = AimInDevice(controller->pose, controller->aim, *deviceInGrip);
+            if (!m_receivedAim) {
+                Log("Using headset OpenXR aim pose for native PICO %s controller", m_hand == 0 ? "left" : "right");
+                m_receivedAim = true;
+            }
+        } else {
+            // Old headset builds and lost aim tracking retain the stock model offsets.
+            tip.q = FromEuler(m_names.picoUltra ? -30.382 : -37.4, m_names.picoUltra ? (m_hand == 0 ? -8 : 8) : 0, 0);
+            tip.t[0] = m_names.picoUltra ? 0 : (m_hand == 0 ? 0.016694 : -0.016694);
+            tip.t[1] = m_names.picoUltra ? -0.04 : -0.02522;
+            tip.t[2] = m_names.picoUltra ? 0.02 : 0.024687;
+            aim = tip;
+            if (!m_names.picoUltra) {
+                aim.q = FromEuler(-39.4, 0, 0);
+                aim.t[0] = m_hand == 0 ? 0.007 : -0.007;
+                aim.t[1] = -0.03894766;
+                aim.t[2] = 0.00949694;
+            }
+        }
+        const auto tipMatrix = PoseMatrix(tip), aimMatrix = PoseMatrix(aim);
+        const auto gripMatrix = PoseMatrix(Invert(GripToDevice(m_hand, m_names.pico)));
+        auto* input = vr::VRDriverInput();
+        if (m_tipPose) input->UpdatePoseComponent(m_tipPose, &tipMatrix, 0);
+        if (m_aimPose) input->UpdatePoseComponent(m_aimPose, &aimMatrix, 0);
+        for (const auto component : {m_gripPose, m_openxrGripPose, m_handgripPose})
+            if (component) input->UpdatePoseComponent(component, &gripMatrix, 0);
+    }
+
+    mutable std::mutex m_stateMutex;
     int m_hand;
     std::string m_serial;
     ModelNames m_names;
+    BatteryProperties m_battery;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
     vr::DriverPose_t m_lastPose{};
-    vr::VRInputComponentHandle_t m_system{}, m_systemTouch{}, m_btn1{}, m_btn1Touch{}, m_btn2{}, m_btn2Touch{},
-        m_triggerClick{}, m_triggerTouch{}, m_trigger{}, m_gripClick{}, m_gripTouch{}, m_grip{}, m_stickX{},
-        m_stickY{}, m_stickClick{}, m_stickTouch{}, m_thumbrest{}, m_haptic{}, m_skeleton{};
+    vr::VRInputComponentHandle_t m_system{}, m_systemTouch{}, m_btn1{}, m_btn1Touch{}, m_btn2{}, m_btn2Touch{}, m_triggerClick{},
+        m_triggerTouch{}, m_trigger{}, m_gripClick{}, m_gripTouch{}, m_grip{}, m_stickX{}, m_stickY{}, m_stickClick{}, m_stickTouch{},
+        m_thumbrest{}, m_haptic{}, m_skeleton{}, m_tipPose{}, m_aimPose{}, m_gripPose{}, m_openxrGripPose{}, m_handgripPose{};
     bool m_lastThumb = false, m_lastIndex = false;
+    bool m_receivedAim = false;
+    bool m_profileKnown = true;
+    std::string m_profileKey;
+    std::string m_sourceModel, m_nativeModel;
     float m_thumbProgress = 0, m_indexProgress = 0;
 };
 
@@ -441,6 +590,7 @@ class HandDevice : public vr::ITrackedDeviceServerDriver {
     HandDevice(int hand, std::string serial) : m_hand(hand), m_serial(std::move(serial)) {}
 
     vr::EVRInitError Activate(uint32_t id) override {
+        std::lock_guard stateLock(m_stateMutex);
         m_id = id;
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
@@ -476,15 +626,22 @@ class HandDevice : public vr::ITrackedDeviceServerDriver {
         return vr::VRInitError_None;
     }
 
-    void Deactivate() override { m_id = vr::k_unTrackedDeviceIndexInvalid; }
+    void Deactivate() override {
+        std::lock_guard stateLock(m_stateMutex);
+        m_id = vr::k_unTrackedDeviceIndexInvalid;
+    }
     void EnterStandby() override {}
     void* GetComponent(const char*) override { return nullptr; }
     void DebugRequest(const char*, char* response, uint32_t size) override {
         if (size) response[0] = 0;
     }
-    vr::DriverPose_t GetPose() override { return m_lastPose; }
+    vr::DriverPose_t GetPose() override {
+        std::lock_guard stateLock(m_stateMutex);
+        return m_lastPose;
+    }
 
     void Update(const rcvr::TrackingSnapshot& t, const rcvr::HandSnapshot* bones, bool headsetConnected, double timeOffset) {
+        std::lock_guard stateLock(m_stateMutex);
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         const auto& s = t.controllers[m_hand];
         const bool connected = headsetConnected && (s.flags & 1) && (s.flags & 4);
@@ -508,6 +665,7 @@ class HandDevice : public vr::ITrackedDeviceServerDriver {
     }
 
    private:
+    mutable std::mutex m_stateMutex;
     int m_hand;
     std::string m_serial;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
@@ -527,7 +685,22 @@ V vs(uint id : SV_VertexID) {
     float2 c = float2((id << 1) & 2, id & 2);
     V o; o.pos = float4(c * float2(2, -2) + float2(-1, 1), 0, 1); o.uv = lerp(rect.xy, rect.zw, c); return o;
 }
-float4 ps(V i) : SV_Target { return tex.Sample(samp, i.uv); }
+// SteamVR usually renders larger than the stream (its resolution setting, 150% on a fast GPU).
+// One bilinear sample per pixel would then skip most of the game's pixels: fine detail shimmers
+// and edges crawl. Shrinking, each pixel averages the ones it covers instead, from a 4x4 grid
+// of bilinear samples spread over them.
+float4 ps(V i) : SV_Target {
+    float w, h;
+    tex.GetDimensions(w, h);
+    const float2 covered = float2(abs(ddx(i.uv.x)) * w, abs(ddy(i.uv.y)) * h);  // source pixels per pixel
+    if (covered.x <= 1.05 && covered.y <= 1.05) return tex.Sample(samp, i.uv);
+    const float2 step = max(covered, 1.0) / (4.0 * float2(w, h));
+    float4 sum = 0;
+    [unroll] for (int y = 0; y < 4; y++)
+        [unroll] for (int x = 0; x < 4; x++)
+            sum += tex.SampleLevel(samp, i.uv + (float2(x, y) - 1.5) * step, 0);
+    return sum / 16;
+}
 )";
 
 class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponent,
@@ -536,22 +709,27 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     explicit Hmd(const rcvr::DisplayConfig& cfg) : m_cfg(cfg) {
         m_serial = cfg.headsetSerial[0] ? std::string("RINCAST-") + std::string(cfg.headsetSerial).substr(0, 12)
                                         : "RINCAST-HMD";
+        m_touchCompatibility = cfg.touchControllers != 0;
         m_vsyncPeriodNs = int64_t(1e9 / (cfg.refreshRate > 1 ? cfg.refreshRate : 90.f));
         m_vsyncEpochNs = rcvr::QpcNowNs();
     }
 
     const std::string& Serial() const { return m_serial; }
+    bool TouchCompatibility() const { return m_touchCompatibility; }
+    bool Ready() const { return m_ready.load(); }
     uint32_t Id() const { return m_id; }
 
     vr::EVRInitError Activate(uint32_t id) override {
         m_id = id;
+        m_battery.Reset();
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
-        props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "oculus");
-        props->SetStringProperty(c, vr::Prop_ManufacturerName_String, "Oculus");
+        const bool nativePico = NamesFor(m_cfg.headsetModel).pico && !m_cfg.touchControllers;
+        props->SetStringProperty(c, vr::Prop_TrackingSystemName_String, nativePico ? "pico" : "oculus");
+        props->SetStringProperty(c, vr::Prop_ManufacturerName_String, nativePico ? "PICO" : "Oculus");
         props->SetStringProperty(c, vr::Prop_ModelNumber_String, NamesFor(m_cfg.headsetModel).hmd.c_str());
         props->SetStringProperty(c, vr::Prop_SerialNumber_String, m_serial.c_str());
-        props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ("oculus/" + m_serial).c_str());
+        props->SetStringProperty(c, vr::Prop_RegisteredDeviceType_String, ((nativePico ? "pico/" : "oculus/") + m_serial).c_str());
         props->SetStringProperty(c, vr::Prop_RenderModelName_String, "generic_hmd");
         props->SetStringProperty(c, vr::Prop_DriverVersion_String, "RinCast 1.0");
         props->SetFloatProperty(c, vr::Prop_DisplayFrequency_Float, m_cfg.refreshRate);
@@ -581,10 +759,14 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         props->SetStringProperty(c, vr::Prop_NamedIconPathDeviceStandby_String, "{oculus}/icons/quest_headset_standby.png");
         props->SetBoolProperty(c, vr::Prop_DoNotApplyPrediction_Bool, false);
         InitGraphics();
+        m_ready = true;
         return vr::VRInitError_None;
     }
 
-    void Deactivate() override { m_id = vr::k_unTrackedDeviceIndexInvalid; }
+    void Deactivate() override {
+        m_ready = false;
+        m_id = vr::k_unTrackedDeviceIndexInvalid;
+    }
     void EnterStandby() override {}
     void* GetComponent(const char* name) override {
         if (!strcmp(name, vr::IVRDisplayComponent_Version)) return static_cast<vr::IVRDisplayComponent*>(this);
@@ -595,7 +777,10 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     void DebugRequest(const char*, char* response, uint32_t size) override {
         if (size) response[0] = 0;
     }
-    vr::DriverPose_t GetPose() override { return m_lastPose; }
+    vr::DriverPose_t GetPose() override {
+        std::lock_guard poseLock(m_poseMutex);
+        return m_lastPose;
+    }
 
     // ---- IVRDisplayComponent ----
     // What SteamVR renders an eye at before its own resolution setting. Usually the stream's
@@ -823,6 +1008,8 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         s->producerPid = LONG(GetCurrentProcessId());
         InterlockedExchange64(&s->producerHeartbeatNs, rcvr::QpcNowNs());
         g_shared->bridge.PublishSlot(slot);
+        m_heldSlot = slot;
+        m_heldFrame = fs.frameIndex;
         if (!m_framesPublished++) Log("First frame handed to RinCast Streamer (%ux%u)", dd.Width, dd.Height);
         m_lastPublishNs = rcvr::QpcNowNs();
     }
@@ -838,20 +1025,45 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         return {m_presents, m_layersSubmitted, m_framesPublished, m_swapSets.size() / 3, m_lastPublishNs};
     }
 
-    // Paces SteamVR to the headset's refresh rate: block until the next (virtual) vsync.
+    // Paces SteamVR to the headset's refresh rate: block until the next (virtual) vsync. And
+    // when the encoder can't keep up with that rate, to the encoder: a frame the streamer
+    // hasn't taken yet would only be replaced, and rendering it takes GPU time the encoding
+    // needs. Held that way, a frame that is late already goes on without waiting for a vsync.
     void PostPresent(const Throttling_t*) override {
         const int64_t now = rcvr::QpcNowNs();
-        const int64_t next = NextVsync(now);
+        const int64_t next = NextVsync(now, m_pacedVsync);
+        m_pacedVsync = next;
+        if (WaitForStreamer() && rcvr::QpcNowNs() >= next) return;
         const int64_t coarse = next - 1'500'000;
         if (coarse > now) Sleep(DWORD((coarse - now) / 1'000'000));
         while (rcvr::QpcNowNs() < next) YieldProcessor();
     }
+    // Until the streamer has taken the frame just presented; false if it didn't need waiting
+    // for. A streamer that doesn't take frames (stuck, or not streaming) stops the holding for
+    // a few seconds, so SteamVR never stalls on it.
+    bool WaitForStreamer() {
+        const int slot = std::exchange(m_heldSlot, -1);
+        auto& bridge = g_shared->bridge;
+        if (slot < 0 || !bridge.Streaming() || rcvr::QpcNowNs() < m_holdOffUntilNs) return false;
+        if (!bridge.Untaken(slot, m_heldFrame)) return false;
+        if (!bridge.WaitTaken(slot, m_heldFrame, std::max<int64_t>(3 * m_vsyncPeriodNs, 40'000'000))) {
+            m_holdOffUntilNs = rcvr::QpcNowNs() + 3'000'000'000LL;
+            LogEvery5s("RinCast Streamer didn't take a frame for several refreshes; not holding SteamVR for it for 3 s");
+        }
+        return true;
+    }
+
     void GetFrameTiming(vr::DriverDirectMode_FrameTiming* timing) override { timing->m_nReprojectionFlags = 0; }
 
-    int64_t NextVsync(int64_t now) const {
+    // The first vsync after now, and at least half a period after `last`, the one used before:
+    // the streamer moves the epoch a little at a time, and moved later, the vsync just passed
+    // comes up again (measured: 160-190 vsync events a second at 120 Hz).
+    int64_t NextVsync(int64_t now, int64_t last = 0) const {
         const int64_t period = m_vsyncPeriodNs;
         const int64_t epoch = VsyncEpochNs();
-        return epoch + ((now - epoch) / period + 1) * period;
+        int64_t next = epoch + ((now - epoch) / period + 1) * period;
+        if (last && next - last < period / 2) next += period;
+        return next;
     }
 
     int64_t VsyncPeriodNs() const { return m_vsyncPeriodNs; }
@@ -863,7 +1075,12 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
         return m_vsyncEpochNs;
     }
 
+    void UpdateBattery(const rcvr::TrackingSnapshot& t, bool connected) {
+        m_battery.Update(m_id, LiveBattery(t, 0, connected));
+    }
+
     void Update(const rcvr::TrackingSnapshot& t, bool headsetConnected, double timeOffset) {
+        std::lock_guard poseLock(m_poseMutex);
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         const bool valid = headsetConnected && (t.flags & 1);
         // The headset already predicted this pose for the moment the frame is shown, and
@@ -897,6 +1114,14 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
             return;
         }
         device.As(&m_device);
+        // The copy of each frame for RinCast Streamer queues behind the game's own GPU work
+        // otherwise: with a busy GPU it waits most of a frame, and the stream loses frames.
+        // A relative priority, within this process's class: no privilege needed.
+        ComPtr<IDXGIDevice> dxgi;
+        if (SUCCEEDED(device.As(&dxgi))) {
+            const HRESULT hr = dxgi->SetGPUThreadPriority(7);
+            Log("GPU priority for the frame copy: %s", SUCCEEDED(hr) ? "raised" : "unchanged (refused)");
+        }
         ComPtr<ID3DBlob> vs, ps, err;
         D3DCompile(kBlitShader, strlen(kBlitShader), nullptr, nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vs, &err);
         D3DCompile(kBlitShader, strlen(kBlitShader), nullptr, nullptr, nullptr, "ps", "ps_5_0", 0, 0, &ps, &err);
@@ -1053,11 +1278,20 @@ class Hmd : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponen
     rcvr::DisplayConfig m_cfg;
     std::mutex m_cfgMutex;  // fov / ipd / refresh can change live (ApplyLiveConfig)
     std::string m_serial;
-    uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
+    BatteryProperties m_battery;
+    bool m_touchCompatibility = false;
+    mutable std::mutex m_poseMutex;
+    std::atomic<bool> m_ready{false};
+    std::atomic<uint32_t> m_id{vr::k_unTrackedDeviceIndexInvalid};
     vr::DriverPose_t m_lastPose{};
     std::atomic<int64_t> m_vsyncPeriodNs;
     int64_t m_vsyncEpochNs;
     uint64_t m_frameIndex = 0;
+    // The frame Present just handed over, for PostPresent to wait on (see WaitForStreamer).
+    int m_heldSlot = -1;
+    uint64_t m_heldFrame = 0;
+    int64_t m_holdOffUntilNs = 0;
+    int64_t m_pacedVsync = 0;  // the vsync PostPresent last held SteamVR to
 
     ComPtr<ID3D11Device1> m_device;
     ComPtr<ID3D11DeviceContext> m_ctx;
@@ -1115,6 +1349,7 @@ class BodyTrackerDevice : public vr::ITrackedDeviceServerDriver {
     const std::string& Serial() const { return m_serial; }
 
     vr::EVRInitError Activate(uint32_t id) override {
+        std::lock_guard stateLock(m_stateMutex);
         m_id = id;
         auto* props = vr::VRProperties();
         const auto c = props->TrackedDeviceToPropertyContainer(id);
@@ -1138,21 +1373,29 @@ class BodyTrackerDevice : public vr::ITrackedDeviceServerDriver {
         return vr::VRInitError_None;
     }
 
-    void Deactivate() override { m_id = vr::k_unTrackedDeviceIndexInvalid; }
+    void Deactivate() override {
+        std::lock_guard stateLock(m_stateMutex);
+        m_id = vr::k_unTrackedDeviceIndexInvalid;
+    }
     void EnterStandby() override {}
     void* GetComponent(const char*) override { return nullptr; }
     void DebugRequest(const char*, char* response, uint32_t size) override {
         if (size) response[0] = 0;
     }
-    vr::DriverPose_t GetPose() override { return m_lastPose; }
+    vr::DriverPose_t GetPose() override {
+        std::lock_guard stateLock(m_stateMutex);
+        return m_lastPose;
+    }
 
     void Update(const rcvr::BridgePose& pose, bool valid) {
+        std::lock_guard stateLock(m_stateMutex);
         if (m_id == vr::k_unTrackedDeviceIndexInvalid) return;
         m_lastPose = MakePose(pose, valid, valid, 0.0, false);
         vr::VRServerDriverHost()->TrackedDevicePoseUpdated(m_id, m_lastPose, sizeof(m_lastPose));
     }
 
    private:
+    mutable std::mutex m_stateMutex;
     std::string m_serial;
     TrackerInfo m_info;
     uint32_t m_id = vr::k_unTrackedDeviceIndexInvalid;
@@ -1199,6 +1442,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         while (vr::VRServerDriverHost()->PollNextEvent(&ev, sizeof(ev))) {
             if (ev.eventType == vr::VREvent_Input_HapticVibration) {
                 const auto& h = ev.data.hapticVibration;
+                std::lock_guard lock(m_deviceMutex);
                 for (int i = 0; i < 2; i++) {
                     if (m_controllers[i] && h.componentHandle == m_controllers[i]->HapticHandle())
                         g_shared->bridge.PushHaptic(uint32_t(i), h.fDurationSeconds, h.fFrequency, h.fAmplitude);
@@ -1213,32 +1457,58 @@ class Provider : public vr::IServerTrackedDeviceProvider {
 
    private:
     void TryAddDevices() {
-        if (m_hmd) return;
+        std::lock_guard deviceLock(m_deviceMutex);
         // Retry opening the bridge at most twice a second.
         const int64_t now = rcvr::QpcNowNs();
         if (now - m_lastAttemptNs < 500'000'000LL) return;
         m_lastAttemptNs = now;
         if (!g_shared->bridge.Open()) return;
         rcvr::Shared* s = g_shared->bridge.shared();
-        if (s->config.eyeWidth == 0 || s->config.eyeHeight == 0) return;  // never saw a headset
-        m_hmd = std::make_unique<Hmd>(s->config);
-        vr::VRServerDriverHost()->TrackedDeviceAdded(m_hmd->Serial().c_str(), vr::TrackedDeviceClass_HMD, m_hmd.get());
+        rcvr::DisplayConfig config{};
+        if (!rcvr::ReadDisplayConfig(s, config)) return;
+        if (config.eyeWidth == 0 || config.eyeHeight == 0) return;  // never saw a headset
+        const bool newHmd = !m_hmd;
+        if (newHmd) {
+            m_hmd = std::make_unique<Hmd>(config);
+            vr::VRServerDriverHost()->TrackedDeviceAdded(m_hmd->Serial().c_str(), vr::TrackedDeviceClass_HMD, m_hmd.get());
+        }
+        config.touchControllers = m_hmd->TouchCompatibility();
+        rcvr::TrackingSnapshot tracking{};
+        const bool live = s->headsetConnected != 0 && g_shared->bridge.StreamerAlive() && rcvr::ReadTracking(s, tracking);
         for (int i = 0; i < 2; i++) {
-            m_controllers[i] = std::make_unique<Controller>(i, m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right"),
-                                                            NamesFor(s->config.headsetModel));
-            vr::VRServerDriverHost()->TrackedDeviceAdded(
-                (m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right")).c_str(),
-                vr::TrackedDeviceClass_Controller, m_controllers[i].get());
+            if (!m_controllers[i] && live && HasLiveInputSample(tracking, i, false, now)) {
+                const auto names = ControllerNamesFor(config.headsetModel, config.controllerProfiles[i], config.touchControllers != 0);
+                if (names) {
+                    const auto serial = m_hmd->Serial() + (i == 0 ? "_Controller_Left" : "_Controller_Right");
+                    auto controller = std::make_unique<Controller>(i, serial, *names);
+                    if (!controller->PrepareResources()) continue;
+                    m_controllers[i] = std::move(controller);
+                    if (!vr::VRServerDriverHost()->TrackedDeviceAdded(serial.c_str(), vr::TrackedDeviceClass_Controller,
+                                                                      m_controllers[i].get())) {
+                        m_controllers[i].reset();
+                        continue;
+                    }
+                    Log("Added %s controller from headset profile %s%s", i == 0 ? "left" : "right", config.controllerProfiles[i],
+                        config.touchControllers ? " (Touch compatibility)" : "");
+                }
+            }
+            rcvr::HandSnapshot bones{};
+            if (m_hands[i] || !live || !HasLiveInputSample(tracking, i, true, now) || !rcvr::ReadHand(s, i, bones) ||
+                bones.receivedPcNs <= 0 || now < bones.receivedPcNs || now - bones.receivedPcNs >= 200'000'000LL)
+                continue;
             const std::string hand = m_hmd->Serial() + (i == 0 ? "_Hand_Left" : "_Hand_Right");
             m_hands[i] = std::make_unique<HandDevice>(i, hand);
             vr::VRServerDriverHost()->TrackedDeviceAdded(hand.c_str(), vr::TrackedDeviceClass_Controller, m_hands[i].get());
+            Log("Added tracked %s hand after receiving live tracking and skeleton", i == 0 ? "left" : "right");
         }
         strncpy_s(s->applicationName, "SteamVR", _TRUNCATE);
-        Log("Added HMD %s, rendering %ux%u per eye @ %.0f Hz", NamesFor(s->config.headsetModel).hmd.c_str(),
-            m_hmd->RenderWidth(), m_hmd->RenderHeight(), s->config.refreshRate);
+        if (newHmd)
+            Log("Added HMD %s, rendering %ux%u per eye @ %.0f Hz", NamesFor(config.headsetModel).hmd.c_str(), m_hmd->RenderWidth(),
+                m_hmd->RenderHeight(), config.refreshRate);
     }
 
     void AddBodyTrackers() {
+        std::lock_guard deviceLock(m_deviceMutex);
         rcvr::Shared* s = g_shared->bridge.shared();
         rcvr::BodySnapshot b;
         if (!m_hmd || !s || !rcvr::ReadBody(s, b)) return;
@@ -1253,6 +1523,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     }
 
     void UpdateBodyTrackers(const rcvr::Shared* s, bool connected) {
+        std::lock_guard deviceLock(m_deviceMutex);
         rcvr::BodySnapshot b;
         if (!rcvr::ReadBody(s, b)) return;
         // Turned off on the headset, or the headset left VR: the trackers go offline.
@@ -1268,35 +1539,55 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     // Pushes poses once per (virtual) vsync, right before SteamVR starts a frame,
     // and remembers which sample that frame will be rendered with.
     void TrackingLoop() {
-        int64_t lastPushed = 0;
+        int64_t lastPushed = 0, lastVsync = 0;
         LONG configGeneration = -1;
         rcvr::TrackingSnapshot previous{};
         int jumpLogs = 0;
         int64_t lastFrameReportNs = rcvr::QpcNowNs();
+        int64_t lastPoseReportNs = lastFrameReportNs;
+        double poseWaitMs = 0, poseWaitMaxMs = 0;
+        int poseWaits = 0, poseRepeats = 0;
         while (m_running) {
-            if (!m_hmd || !g_shared->bridge.shared()) {
+            Hmd* hmd = nullptr;
+            {
+                std::lock_guard deviceLock(m_deviceMutex);
+                hmd = m_hmd.get();
+            }
+            if (!hmd || !hmd->Ready() || !g_shared->bridge.shared()) {
                 Sleep(50);
                 continue;
             }
             rcvr::Shared* s = g_shared->bridge.shared();
+            rcvr::DisplayConfig config{};
+            if (!rcvr::ReadDisplayConfig(s, config)) continue;
+            config.touchControllers = hmd->TouchCompatibility();
             if (const LONG gen = s->configGeneration; gen != configGeneration) {
-                if (configGeneration != -1) m_hmd->ApplyLiveConfig(s->config);
+                if (configGeneration != -1) hmd->ApplyLiveConfig(config);
                 configGeneration = gen;
             }
-            const int64_t period = m_hmd->VsyncPeriodNs();
+            const int64_t period = hmd->VsyncPeriodNs();
             const int64_t now = rcvr::QpcNowNs();
-            const int64_t epoch = m_hmd->VsyncEpochNs();
-            const int64_t nextVsync = epoch + ((now - epoch) / period + 1) * period;
+            const int64_t nextVsync = hmd->NextVsync(now, lastVsync);
+            lastVsync = nextVsync;
             // Wake ~1 ms before vsync so the pose is in place when the compositor samples it.
             const int64_t wake = nextVsync - 1'000'000;
             if (wake > now) Sleep(DWORD(std::max<int64_t>(0, (wake - now) / 1'000'000)));
             while (rcvr::QpcNowNs() < wake) YieldProcessor();
 
-            rcvr::TrackingSnapshot t;
+            rcvr::TrackingSnapshot t{};
             const bool have = rcvr::ReadTracking(s, t);
             const bool connected = s->headsetConnected != 0 && g_shared->bridge.StreamerAlive();
+            if (connected && have && t.sequence == uint64_t(lastPushed)) poseRepeats++;
             if (have && t.sequence != uint64_t(lastPushed)) {
                 lastPushed = int64_t(t.sequence);
+                // How long this sample waited here for the vsync: time the headset could have
+                // sampled later by, had it known when SteamVR takes it.
+                const double waitedMs = double(rcvr::QpcNowNs() - t.receivedPcNs) / 1e6;
+                if (waitedMs >= 0 && waitedMs < 100) {
+                    poseWaitMs += waitedMs;
+                    poseWaitMaxMs = std::max(poseWaitMaxMs, waitedMs);
+                    poseWaits++;
+                }
                 // Headset positions that jump: no head moves 10 cm between two samples a few ms
                 // apart, so the headset's space moved (a recenter, or its tracking catching up).
                 // Lighthouse trackers calibrated against the headset slide out of place then.
@@ -1328,29 +1619,52 @@ class Provider : public vr::IServerTrackedDeviceProvider {
                     g_shared->history.push_back(t);
                     while (g_shared->history.size() > 32) g_shared->history.pop_front();
                 }
-                m_hmd->Update(t, connected, clamped);
+                hmd->Update(t, connected, clamped);
+                std::lock_guard deviceLock(m_deviceMutex);
                 for (int i = 0; i < 2; i++) {
-                    if (!m_controllers[i]) continue;
                     // Bones from a hand the headset still sees; otherwise the controller's own.
                     rcvr::HandSnapshot hand;
                     const bool tracked = rcvr::ReadHand(s, i, hand) &&
                                          rcvr::QpcNowNs() - hand.receivedPcNs < 200'000'000LL;
-                    m_controllers[i]->Update(t, tracked ? &hand : nullptr, connected, clamped);
+                    if (m_controllers[i]) {
+                        m_controllers[i]->SelectReportedProfile(config);
+                        m_controllers[i]->Update(t, tracked ? &hand : nullptr, connected, clamped);
+                    }
                     if (m_hands[i]) m_hands[i]->Update(t, tracked ? &hand : nullptr, connected, clamped);
                 }
             } else if (!connected && have) {
-                m_hmd->Update(t, false, 0);
+                hmd->Update(t, false, 0);
+                std::lock_guard deviceLock(m_deviceMutex);
+                for (int i = 0; i < 2; ++i) {
+                    if (m_controllers[i]) m_controllers[i]->Update(t, nullptr, false, 0);
+                    if (m_hands[i]) m_hands[i]->Update(t, nullptr, false, 0);
+                }
             }
+            m_hmd->UpdateBattery(t, have && connected);
+            for (int hand = 0; hand < 2; ++hand)
+                if (m_controllers[hand]) m_controllers[hand]->UpdateBattery(t, have && connected);
             UpdateBodyTrackers(s, connected);
             // While a headset is connected but no picture reaches the streamer, say every 10 s how
             // far SteamVR got: no textures, no layers, no presents, or frames dropped on the way.
             if (connected && rcvr::QpcNowNs() - lastFrameReportNs > 10'000'000'000LL) {
                 lastFrameReportNs = rcvr::QpcNowNs();
-                const auto c = m_hmd->Counts();
+                const auto c = hmd->Counts();
                 if (lastFrameReportNs - c.lastPublishNs > 10'000'000'000LL)
                     Log("No frame for RinCast Streamer in 10 s. Since SteamVR started: %zu texture sets, %u layers, "
                         "%u presents, %u frames handed over",
                         c.textureSets, c.layers, c.presents, c.published);
+            }
+            // Every 30 s: how old the headset's poses were when they went to SteamVR. Close to a
+            // whole vsync means the headset samples just after SteamVR took one; a vsync without
+            // a new one renders with the pose of the vsync before.
+            if (rcvr::QpcNowNs() - lastPoseReportNs > 30'000'000'000LL) {
+                lastPoseReportNs = rcvr::QpcNowNs();
+                if (poseWaits > 100)
+                    Log("Headset poses waited %.1f ms for their vsync on average (longest %.1f ms, one vsync is %.1f ms); "
+                        "%d of %d vsyncs had no new pose",
+                        poseWaitMs / poseWaits, poseWaitMaxMs, double(period) / 1e6, poseRepeats, poseWaits + poseRepeats);
+                poseWaitMs = poseWaitMaxMs = 0;
+                poseWaits = poseRepeats = 0;
             }
             // Direct mode: SteamVR paces its frames by these.
             while (rcvr::QpcNowNs() < nextVsync) YieldProcessor();
@@ -1361,6 +1675,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
 
     std::unique_ptr<Hmd> m_hmd;
     std::unique_ptr<Controller> m_controllers[2];
+    std::mutex m_deviceMutex;
     std::unique_ptr<HandDevice> m_hands[2];
     std::unique_ptr<BodyTrackerDevice> m_trackers[rcvr::kBodyTrackers];
     std::atomic<bool> m_trackerAdded[rcvr::kBodyTrackers]{};

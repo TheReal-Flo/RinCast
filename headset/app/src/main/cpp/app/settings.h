@@ -10,7 +10,8 @@
 
 namespace rv {
 
-inline constexpr float kMinVrScale = 0.5f, kMaxVrScale = 1.3f;
+// Of the panel's pixels per eye (Headset::FullResolution). 150% reaches Virtual Desktop's highest.
+inline constexpr float kMinVrScale = 0.4f, kMaxVrScale = 1.5f;
 
 struct HeadsetSettings {
     // Environment
@@ -21,7 +22,8 @@ struct HeadsetSettings {
     std::string language = "auto";      // auto | en | zh-CN | de | es | fr | ja
 
     // Streaming (sent to the PC)
-    float vrScale = 0.9f;               // pixels per eye against the headset's own, kMinVrScale..kMaxVrScale
+    float vrScale = 0.75f;              // pixels per eye against the panel's, kMinVrScale..kMaxVrScale
+    bool vrScaleOfPanel = true;         // false: vrScale is still against the recommended size (before 1.2.0)
     bool matchSteamVr = false;          // stream at the resolution SteamVR renders at instead
     bool gazeFoveation = false;         // foveated encoding: full detail only where the eyes look
     std::string vrQuality = "high";     // the preset nearest vrScale, for PCs before 1.1.0
@@ -70,6 +72,8 @@ struct HeadsetSettings {
     std::string lastPc;
     std::string lastPcAddress;          // where it answered, for networks that drop broadcasts
     bool autoConnect = false;           // connect to lastPc as soon as it's found
+    bool autoSendScreenshots = true;    // headset screenshots land on the PC automatically
+    bool autoLaunchSteamVr = false;     // start SteamVR on the PC on connecting
     bool usbCable = false;              // use a USB cable to the PC when one is plugged in
     std::string manualPc;               // for networks that block discovery
     std::string deviceSecret;           // identity seed (hex), made on first start

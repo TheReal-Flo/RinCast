@@ -443,6 +443,7 @@ void VideoDecoder::OutputLoop() {
             auto it = m_inputTimes.find(int64_t(frameIndex));
             if (it != m_inputTimes.end()) {
                 m_decodeMsSum += rc::NsToMs(now - it->second);
+                m_decodeMsMax = std::max(m_decodeMsMax, rc::NsToMs(now - it->second));
                 m_decodeCount++;
                 m_inputTimes.erase(it);
             }
