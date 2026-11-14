@@ -24,6 +24,8 @@ jobs:
         run: cmake -S pc -B build\pc -G "Visual Studio 17 2022" -A x64 -DRINCAST_CORE_TESTS=ON
       - name: Build
         run: cmake --build build\pc --config Release --parallel
+      - name: Steam audio installer tests
+        run: python scripts/test-steam-audio-install.py
       - name: Core tests
         run: build\pc\bin\Release\rincast-core-tests.exe
 

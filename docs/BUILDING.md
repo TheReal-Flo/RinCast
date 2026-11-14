@@ -113,14 +113,18 @@ RinCast's devices if they're installed, otherwise Steam's.
 | RinCast Speaker & Microphone | Only with a signed driver package (or test signing) | Yes |
 | Default devices | Always | No |
 
-**Enabling Steam's devices.** They come with Steam, not with RinCast:
-1. Install Steam and sign in.
-2. In Steam, open **Settings → Remote Play** and turn on Remote Play.
-3. Stream a game once from this PC to another device with Steam Link or Remote Play. Steam adds the devices when it first needs them.
-4. Check for **Steam Streaming Speakers** and **Steam Streaming Microphone** in Windows sound settings, including under **All sound devices**, and allow them if they're marked as not allowed. The streamer's **Audio** tab shows whether it found them.
+**Installing Steam's devices (x64 Windows).** In the streamer's **Audio** page, click
+**Install Steam audio devices** and accept the Windows administrator prompt.
+Only a separate PowerShell process runs elevated; RinCast stays unelevated.
+The installer uses Steam's local driver packages from
+`%CommonProgramFiles(x86)%\Steam\drivers\Windows10\x64`, without a
+Remote Play session or downloading drivers. Install or repair Steam first if
+these packages are missing. RinCast checks that both devices are available;
+Windows may request a restart. Reconnect the headset after installation.
 
-Newer versions of Steam may not add the devices on every PC. If they don't
-appear, use **Default devices**: you still get PC audio, but no microphone.
+If the devices still don't appear, check **Settings → System → Sound → All sound
+devices** and allow them if disabled. **Default devices** still provides PC
+audio without a virtual microphone.
 
 ## Headset app
 

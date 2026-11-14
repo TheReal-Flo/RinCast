@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "audio/audio.h"
+#include "audio/steam_devices.h"
 #include "rc/platform.h"
 #include "rc/project.h"
 #include "rc/protocol.h"
@@ -417,6 +418,31 @@ void App::HandleUiMessage(const std::string& text) {
         RunAsync([=, this] {
             const std::string err = m_cloud.ApproveHeadsetCode(code);
             reply({{"ok", err.empty()}, {"error", err}});
+        });
+    } else if (type == "installSteamAudio") {
+        if (m_installingSteamAudio.exchange(true)) {
+            reply({{"ok", false}, {"error", "audio.installBusy"}});
+            return;
+        }
+        RunAsync([=, this] {
+            const int code = audio::InstallSteamDevices();
+            bool ready = false;
+            if (code == 0 || code == ERROR_SUCCESS_REBOOT_REQUIRED) {
+                // Device installation can finish before WASAPI publishes the endpoints.
+                for (int i = 0; i < 20; ++i) {
+                    const auto status = audio::QueryDriver(audio::DeviceSet::Steam);
+                    ready = status.speaker && status.microphone && status.microphoneFeed;
+                    if (ready) break;
+                    Sleep(500);
+                }
+            }
+            const char* error = code == ERROR_CANCELLED ? "audio.installCancelled" :
+                code == ERROR_FILE_NOT_FOUND ? "audio.installMissing" :
+                code == ERROR_NOT_SUPPORTED ? "audio.installUnsupported" :
+                code == ERROR_SUCCESS_REBOOT_REQUIRED ? "audio.installReboot" :
+                code == 0 ? "audio.installNoDevices" : "audio.installFailed";
+            m_installingSteamAudio = false;
+            reply({{"ok", ready}, {"error", error}, {"code", code}});
         });
     } else if (type == "registerSteamVrDriver") {
         RunAsync([=] { reply({{"ok", steamvr::RegisterDriver()}}); });
