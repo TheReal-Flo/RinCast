@@ -5,8 +5,11 @@
 #include <memory>
 #include <thread>
 
+#ifdef _WIN32
 #include "../capture/desktop_capture.h"
 #include "../encode/color_convert.h"
+#endif
+#include "../capture/monitors.h"
 #include "../encode/encoder.h"
 #include "video_sender.h"
 
@@ -40,11 +43,14 @@ class DesktopStream {
     void SetActive(bool active) { m_active = active; }
 
     json Describe() const;
+    // What the encoder is asked for: the same on every OS (desktop_stream_common.cpp).
+    EncoderConfig EncoderSettings() const;
     VideoSenderStats Stats() { return m_sender.Stats(); }
     const MonitorInfo& Monitor() const { return m_monitor; }
     bool Failed() const { return m_failed; }
 
    private:
+    // Captures, encodes and sends until Stop: the platform's part (see desktop_stream_common.cpp).
     void Run();
 
     rc::Connection* m_connection;

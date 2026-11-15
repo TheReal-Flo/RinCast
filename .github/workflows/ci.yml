@@ -19,7 +19,7 @@ jobs:
     name: Streamer, SteamVR driver, tools, core tests
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S pc -B build\pc -G "Visual Studio 17 2022" -A x64 -DRINCAST_CORE_TESTS=ON
       - name: Build
@@ -37,7 +37,7 @@ jobs:
     name: Audio driver
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/cache@v4
         with:
           path: deps
@@ -58,7 +58,7 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
@@ -69,7 +69,7 @@ jobs:
     name: Headset app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -81,3 +81,35 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --console=plain
+
+  linux:
+    name: Linux streamer (shared layer)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # The session, server, settings and account code the Windows streamer shares with Linux and
+      # macOS, built with the Linux platform parts (docs/LINUX.md): a change that only compiles on
+      # Windows fails here, not later on someone's Linux PC or Mac.
+      - name: Install the build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config libcurl4-openssl-dev
+      - name: Build
+        run: |
+          cmake -S pc/linux -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/linux
+
+  macos:
+    name: macOS streamer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      # Build and package only. Capture / input injection need TCC consents a headless
+      # runner can't grant, and hosted runners drop IPv6 link-local multicast, which
+      # core_tests.cpp's discovery check requires. Both work with --test on a real Mac.
+      - name: Build and package
+        run: bash scripts/build-mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RinCast-macos-universal
+          path: dist/RinCast-*-macos-*.zip
+          if-no-files-found: error
+          retention-days: 7

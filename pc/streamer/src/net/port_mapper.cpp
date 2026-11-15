@@ -1,9 +1,35 @@
 #include "port_mapper.h"
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
+#else
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
+#include <poll.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <net/route.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#endif
+
+#include <fstream>
+#include <sstream>
+
+// The few Winsock names the SSDP search uses.
+using SOCKET = int;
+constexpr int INVALID_SOCKET = -1;
+using WSAPOLLFD = pollfd;
+inline int WSAPoll(pollfd* fds, unsigned n, int timeoutMs) { return poll(fds, n, timeoutMs); }
+inline int closesocket(int s) { return close(s); }
+#endif
+
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -11,7 +37,9 @@
 #include "rc/crypto.h"
 #include "rc/platform.h"
 
+#ifdef _MSC_VER
 #pragma comment(lib, "iphlpapi.lib")
+#endif
 
 namespace rcs {
 
@@ -106,6 +134,7 @@ std::string PortMapper::Status() const {
 }
 
 bool PortMapper::Discover() {
+#ifdef _WIN32
     MIB_IPFORWARDROW row{};
     IPAddr probe = 0;
     inet_pton(AF_INET, "1.1.1.1", &probe);
@@ -129,6 +158,65 @@ bool PortMapper::Discover() {
                 break;
             }
     }
+#else
+    // The default route's gateway and interface, then that interface's address.
+    uint32_t gateway = 0, local = 0;
+    std::string iface;
+#ifdef __APPLE__
+    // macOS has no /proc: the kernel's routing table through sysctl, gateway routes only.
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+    size_t size = 0;
+    std::vector<char> table;
+    if (sysctl(mib, 6, nullptr, &size, nullptr, 0) == 0 && size) {
+        table.resize(size);
+        if (sysctl(mib, 6, table.data(), &size, nullptr, 0) != 0) size = 0;
+    }
+    for (size_t offset = 0; offset + sizeof(rt_msghdr) <= size && !gateway;) {
+        const auto* rtm = reinterpret_cast<const rt_msghdr*>(table.data() + offset);
+        if (!rtm->rtm_msglen) break;
+        offset += rtm->rtm_msglen;
+        // The addresses follow the header, one per bit of rtm_addrs, each padded to 4 bytes.
+        const sockaddr* addrs[RTAX_MAX] = {};
+        const char* p = reinterpret_cast<const char*>(rtm + 1);
+        for (int i = 0; i < RTAX_MAX; ++i) {
+            if (!(rtm->rtm_addrs & (1 << i))) continue;
+            const auto* sa = reinterpret_cast<const sockaddr*>(p);
+            addrs[i] = sa;
+            p += sa->sa_len ? (1 + ((sa->sa_len - 1) | 3)) : 4;
+        }
+        const sockaddr* dst = addrs[RTAX_DST];
+        const sockaddr* gw = addrs[RTAX_GATEWAY];
+        // The default route: 0.0.0.0 (written with no address bytes at all, sometimes).
+        const bool isDefault = dst && dst->sa_family == AF_INET &&
+                               (dst->sa_len < 8 || reinterpret_cast<const sockaddr_in*>(dst)->sin_addr.s_addr == 0);
+        if (!isDefault || !gw || gw->sa_family != AF_INET) continue;
+        gateway = ntohl(reinterpret_cast<const sockaddr_in*>(gw)->sin_addr.s_addr);
+        char name[IF_NAMESIZE] = {};
+        if (if_indextoname(rtm->rtm_index, name)) iface = name;
+    }
+#else
+    std::ifstream routes("/proc/net/route");
+    std::string line;
+    std::getline(routes, line);  // header
+    while (std::getline(routes, line)) {
+        std::istringstream in(line);
+        std::string name, dest, gw;
+        in >> name >> dest >> gw;
+        if (dest != "00000000") continue;
+        gateway = ntohl(uint32_t(std::strtoul(gw.c_str(), nullptr, 16)));  // network byte order, in hex
+        iface = name;
+        break;
+    }
+#endif
+    if (!gateway) return false;
+    ifaddrs* addrs = nullptr;
+    if (getifaddrs(&addrs) == 0) {
+        for (ifaddrs* a = addrs; a && !local; a = a->ifa_next)
+            if (a->ifa_addr && a->ifa_addr->sa_family == AF_INET && iface == a->ifa_name)
+                local = ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_addr)->sin_addr.s_addr);
+        freeifaddrs(addrs);
+    }
+#endif
     // Only a router on our LAN can map ports for us (not a VPN tunnel's next hop).
     if (!local || !rc::IsPrivateLan(local) || !rc::IsPrivateLan(gateway)) return false;
     std::lock_guard lock(m_mutex);

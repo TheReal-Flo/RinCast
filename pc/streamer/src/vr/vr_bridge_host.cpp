@@ -8,9 +8,20 @@
 #include "rc/platform.h"
 #include "rc/protocol.h"
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
+#endif
+
 namespace rcs {
 
 bool VrBridgeHost::Start() {
+#ifdef _WIN32
     m_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(rcvr::Shared),
                                    rcvr::kSharedMemoryName);
     if (!m_mapping) {
@@ -33,6 +44,30 @@ bool VrBridgeHost::Start() {
     rcvr::DisplayConfig initialConfig{};
     initialConfig.adapterLuid = m_gpu.luid;
     rcvr::WriteDisplayConfig(m_shared, initialConfig);
+#else
+    // POSIX shared memory for the RinCast Monado runtime (docs/LINUX.md). Owner-only: the
+    // runtime runs as the same user.
+#ifdef __APPLE__
+    // macOS sizes a shared memory object only once: one left by a killed run can't be sized
+    // again, so start from a new one.
+    shm_unlink(rcvr::kSharedMemoryName);
+#endif
+    const int fd = shm_open(rcvr::kSharedMemoryName, O_RDWR | O_CREAT, 0600);
+    if (fd < 0 || ftruncate(fd, sizeof(rcvr::Shared)) != 0) {
+        RC_LOGE("VR bridge: shared memory failed (%s)", std::strerror(errno));
+        if (fd >= 0) close(fd);
+        return false;
+    }
+    void* p = mmap(nullptr, sizeof(rcvr::Shared), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) return false;
+    m_shared = static_cast<rcvr::Shared*>(p);
+    std::memset(m_shared, 0, sizeof(rcvr::Shared));
+    m_shared->magic = rcvr::kMagic;
+    m_shared->version = rcvr::kVersion;
+    m_shared->latestReadySlot = -1;
+    m_gpu = DescribeGpu();
+#endif
 
     // Restore the last headset configuration so SteamVR can start before a
     // headset connects (it then shows as "standby").
@@ -48,7 +83,7 @@ bool VrBridgeHost::Start() {
             const auto fov = j.value("fov", json::array());
             for (int e = 0; e < 2 && e < int(fov.size()); e++)
                 for (int k = 0; k < 4; k++) c.fovTan[e][k] = fov[e][k].get<float>();
-            strncpy_s(c.headsetModel, j.value("model", "Quest").c_str(), _TRUNCATE);
+            std::snprintf(c.headsetModel, sizeof(c.headsetModel), "%s", j.value("model", "Quest").c_str());
             c.renderEyeWidth = j.value("renderEyeWidth", 0u);
             c.renderEyeHeight = j.value("renderEyeHeight", 0u);
             // Only the display is restored. Controller identities require this session's headset data.
@@ -66,6 +101,11 @@ bool VrBridgeHost::Start() {
 void VrBridgeHost::Stop() {
     m_running = false;
     if (m_thread.joinable()) m_thread.join();
+#ifndef _WIN32
+    if (m_shared) munmap(m_shared, sizeof(rcvr::Shared));
+    m_shared = nullptr;
+    shm_unlink(rcvr::kSharedMemoryName);
+#else
     for (auto& h : m_textureHandles)
         if (h) CloseHandle(h), h = nullptr;
     for (auto& t : m_textures) t.Reset();
@@ -75,9 +115,20 @@ void VrBridgeHost::Stop() {
     if (m_trackingEvent) CloseHandle(m_trackingEvent);
     m_shared = nullptr;
     m_mapping = m_frameEvent = m_trackingEvent = nullptr;
+#endif
 }
 
 bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height) {
+#ifndef _WIN32
+    // Linux: the runtime owns the images and hands them over as DMA-BUF; here only the size
+    // it is to render at.
+    m_generation++;
+    for (int i = 0; i < rcvr::kFrameSlots; i++) m_shared->slots[i].state = rcvr::kSlotFree;
+    m_shared->textureWidth = width;
+    m_shared->textureHeight = height;
+    m_shared->latestReadySlot = -1;
+    return true;
+#else
     ComPtr<ID3D11Device1> device1;
     m_device.As(&device1);
     m_generation++;
@@ -119,6 +170,7 @@ bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height) {
     m_shared->textureFormat = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     m_shared->latestReadySlot = -1;
     return true;
+#endif
 }
 
 void VrBridgeHost::SetControllerProfiles(const std::string& left, const std::string& right) {
@@ -129,7 +181,7 @@ void VrBridgeHost::SetControllerProfiles(const std::string& left, const std::str
     bool changed = false;
     for (int hand = 0; hand < 2; ++hand)
         if (profiles[hand] != config.controllerProfiles[hand]) {
-            strncpy_s(config.controllerProfiles[hand], profiles[hand].c_str(), _TRUNCATE);
+            std::snprintf(config.controllerProfiles[hand], sizeof(config.controllerProfiles[hand]), "%s", profiles[hand].c_str());
             changed = true;
             RC_LOGI("Headset controller profile (%s): %s", hand == 0 ? "left" : "right", profiles[hand].c_str());
         }
@@ -207,7 +259,11 @@ void VrBridgeHost::PublishTracking(const rcvr::TrackingSnapshot& snapshot) {
     std::lock_guard lock(m_mutex);
     if (!m_shared) return;
     rcvr::WriteTracking(m_shared, snapshot);
+#ifdef _WIN32
     SetEvent(m_trackingEvent);
+#else
+    rcvr::Signal(&m_shared->trackingSignal);
+#endif
 }
 
 void VrBridgeHost::PublishBody(const rcvr::BodySnapshot& snapshot) {
@@ -273,11 +329,12 @@ std::string VrBridgeHost::ApplicationName() const {
 // hand out fresh textures so the next producer starts clean.
 void VrBridgeHost::RecoverFromDeadProducer() {
     std::lock_guard lock(m_mutex);
-    RC_LOGW("VR producer (pid %ld) exited; resetting the VR bridge", m_shared->producerPid);
+    RC_LOGW("VR producer (pid %ld) exited; resetting the VR bridge", long(m_shared->producerPid));
     const uint32_t w = m_shared->textureWidth, h = m_shared->textureHeight;
     m_shared->producerPid = 0;
     m_shared->producerKind = LONG(rcvr::ProducerKind::None);
-    m_shared->renderedEyeWidth = m_shared->renderedEyeHeight = 0;
+    m_shared->renderedEyeWidth = 0;
+    m_shared->renderedEyeHeight = 0;
     if (w && h) CreateTextures(w, h);
     InterlockedIncrement(&m_shared->configGeneration);
 }
@@ -309,9 +366,13 @@ void VrBridgeHost::HeartbeatLoop() {
         if (now - lastProducerCheck > 500'000'000LL) {
             lastProducerCheck = now;
             if (const DWORD pid = DWORD(m_shared->producerPid)) {
+#ifdef _WIN32
                 HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
                 const bool alive = process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
                 if (process) CloseHandle(process);
+#else
+                const bool alive = kill(pid_t(pid), 0) == 0 || errno == EPERM;
+#endif
                 if (!alive) RecoverFromDeadProducer();
             }
         }
@@ -329,7 +390,11 @@ void VrBridgeHost::HeartbeatLoop() {
             }
             m_hapticsRead++;
         }
+#ifdef _WIN32
         Sleep(1);
+#else
+        usleep(1000);
+#endif
     }
 }
 

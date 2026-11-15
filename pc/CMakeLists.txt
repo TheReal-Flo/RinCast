@@ -69,14 +69,14 @@ target_link_libraries(pose-probe PRIVATE d3d11)
 # Developer tool: checks the desktop capture -> YUV pipeline.
 add_executable(capture-test ../tools/capture-test/main.cpp
   streamer/src/capture/desktop_capture.cpp streamer/src/capture/monitors.cpp
-  streamer/src/encode/color_convert.cpp streamer/src/gpu.cpp streamer/src/util.cpp)
-target_include_directories(capture-test PRIVATE ../third_party)
+  streamer/src/encode/color_convert.cpp streamer/src/gpu.cpp streamer/src/util.cpp streamer/src/util_common.cpp)
+target_include_directories(capture-test PRIVATE common ../third_party)
 target_compile_definitions(capture-test PRIVATE UNICODE _UNICODE)
 target_link_libraries(capture-test PRIVATE rincast-core)
 
 # Developer tool: frame generation quality and estimator speed on this GPU.
 add_executable(motion-bench ../tools/motion-bench/main.cpp streamer/src/stream/motion_estimator.cpp)
-target_include_directories(motion-bench PRIVATE ../third_party)
+target_include_directories(motion-bench PRIVATE common ../third_party)
 target_compile_definitions(motion-bench PRIVATE UNICODE _UNICODE)
 target_link_libraries(motion-bench PRIVATE d3d11 dxgi d3dcompiler)
 
@@ -84,14 +84,14 @@ target_link_libraries(motion-bench PRIVATE d3d11 dxgi d3dcompiler)
 add_executable(encode-bench ../tools/encode-bench/main.cpp
   streamer/src/capture/desktop_capture.cpp streamer/src/capture/monitors.cpp
   streamer/src/encode/color_convert.cpp streamer/src/encode/encoder.cpp streamer/src/encode/nvenc_encoder.cpp
-  streamer/src/encode/amf_encoder.cpp streamer/src/encode/mf_encoder.cpp streamer/src/gpu.cpp streamer/src/util.cpp)
-target_include_directories(encode-bench PRIVATE ../third_party)
+  streamer/src/encode/amf_encoder.cpp streamer/src/encode/mf_encoder.cpp streamer/src/gpu.cpp streamer/src/util.cpp streamer/src/util_common.cpp)
+target_include_directories(encode-bench PRIVATE common ../third_party)
 target_compile_definitions(encode-bench PRIVATE UNICODE _UNICODE)
 target_link_libraries(encode-bench PRIVATE rincast-core)
 
 # Developer tool: lists the virtual audio devices and how each setting resolves.
-add_executable(audio-check ../tools/audio-check/main.cpp streamer/src/audio/audio.cpp streamer/src/util.cpp)
-target_include_directories(audio-check PRIVATE streamer/src ../third_party)
+add_executable(audio-check ../tools/audio-check/main.cpp streamer/src/audio/audio.cpp streamer/src/util.cpp streamer/src/util_common.cpp)
+target_include_directories(audio-check PRIVATE common streamer/src ../third_party)
 target_compile_definitions(audio-check PRIVATE UNICODE _UNICODE)
 target_link_libraries(audio-check PRIVATE rincast-core avrt ole32)
 
@@ -117,15 +117,15 @@ target_compile_definitions(bridge-grab PRIVATE UNICODE _UNICODE)
 
 # Developer tool: tests router port mapping (PCP / NAT-PMP / UPnP) and removes it again.
 add_executable(portmap-test ../tools/portmap-test/main.cpp streamer/src/net/port_mapper.cpp
-  streamer/src/net/http.cpp streamer/src/util.cpp)
-target_include_directories(portmap-test PRIVATE streamer/src ../third_party)
+  streamer/src/net/http.cpp streamer/src/util.cpp streamer/src/util_common.cpp)
+target_include_directories(portmap-test PRIVATE common streamer/src ../third_party)
 target_compile_definitions(portmap-test PRIVATE UNICODE _UNICODE)
 target_link_libraries(portmap-test PRIVATE rincast-core winhttp iphlpapi)
 
 # Developer tool: end-to-end remote connection test (local server + streamer + the
 # headset app's real StreamClient). See docs/BUILDING.md.
 add_executable(remote-e2e ../tools/remote-e2e/main.cpp ../headset/app/src/main/cpp/net/stream_client.cpp
-  streamer/src/net/http.cpp streamer/src/util.cpp)
-target_include_directories(remote-e2e PRIVATE streamer/src ../headset/app/src/main/cpp ../third_party)
+  streamer/src/net/http.cpp streamer/src/util.cpp streamer/src/util_common.cpp)
+target_include_directories(remote-e2e PRIVATE common streamer/src ../headset/app/src/main/cpp ../third_party)
 target_compile_definitions(remote-e2e PRIVATE UNICODE _UNICODE)
 target_link_libraries(remote-e2e PRIVATE rincast-core winhttp crypt32)

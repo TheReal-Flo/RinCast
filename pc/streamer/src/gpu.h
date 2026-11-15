@@ -2,8 +2,10 @@
 // renderer used for scaling, cursor composition and stereo packing.
 #pragma once
 
+#ifdef _WIN32
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
+#endif
 
 #include <string>
 
@@ -18,6 +20,7 @@ struct GpuInfo {
     uint64_t dedicatedVram = 0;
 };
 
+#ifdef _WIN32
 GpuInfo DescribeAdapter(IDXGIAdapter* adapter);
 // High-performance adapter (what games use by default).
 ComPtr<IDXGIAdapter1> PreferredAdapter();
@@ -54,5 +57,9 @@ class QuadRenderer {
     ComPtr<ID3D11BlendState> m_blendInvert;
     ComPtr<ID3D11RasterizerState> m_raster;
 };
+#else
+// Linux and macOS: the GPU the encoder runs on (platform/linux/gpu_linux.cpp, platform/mac/gpu_mac.mm).
+GpuInfo DescribeGpu();
+#endif
 
 }  // namespace rcs

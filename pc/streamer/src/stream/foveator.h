@@ -4,7 +4,13 @@
 // encode, send and decode, taken where the eye can't see detail anyway.
 #pragma once
 
+#ifdef _WIN32
 #include <d3d11_4.h>
+#endif
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 #include "../util.h"
 
@@ -18,8 +24,12 @@ class Foveator {
     static constexpr float kFoveaSize = 0.45f;
     static constexpr float kFixedFoveaSize = 0.6f;
     // The squeezed eye size for a full one: the fovea, and the rest at half density.
-    static uint32_t EncodedSize(uint32_t full, float fovea);
+    static uint32_t EncodedSize(uint32_t full, float fovea) {
+        const double size = full * (fovea + (1.0 - fovea) * 0.5);
+        return std::max<uint32_t>(64, uint32_t(std::lround(size / 16)) * 16);
+    }
 
+#ifdef _WIN32
     // eyeWidth x eyeHeight per eye in, encodedEyeWidth x encodedEyeHeight per eye out.
     bool Init(ID3D11Device* device, uint32_t eyeWidth, uint32_t eyeHeight, uint32_t encodedEyeWidth,
               uint32_t encodedEyeHeight, float fovea);
@@ -39,6 +49,7 @@ class Foveator {
     ComPtr<ID3D11ShaderResourceView> m_inputSrv;
     uint32_t m_eyeWidth = 0, m_eyeHeight = 0, m_encodedWidth = 0, m_encodedHeight = 0;
     float m_fovea = kFoveaSize;
+#endif
 };
 
 }  // namespace rcs

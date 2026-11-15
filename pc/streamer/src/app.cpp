@@ -2,8 +2,10 @@
 #include "vr/face_share.h"
 #include "net/firewall.h"
 
+#ifdef _WIN32
 #include <shellapi.h>
 #include <timeapi.h>
+#endif
 
 #include <chrono>
 #include <ctime>
@@ -19,7 +21,9 @@
 #include "version.h"
 #include "vr/steamvr.h"
 
+#ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
+#endif
 
 namespace rcs {
 
@@ -33,24 +37,19 @@ void FileLogSink(rc::LogLevel level, const char* message) {
     const auto now = std::chrono::system_clock::now();
     const std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tm{};
+#ifdef _WIN32
     localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
     std::lock_guard lock(g_logFileMutex);
     if (g_logFile) g_logFile << ts << " " << names[int(level)] << " " << message << "\n" << std::flush;
+#ifdef _WIN32
     OutputDebugStringA(message);
     OutputDebugStringA("\n");
-}
-
-bool SetStartWithWindows(bool enable) {
-    const wchar_t* key = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    if (enable) {
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        return RegWriteString(HKEY_CURRENT_USER, key, L"RinCast Streamer", L"\"" + std::wstring(exe) + L"\" --minimized");
-    }
-    RegDeleteValue(HKEY_CURRENT_USER, key, L"RinCast Streamer");  // already gone is fine
-    return true;
+#endif
 }
 
 }  // namespace
@@ -72,19 +71,26 @@ bool App::Init() {
     rc::SetLogSink(FileLogSink);
     RC_LOGI("RinCast Streamer %s starting on %s", Version().c_str(), WindowsVersion().c_str());
 
+#ifdef _WIN32
     timeBeginPeriod(1);
+#endif
     SettingsStore::Get().Load();
     ScanScreenshots();
     const Settings settings = SettingsStore::Get().Snapshot();
-    SetStartWithWindows(settings.startWithWindows);
+    SetStartAtLogin(settings.startWithWindows);
     // Default devices a killed streamer left switched to the headset's.
     RunAsync([] { audio::RestoreDefaults(); });
 
     // GPU & encoder capabilities (the VR bridge device lives on the same adapter).
     if (!m_bridge.Start()) RC_LOGE("VR bridge failed to start");
+#ifdef _WIN32
     auto adapter = PreferredAdapter();
     m_gpu = DescribeAdapter(adapter.Get());
     if (m_bridge.Device()) m_caps = ProbeEncoderCaps(m_bridge.Device(), m_gpu.vendorId);
+#else
+    m_gpu = DescribeGpu();
+    m_caps = ProbeEncoderCaps(m_gpu.vendorId);
+#endif
     RC_LOGI("GPU: %s, encoder %s (H.264 %d, HEVC %d, AV1 %d, 10-bit HEVC %d)", m_gpu.name.c_str(),
             m_caps.backend.c_str(), m_caps.h264, m_caps.hevc, m_caps.av1, m_caps.hevc10);
 
@@ -130,14 +136,18 @@ void App::Shutdown() {
     m_cloud.Stop();
     m_bridge.Stop();
     audio::RestoreDefaults();
-    SetThreadExecutionState(ES_CONTINUOUS);
+    KeepAwake(false);
+#ifdef _WIN32
     timeEndPeriod(1);
+#endif
     RC_LOGI("RinCast Streamer stopped");
 }
 
 void App::RunAsync(std::function<void()> fn) {
     std::thread([fn = std::move(fn)] {
+#ifdef _WIN32
         ScopedCoInit com;
+#endif
         fn();
     }).detach();
 }
@@ -181,15 +191,14 @@ void App::OnSessionStarted(ClientSession* session) {
         m_pendingApproval = nullptr;
     }
     PushUi({{"type", "session"}, {"connected", true}, {"deviceName", session->DisplayName()}});
-    if (SettingsStore::Get().Snapshot().preventSleep)
-        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+    if (SettingsStore::Get().Snapshot().preventSleep) KeepAwake(true);
 }
 
 void App::OnSessionEnded(ClientSession* session, const std::string& reason) {
     m_streaming = false;
     FaceShare::Get().Clear();
     PushUi({{"type", "session"}, {"connected", false}, {"reason", reason}, {"deviceName", session->DeviceName()}});
-    SetThreadExecutionState(ES_CONTINUOUS);
+    KeepAwake(false);
 }
 
 void App::OnVrStateChanged(const std::string& state, const std::string& producer, const std::string& app) {
@@ -293,8 +302,7 @@ json App::StateJson() {
 void App::CheckFirewall() {
     if (m_firewallChecking.exchange(true)) return;
     RunAsync([this] {
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        const std::wstring exe = ExePath().wstring();
         const firewall::Status now = firewall::Query(exe);
         const json before = FirewallJson();
         {
@@ -337,14 +345,13 @@ void App::Tick() {
     }
     if (auto session = m_server.ActiveSession()) {
         PushUi({{"type", "stats"}, {"session", session->StatusJson()}});
-        if (SettingsStore::Get().Snapshot().preventSleep)
-            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        if (SettingsStore::Get().Snapshot().preventSleep) KeepAwake(true);
     }
 }
 
 std::string App::ApplySettingSideEffects(const json& changed) {
     std::string error;
-    if (changed.contains("startWithWindows") && !SetStartWithWindows(changed["startWithWindows"].get<bool>())) {
+    if (changed.contains("startWithWindows") && !SetStartAtLogin(changed["startWithWindows"].get<bool>())) {
         error = "Windows didn't accept this change.";
         SettingsStore::Get().Update([](Settings& s) { s.startWithWindows = !s.startWithWindows; });
     }
@@ -430,11 +437,8 @@ void App::HandleUiMessage(const std::string& text) {
         }
         if (type == "installSteam") {
             RunAsync([=] {
-                const int code = audio::DownloadAndStartSteamSetup();
-                const char* error = code == 0 ? "" :
-                    code == int(TRUST_E_NOSIGNATURE) ? "audio.steamUntrusted" :
-                    code == ERROR_CANCELLED ? "audio.steamCancelled" : "audio.steamDownloadFailed";
-                reply({{"ok", code == 0}, {"error", error}, {"code", code}});
+                const auto r = audio::DownloadAndStartSteamSetup();
+                reply({{"ok", r.error.empty()}, {"error", r.error}, {"code", r.code}});
             });
             return;
         }
@@ -443,24 +447,19 @@ void App::HandleUiMessage(const std::string& text) {
             return;
         }
         RunAsync([=, this] {
-            const int code = audio::InstallSteamDevices();
+            const auto r = audio::InstallSteamDevices();
             bool ready = false;
-            if (code == 0 || code == ERROR_SUCCESS_REBOOT_REQUIRED) {
+            if (r.installed) {
                 // Device installation can finish before WASAPI publishes the endpoints.
                 for (int i = 0; i < 20; ++i) {
                     const auto status = audio::QueryDriver(audio::DeviceSet::Steam);
                     ready = status.speaker && status.microphone && status.microphoneFeed;
                     if (ready) break;
-                    Sleep(500);
+                    rc::SleepMs(500);
                 }
             }
-            const char* error = code == ERROR_CANCELLED ? "audio.installCancelled" :
-                code == ERROR_FILE_NOT_FOUND ? "audio.installMissing" :
-                code == ERROR_NOT_SUPPORTED ? "audio.installUnsupported" :
-                code == ERROR_SUCCESS_REBOOT_REQUIRED ? "audio.installReboot" :
-                code == 0 ? "audio.installNoDevices" : "audio.installFailed";
             m_installingSteamAudio = false;
-            reply({{"ok", ready}, {"error", error}, {"code", code}});
+            reply({{"ok", ready}, {"error", r.error}, {"code", r.code}});
         });
     } else if (type == "registerSteamVrDriver") {
         RunAsync([=] { reply({{"ok", steamvr::RegisterDriver()}}); });
@@ -473,9 +472,8 @@ void App::HandleUiMessage(const std::string& text) {
         });
     } else if (type == "setFirewall") {
         const bool allowPublic = m.value("allowPublic", false);
-        RunAsync([=] {
-            wchar_t exe[MAX_PATH];
-            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        RunAsync([=, this] {
+            const std::wstring exe = ExePath().wstring();
             firewall::Set(exe, allowPublic);
             // What counts is what Windows says now, not what was asked for.
             const firewall::Status now = firewall::Query(exe);
@@ -491,9 +489,8 @@ void App::HandleUiMessage(const std::string& text) {
             std::lock_guard lock(m_firewallMutex);
             adapter = m_firewall.usbAdapter;
         }
-        RunAsync([=] {
-            wchar_t exe[MAX_PATH];
-            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        RunAsync([=, this] {
+            const std::wstring exe = ExePath().wstring();
             firewall::AllowUsbAdapter(exe, adapter);
             const firewall::Status now = firewall::Query(exe);
             {
@@ -507,23 +504,23 @@ void App::HandleUiMessage(const std::string& text) {
     } else if (type == "restartSteamVR") {
         RunAsync([] { steamvr::Restart(); });
     } else if (type == "openLogs") {
-        ShellExecuteW(nullptr, L"open", (DataDir() / L"logs").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        OpenExternal((DataDir() / "logs").string());
     } else if (type == "openUrl") {
         const std::string url = m.value("url", "");
         if (url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0)
-            ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            OpenExternal(url);
     } else if (type == "openPath") {
         const std::string path = m.value("path", "");
         std::error_code ec;
         if (!path.empty() && std::filesystem::exists(path, ec))
-            ShellExecuteW(nullptr, L"open", Widen(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            OpenExternal(path);
     } else if (type == "openScreenshots") {
         // The folder may be empty (the default) or not made yet; show it either way.
         std::string dir = SettingsStore::Get().Snapshot().screenshotDir;
         if (dir.empty()) dir = DefaultScreenshotDir();
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
-        ShellExecuteW(nullptr, L"open", Widen(dir).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        OpenExternal(dir);
     } else if (type == "pickFolder") {
         // On the UI thread: the dialog is modal to the main window and pumps its own
         // messages, so the stream and the UI underneath it keep going.

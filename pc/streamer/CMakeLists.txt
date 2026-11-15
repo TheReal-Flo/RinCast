@@ -6,6 +6,7 @@ add_executable(rincast-streamer WIN32
   src/app.cpp
   src/net/firewall.cpp
   src/util.cpp
+  src/util_common.cpp
   src/settings.cpp
   src/gpu.cpp
   src/capture/monitors.cpp
@@ -17,6 +18,7 @@ add_executable(rincast-streamer WIN32
   src/encode/mf_encoder.cpp
   src/stream/video_sender.cpp
   src/stream/desktop_stream.cpp
+  src/stream/desktop_stream_common.cpp
   src/stream/vr_stream.cpp
   src/stream/foveator.cpp
   src/stream/motion_estimator.cpp

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <string>
 #include <vector>

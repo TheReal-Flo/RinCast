@@ -4,15 +4,6 @@
 
 namespace rcs {
 
-const char* CodecName(rc::VideoCodec codec) {
-    switch (codec) {
-        case rc::VideoCodec::H264: return "H.264";
-        case rc::VideoCodec::HEVC: return "HEVC";
-        case rc::VideoCodec::AV1: return "AV1";
-    }
-    return "?";
-}
-
 EncoderCaps ProbeEncoderCaps(ID3D11Device* device, UINT vendorId) {
     EncoderCaps caps;
     if (vendorId == 0x10DE && NvencProbe(device, caps)) return caps;

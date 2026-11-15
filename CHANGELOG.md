@@ -19,6 +19,17 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
 - Explicit Native / Oculus Touch compatibility setting in the Streamer's SteamVR page.
   Restart SteamVR after changing it. Native mode requires the updated headset app;
   older headset builds and unsupported native profiles can use Touch compatibility.
+- A streamer for macOS 12.3 and later: your Mac's displays (in their real Retina pixels),
+  its sound (macOS 13 and later) and mouse and keyboard from the headset, captured with
+  ScreenCaptureKit and encoded in hardware with VideoToolbox (HEVC, 10-bit where the Mac has
+  it, or H.264). It runs the Windows streamer's own session code, so it asks before a new
+  headset connects (in Terminal, for now) and has the same settings, account, adaptive
+  bitrate, loss recovery and frame pacing. Desktop only: no PC VR on a Mac. See
+  `pc/mac/README.md`.
+- Releases include `RinCast-<version>-macos-universal.zip` (one binary for Apple Silicon and
+  Intel Macs) next to the Windows package, with its checksum in `SHA256SUMS.txt`. CI builds
+  and packages it for every push and pull request, and builds the streamer's shared code for
+  Linux too, so a change that only compiles on Windows shows up right away.
 
 ### Fixed
 

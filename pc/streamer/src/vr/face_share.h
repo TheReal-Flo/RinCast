@@ -2,7 +2,7 @@
 // where VRCFaceTracking's RinCast module reads it.
 #pragma once
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <mutex>
 
@@ -25,7 +25,9 @@ class FaceShare {
     void Write(const rc::FaceTrackingPayload* face);
 
     std::mutex m_mutex;
+#ifdef _WIN32
     HANDLE m_mapping = nullptr;
+#endif
     rcvr::FaceTrackingState* m_state = nullptr;
 };
 

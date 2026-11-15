@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audio_sender.h"
 
 #include <audioclient.h>
 #include <avrt.h>
@@ -405,13 +406,8 @@ void AudioStreamer::Run() {
     DWORD taskIndex = 0;
     HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
 
-    rc::AudioEncoder encoder;
-    if (!encoder.Init(rc::kAudioSampleRate, 2, m_bitrate, true)) return;
-    constexpr int kFrame = 480;  // 10 ms
-    std::vector<int16_t> pcm;
-    pcm.reserve(kFrame * 2 * 4);
-    uint8_t packet[1500];
-    uint32_t seq = 0;
+    PcAudioSender sender;
+    if (!sender.Init(m_connection, m_bitrate)) return;
 
     while (m_running) {
         ComPtr<IMMDevice> device;
@@ -433,7 +429,7 @@ void AudioStreamer::Run() {
         client->GetMixFormat(&mix);
         FormatReader reader;
         reader.Init(mix);
-        const double ratio = double(mix->nSamplesPerSec) / rc::kAudioSampleRate;
+        sender.SetInputRate(mix->nSamplesPerSec);
         const UINT blockAlign = mix->nBlockAlign;
         HRESULT hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 200000, 0, mix, nullptr);
         CoTaskMemFree(mix);
@@ -447,8 +443,6 @@ void AudioStreamer::Run() {
         RC_LOGI("Streaming audio from %s", Narrow(FriendlyName(device.Get())).c_str());
         EndpointVolume volume;
         volume.Open(device.Get());
-        double resamplePos = 0;
-        float lastL = 0, lastR = 0;
         int64_t lastDeviceCheck = rc::NowNs();
 
         while (m_running) {
@@ -470,36 +464,17 @@ void AudioStreamer::Run() {
                 if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
                 const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
                 volume.Update();
-                // Linear resampling to 48 kHz.
+                // Resampled to 48 kHz and sent as Opus by the shared sender.
                 for (UINT32 i = 0; i < frames; i++) {
                     float l = 0, r = 0;
                     if (!silent) reader.Stereo(data + size_t(i) * blockAlign, l, r);
                     const float g = volume.Next();
-                    l *= g;
-                    r *= g;
-                    while (resamplePos < 1.0) {
-                        pcm.push_back(ToS16(lastL + (l - lastL) * float(resamplePos)));
-                        pcm.push_back(ToS16(lastR + (r - lastR) * float(resamplePos)));
-                        resamplePos += ratio;
-                    }
-                    resamplePos -= 1.0;
-                    lastL = l;
-                    lastR = r;
+                    sender.Push(l * g, r * g);
                 }
                 capture->ReleaseBuffer(frames);
                 capture->GetNextPacketSize(&packetFrames);
             }
-            while (pcm.size() >= size_t(kFrame) * 2) {
-                rc::AudioPacketHeader h{};
-                h.stream = uint8_t(rc::AudioStream::PcToHeadset);
-                h.channels = 2;
-                h.frameSamples = kFrame;
-                h.sequence = ++seq;
-                h.timestampNs = uint64_t(rc::NowNs());
-                const int n = encoder.Encode(pcm.data(), kFrame, packet, sizeof(packet) - 64);
-                if (n > 0) m_connection->Send2(rc::PacketType::Audio, &h, sizeof(h), packet, size_t(n));
-                pcm.erase(pcm.begin(), pcm.begin() + kFrame * 2);
-            }
+            sender.Flush();
         }
         client->Stop();
     }

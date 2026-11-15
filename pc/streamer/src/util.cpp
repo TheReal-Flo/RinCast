@@ -45,10 +45,41 @@ std::filesystem::path DataDir() {
     return dir;
 }
 
-std::filesystem::path ExeDir() {
+std::filesystem::path ExePath() {
     wchar_t buf[MAX_PATH];
     GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    return std::filesystem::path(buf).parent_path();
+    return std::filesystem::path(buf);
+}
+
+std::filesystem::path ExeDir() { return ExePath().parent_path(); }
+
+std::filesystem::path PicturesDir() {
+    // The shell knows where Pictures is: it may be moved, renamed or on another drive.
+    PWSTR known = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &known))) {
+        std::filesystem::path dir(known);
+        CoTaskMemFree(known);
+        return dir;
+    }
+    const char* profile = getenv("USERPROFILE");
+    return std::filesystem::path(profile ? profile : "") / "Pictures";
+}
+
+bool OpenExternal(const std::string& target) {
+    return reinterpret_cast<INT_PTR>(
+               ShellExecuteW(nullptr, L"open", Widen(target).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+}
+
+void KeepAwake(bool on) {
+    SetThreadExecutionState(on ? ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED : ES_CONTINUOUS);
+}
+
+bool SetStartAtLogin(bool enable) {
+    const wchar_t* key = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    if (enable)
+        return RegWriteString(HKEY_CURRENT_USER, key, L"RinCast Streamer", L"\"" + ExePath().wstring() + L"\" --minimized");
+    RegDeleteValue(HKEY_CURRENT_USER, key, L"RinCast Streamer");  // already gone is fine
+    return true;
 }
 
 std::optional<std::wstring> RegReadString(HKEY root, const wchar_t* key, const wchar_t* value) {
@@ -78,40 +109,6 @@ bool RegDeleteValue(HKEY root, const wchar_t* key, const wchar_t* value) {
     return RegDeleteKeyValueW(root, key, value) == ERROR_SUCCESS;
 }
 
-static const char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-std::string Base64Encode(const void* data, size_t size) {
-    const auto* p = static_cast<const uint8_t*>(data);
-    std::string out;
-    out.reserve((size + 2) / 3 * 4);
-    for (size_t i = 0; i < size; i += 3) {
-        const uint32_t n = (uint32_t(p[i]) << 16) | (i + 1 < size ? uint32_t(p[i + 1]) << 8 : 0) |
-                           (i + 2 < size ? uint32_t(p[i + 2]) : 0);
-        out += kB64[(n >> 18) & 63];
-        out += kB64[(n >> 12) & 63];
-        out += i + 1 < size ? kB64[(n >> 6) & 63] : '=';
-        out += i + 2 < size ? kB64[n & 63] : '=';
-    }
-    return out;
-}
-
-std::vector<uint8_t> Base64Decode(const std::string& s) {
-    std::vector<uint8_t> out;
-    uint32_t buf = 0;
-    int bits = 0;
-    for (char c : s) {
-        const char* pos = strchr(kB64, c);
-        if (c == '=' || !pos || !c) continue;
-        buf = (buf << 6) | uint32_t(pos - kB64);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(uint8_t(buf >> bits));
-        }
-    }
-    return out;
-}
-
 std::string ProtectString(const std::string& plain) {
     if (plain.empty()) return {};
     DATA_BLOB in{DWORD(plain.size()), reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()))};
@@ -132,16 +129,6 @@ std::string UnprotectString(const std::string& b64) {
     SecureZeroMemory(out.pbData, out.cbData);
     LocalFree(out.pbData);
     return plain;
-}
-
-bool ReadFileBytes(const std::filesystem::path& path, std::vector<uint8_t>& out) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    f.seekg(0, std::ios::end);
-    out.resize(size_t(f.tellg()));
-    f.seekg(0);
-    f.read(reinterpret_cast<char*>(out.data()), std::streamsize(out.size()));
-    return bool(f);
 }
 
 bool WriteFileAtomic(const std::filesystem::path& path, const std::string& data) {
