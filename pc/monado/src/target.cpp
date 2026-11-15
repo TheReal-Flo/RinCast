@@ -241,7 +241,7 @@ uint32_t ImageHeight(Target*) { return Hub::Get().Shared()->textureHeight; }
 VkResult KeyedMutex(Target* t, vk_bundle* vk, int slot, bool acquire, VkSemaphore wait, VkSemaphore signal,
                     VkFence fence) {
     const uint64_t key = 0;
-    const DWORD timeout = 20;
+    const uint32_t timeout = 20;  // ms
     VkWin32KeyedMutexAcquireReleaseInfoKHR km{VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR};
     if (slot >= 0) {
         if (acquire) {
