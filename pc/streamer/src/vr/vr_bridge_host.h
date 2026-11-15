@@ -44,14 +44,18 @@ class VrBridgeHost {
     void SetHapticHandler(HapticHandler h);
 
     rcvr::Shared* Shared() const { return m_shared; }
+#ifdef _WIN32
     HANDLE FrameEvent() const { return m_frameEvent; }
     ID3D11Device* Device() const { return m_device.Get(); }
+#endif
     UINT VendorId() const { return m_gpu.vendorId; }
     // Shared texture for a slot (same device as Device()).
+#ifdef _WIN32
     ComPtr<ID3D11Texture2D> SlotTexture(int slot) const {
         std::lock_guard lock(m_mutex);
         return m_textures[slot];
     }
+#endif
     uint32_t TextureGeneration() const { return m_generation; }
 
     rcvr::ProducerKind ActiveProducer() const;
@@ -66,15 +70,19 @@ class VrBridgeHost {
     bool CreateTextures(uint32_t width, uint32_t height);
     void RecoverFromDeadProducer();
 
+#ifdef _WIN32
     HANDLE m_mapping = nullptr;
     HANDLE m_frameEvent = nullptr;
     HANDLE m_trackingEvent = nullptr;
+#endif
     rcvr::Shared* m_shared = nullptr;
 
+#ifdef _WIN32
     ComPtr<ID3D11Device> m_device;
-    GpuInfo m_gpu;
     ComPtr<ID3D11Texture2D> m_textures[rcvr::kFrameSlots];
     HANDLE m_textureHandles[rcvr::kFrameSlots] = {};
+#endif
+    GpuInfo m_gpu;
     uint32_t m_generation = 0;
     bool m_hasConfig = false;
 

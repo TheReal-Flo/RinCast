@@ -59,11 +59,6 @@ struct Params {
 
 }  // namespace
 
-uint32_t Foveator::EncodedSize(uint32_t full, float fovea) {
-    const double size = full * (fovea + (1.0 - fovea) * 0.5);
-    return std::max<uint32_t>(64, uint32_t(std::lround(size / 16)) * 16);
-}
-
 bool Foveator::Init(ID3D11Device* device, uint32_t eyeWidth, uint32_t eyeHeight, uint32_t encodedEyeWidth,
                     uint32_t encodedEyeHeight, float fovea) {
     m_device = device;

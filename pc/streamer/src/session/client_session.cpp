@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "../app.h"
 #include "../audio/audio.h"
@@ -15,7 +17,6 @@
 #include "../input/input_injector.h"
 #include "../settings.h"
 
-#include <windows.h>
 #include "../stream/desktop_stream.h"
 #include "../stream/foveator.h"
 #include "../stream/vr_stream.h"
@@ -42,11 +43,15 @@ uint32_t Align(uint32_t v, uint32_t a) { return std::max(a, (v + a / 2) / a * a)
 
 // 2026-11-11 12.34.56 - colons are not allowed in file names.
 std::string ShotStamp() {
-    SYSTEMTIME t{};
-    GetLocalTime(&t);
+    const std::time_t now = std::time(nullptr);
+    std::tm t{};
+#ifdef _WIN32
+    localtime_s(&t, &now);
+#else
+    localtime_r(&now, &t);
+#endif
     char buf[32] = {};
-    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u.%02u.%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
-                  t.wMinute, t.wSecond);
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H.%M.%S", &t);
     return buf;
 }
 
@@ -348,7 +353,9 @@ void ClientSession::OnPacket(rc::PacketType type, const uint8_t* payload, size_t
 }
 
 void ClientSession::WorkerLoop() {
+#ifdef _WIN32
     ScopedCoInit com;
+#endif
     // Greet: announce what this PC can do.
     SendServerInfo();
     SendMonitors();
@@ -958,9 +965,10 @@ void ClientSession::StartVr() {
     dc.refreshRate = rate;
     dc.ipd = caps.ipd;
     std::memcpy(dc.fovTan, caps.fovTan, sizeof(dc.fovTan));
-    strncpy_s(dc.headsetModel, m_hello.model.empty() ? "Quest" : m_hello.model.c_str(), _TRUNCATE);
-    for (int hand = 0; hand < 2; ++hand) strncpy_s(dc.controllerProfiles[hand], caps.controllerProfiles[hand].c_str(), _TRUNCATE);
-    strncpy_s(dc.headsetSerial, m_hello.deviceId.c_str(), _TRUNCATE);
+    std::snprintf(dc.headsetModel, sizeof(dc.headsetModel), "%s", m_hello.model.empty() ? "Quest" : m_hello.model.c_str());
+    for (int hand = 0; hand < 2; ++hand)
+        std::snprintf(dc.controllerProfiles[hand], sizeof(dc.controllerProfiles[hand]), "%s", caps.controllerProfiles[hand].c_str());
+    std::snprintf(dc.headsetSerial, sizeof(dc.headsetSerial), "%s", m_hello.deviceId.c_str());
     dc.renderEyeWidth = renderW;
     dc.renderEyeHeight = renderH;
     RC_LOGI("VR stream: %ux%u per eye%s", dc.eyeWidth, dc.eyeHeight,

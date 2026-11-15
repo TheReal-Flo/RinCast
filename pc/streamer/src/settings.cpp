@@ -4,8 +4,6 @@
 #include <cstdlib>
 #include <functional>
 
-#include <shlobj.h>
-
 #include "rc/platform.h"
 
 namespace rcs {
@@ -28,17 +26,7 @@ std::string HeadsetName(const std::string& model) {
     return model;
 }
 
-std::string DefaultScreenshotDir() {
-    // The shell knows where Pictures is: it may be moved, renamed or on another drive.
-    PWSTR known = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &known))) {
-        std::string dir = Narrow(known) + "/RinCast";
-        CoTaskMemFree(known);
-        return dir;
-    }
-    const char* profile = getenv("USERPROFILE");
-    return std::string(profile ? profile : "") + "/Pictures/RinCast";
-}
+std::string DefaultScreenshotDir() { return (PicturesDir() / "RinCast").string(); }
 
 json Settings::ToJson(bool forUi) const {
     json devices = json::array();

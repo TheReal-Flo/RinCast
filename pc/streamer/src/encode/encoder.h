@@ -1,7 +1,10 @@
-// Hardware video encoder abstraction (NVENC, AMF, Media Foundation).
+// Hardware video encoder abstraction (NVENC, AMF, Media Foundation; FFmpeg on Linux, VideoToolbox
+// on macOS).
 #pragma once
 
+#ifdef _WIN32
 #include <d3d11_4.h>
+#endif
 
 #include <memory>
 #include <string>
@@ -21,7 +24,9 @@ struct EncoderConfig {
     bool tenBit = false;
     // Desktop content: favour sharpness (more bits for I-frames, slower preset).
     bool desktop = false;
+#ifdef _WIN32
     DXGI_FORMAT inputFormat = DXGI_FORMAT_B8G8R8A8_UNORM;  // or R8G8B8A8_UNORM
+#endif
     // VR: spend fewer bits towards the lens edges, where the Quest's optics blur the
     // image anyway (needs SetFoveation; NVENC only).
     bool foveated = false;
@@ -44,10 +49,12 @@ struct EncodedFrame {
 class VideoEncoder {
    public:
     virtual ~VideoEncoder() = default;
+#ifdef _WIN32
     virtual bool Init(ID3D11Device* device, const EncoderConfig& config) = 0;
     // Encodes `input` (same size/format as configured). Synchronous: returns
     // once the bitstream is available.
     virtual bool Encode(ID3D11Texture2D* input, bool forceKeyframe, EncodedFrame& out) = 0;
+#endif
     virtual void SetBitrate(uint32_t kbps) = 0;
     virtual const char* Name() const = 0;
     // Loss recovery without a keyframe: marks every frame encoded after `timestamp`
@@ -63,7 +70,7 @@ class VideoEncoder {
 };
 
 struct EncoderCaps {
-    std::string backend;  // nvenc | amf | mf
+    std::string backend;  // nvenc | amf | mf; Linux: vaapi | nvenc | software; macOS: videotoolbox
     bool h264 = false;
     bool hevc = false;
     bool av1 = false;
@@ -73,6 +80,7 @@ struct EncoderCaps {
     uint32_t maxHeight = 4096;
 };
 
+#ifdef _WIN32
 // Probes what the adapter's hardware encoder supports.
 EncoderCaps ProbeEncoderCaps(ID3D11Device* device, UINT vendorId);
 
@@ -86,7 +94,19 @@ std::unique_ptr<VideoEncoder> CreateMfEncoder();
 bool NvencProbe(ID3D11Device* device, EncoderCaps& caps);
 bool AmfProbe(ID3D11Device* device, EncoderCaps& caps);
 bool MfProbe(ID3D11Device* device, EncoderCaps& caps);
+#else
+// What this GPU can encode: FFmpeg on Linux (VAAPI, NVENC; software as the last resort),
+// VideoToolbox on macOS.
+EncoderCaps ProbeEncoderCaps(UINT vendorId);
+#endif
 
-const char* CodecName(rc::VideoCodec codec);
+inline const char* CodecName(rc::VideoCodec codec) {
+    switch (codec) {
+        case rc::VideoCodec::H264: return "H.264";
+        case rc::VideoCodec::HEVC: return "HEVC";
+        case rc::VideoCodec::AV1: return "AV1";
+    }
+    return "?";
+}
 
 }  // namespace rcs

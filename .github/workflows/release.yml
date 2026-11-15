@@ -13,7 +13,7 @@ name: Release
 # the macOS job hands its zip to the release job as an artifact. No Apple certificate is
 # needed: the streamer is a command-line program, and Screen Recording / Accessibility are
 # runtime TCC grants, not signing entitlements. Notarising a Gatekeeper-friendly download
-# would need a Developer ID certificate and notarytool credentials (see mac/README.md).
+# would need a Developer ID certificate and notarytool credentials (see pc/mac/README.md).
 on:
   workflow_dispatch:
     inputs:
@@ -44,7 +44,7 @@ jobs:
         run: |
           echo "::error::Releases are made from main, not $GITHUB_REF."
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Read the version
         run: echo "RC_VERSION=$(head -n 1 VERSION | tr -d '[:space:]')" >> "$GITHUB_ENV"
       - name: Build and package
@@ -65,7 +65,7 @@ jobs:
         if: github.ref != 'refs/heads/main'
         run: throw "Releases are made from main, not $env:GITHUB_REF."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Read the version and check the tag is new
         env:

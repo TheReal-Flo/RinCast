@@ -10,7 +10,9 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
 #include "../encode/color_convert.h"
+#endif
 #include "../encode/encoder.h"
 #include "rc/platform.h"
 #include "rc/protocol.h"
@@ -75,8 +77,10 @@ class VrStream {
     // their own: one frame converts while the one before it encodes. Run in sequence, a
     // frame took both times, and every frame the game finished meanwhile was replaced.
     struct EncodeJob {
+#ifdef _WIN32
         ComPtr<ID3D11Texture2D> yuv;  // kept alive here: the converter may move on to a new size
         DXGI_FORMAT format = DXGI_FORMAT_NV12;
+#endif
         uint32_t width = 0, height = 0;  // encoded size
         uint32_t srcWidth = 0, srcHeight = 0;
         bool halfRate = false;
@@ -125,7 +129,9 @@ class VrStream {
     std::condition_variable m_jobReady;
     std::condition_variable m_jobTaken;
     std::optional<EncodeJob> m_job;  // the newest converted frame, not yet taken by the encoder
+#ifdef _WIN32
     ID3D11Texture2D* m_encoding = nullptr;  // the YUV target the encoder is reading
+#endif
     // When the encoder started its frame and how long a frame usually takes it: the conversion
     // thread takes the game's next frame just in time for the encoder (see Run).
     std::atomic<int64_t> m_encodeStartNs{0}, m_encodeAvgNs{0};

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -68,6 +69,7 @@ class AudioStreamer {
     int m_bitrate = 128000;
     std::thread m_thread;
     std::atomic<bool> m_running{false};
+    std::shared_ptr<void> m_platform;  // what a platform keeps besides the thread (macOS: its capture)
 };
 
 class MicPlayer {

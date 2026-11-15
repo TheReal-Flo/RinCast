@@ -8,18 +8,39 @@
 // the streamer creates and names; producers open them by name, render both
 // eyes side by side, and mark the slot ready. Small scalar state uses a
 // seqlock so neither side ever blocks the other.
+//
+// On Linux the producer is the RinCast Monado runtime (docs/LINUX.md): the same layout in POSIX
+// shared memory, futex counters for the two events, and the frames as DMA-BUF images (passed
+// over a Unix socket, not named in here).
 #pragma once
-
-#include <windows.h>
 
 #include <cstdint>
 #include <cstring>
 
+#include "win_compat.h"
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/mman.h>
+#ifdef __linux__
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
+#include <time.h>
+#include <unistd.h>
+
+#include <climits>
+#endif
+
 namespace rcvr {
 
+#ifdef _WIN32
 inline constexpr wchar_t kSharedMemoryName[] = L"Local\\RinCastVRBridge.v1";
 inline constexpr wchar_t kFrameReadyEventName[] = L"Local\\RinCastVRFrameReady.v1";
 inline constexpr wchar_t kTrackingEventName[] = L"Local\\RinCastVRTracking.v1";
+#else
+inline constexpr char kSharedMemoryName[] = "/rincast-vr-bridge.v1";
+#endif
 inline constexpr uint32_t kMagic = 0x42564352;  // 'RCVB'
 inline constexpr uint32_t kVersion = 9;
 inline constexpr int kFrameSlots = 3;
@@ -156,6 +177,11 @@ struct Shared {
     // ---- written by the producer ----
     volatile LONG renderedEyeWidth;        // what the app actually renders an eye at (SteamVR: with its
     volatile LONG renderedEyeHeight;       // resolution setting applied), 0 = no frame yet
+#ifndef _WIN32
+    // Linux: the events, as counters a futex waits on (see Signal / WaitSignal below).
+    volatile LONG frameSignal;             // producer increments per published frame
+    volatile LONG trackingSignal;          // streamer increments per tracking sample
+#endif
 };
 
 #pragma pack(pop)
@@ -255,6 +281,7 @@ inline bool ReadHand(const Shared* s, int hand, HandSnapshot& out) {
     return false;
 }
 
+#ifdef _WIN32
 // Keyed-mutex acquire that also accepts ownership inherited from a crashed
 // process (WAIT_ABANDONED), which otherwise wedges the texture forever.
 template <typename KeyedMutex>
@@ -273,6 +300,40 @@ inline int64_t QpcNowNs() {
     QueryPerformanceCounter(&c);
     return (c.QuadPart / freq) * 1000000000LL + (c.QuadPart % freq) * 1000000000LL / freq;
 }
+#else
+// CLOCK_MONOTONIC, as rc::NowNs on Linux: both sides of the bridge and the streamer agree.
+inline int64_t QpcNowNs() {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return int64_t(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
+}
+
+#ifdef __linux__
+// The bridge's events: a counter bumped and woken, waited on with a futex (shared between
+// processes, so not FUTEX_PRIVATE).
+inline void Signal(volatile LONG* counter) {
+    __atomic_add_fetch(counter, 1, __ATOMIC_SEQ_CST);
+    syscall(SYS_futex, const_cast<LONG*>(counter), FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
+}
+// Waits until the counter moves on from `seen` or the timeout passes; returns the new value.
+inline LONG WaitSignal(volatile LONG* counter, LONG seen, DWORD timeoutMs) {
+    const LONG now = __atomic_load_n(counter, __ATOMIC_SEQ_CST);
+    if (now != seen) return now;
+    timespec ts{time_t(timeoutMs / 1000), long(timeoutMs % 1000) * 1000000L};
+    syscall(SYS_futex, const_cast<LONG*>(counter), FUTEX_WAIT, seen, &ts, nullptr, 0);
+    return __atomic_load_n(counter, __ATOMIC_SEQ_CST);
+}
+#else
+// Without a futex (macOS, where no VR producer runs yet): the counter alone, polled.
+inline void Signal(volatile LONG* counter) { __atomic_add_fetch(counter, 1, __ATOMIC_SEQ_CST); }
+inline LONG WaitSignal(volatile LONG* counter, LONG seen, DWORD timeoutMs) {
+    const int64_t end = QpcNowNs() + int64_t(timeoutMs) * 1000000;
+    LONG now;
+    while ((now = __atomic_load_n(counter, __ATOMIC_SEQ_CST)) == seen && QpcNowNs() < end) usleep(1000);
+    return now;
+}
+#endif
+#endif
 
 // Producer side helper: maps the bridge (returns nullptr if the streamer is
 // not running).
@@ -280,6 +341,7 @@ class BridgeClient {
    public:
     ~BridgeClient() { Close(); }
 
+#ifdef _WIN32
     bool Open() {
         if (m_shared) return true;
         m_mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, kSharedMemoryName);
@@ -317,6 +379,43 @@ class BridgeClient {
     void WaitTracking(DWORD timeoutMs) {
         if (m_trackingEvent) WaitForSingleObject(m_trackingEvent, timeoutMs);
     }
+#else
+    bool Open() {
+        if (m_shared) return true;
+        const int fd = shm_open(kSharedMemoryName, O_RDWR, 0);
+        if (fd < 0) return false;
+        void* p = mmap(nullptr, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        close(fd);
+        if (p == MAP_FAILED) return false;
+        m_shared = static_cast<Shared*>(p);
+        if (m_shared->magic != kMagic || m_shared->version != kVersion) {
+            Close();
+            return false;
+        }
+        m_trackingSeen = m_shared->trackingSignal;
+        return true;
+    }
+
+    void Close() {
+        if (m_shared) munmap(m_shared, sizeof(Shared));
+        m_shared = nullptr;
+    }
+
+    Shared* shared() const { return m_shared; }
+
+    bool StreamerAlive() const {
+        return m_shared && QpcNowNs() - m_shared->streamerHeartbeatNs < 2'000'000'000LL;
+    }
+
+    void SignalFrame() {
+        if (m_shared) Signal(&m_shared->frameSignal);
+    }
+
+    // Waits for a new tracking sample (or timeout).
+    void WaitTracking(DWORD timeoutMs) {
+        if (m_shared) m_trackingSeen = WaitSignal(&m_shared->trackingSignal, m_trackingSeen, timeoutMs);
+    }
+#endif
 
     // Claims a slot for writing: a free one, or the oldest ready one the
     // streamer hasn't picked up yet (newest frame wins). Returns -1 if all busy.
@@ -365,8 +464,15 @@ class BridgeClient {
             const int64_t waited = QpcNowNs() - start;
             if (waited > timeoutNs) return false;
             // Usually it's taken right away: spin briefly before giving up the CPU.
-            if (waited < 500'000) YieldProcessor();
-            else Sleep(1);
+            if (waited < 500'000) {
+                YieldProcessor();
+            } else {
+#ifdef _WIN32
+                Sleep(1);
+#else
+                usleep(1000);
+#endif
+            }
         }
         return true;
     }
@@ -386,9 +492,13 @@ class BridgeClient {
     }
 
    private:
+#ifdef _WIN32
     HANDLE m_mapping = nullptr;
     HANDLE m_frameReady = nullptr;
     HANDLE m_trackingEvent = nullptr;
+#else
+    LONG m_trackingSeen = 0;
+#endif
     Shared* m_shared = nullptr;
 };
 

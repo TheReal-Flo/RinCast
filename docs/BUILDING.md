@@ -268,13 +268,13 @@ folder with a universal binary (`arm64` + `x86_64`), `README.md`, `VERSION`,
 audio capture needs macOS 13+. For a plain build without the zip, use CMake directly:
 
 ```sh
-cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release \
+cmake -S pc/mac -B build-mac -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=12.3
 cmake --build build-mac --parallel
 ```
 
 The binary isn't code-signed or notarised: no Apple Developer certificate is needed
-to build it. See [mac/README.md](../mac/README.md) for the Gatekeeper workaround and
+to build it. See [pc/mac/README.md](../pc/mac/README.md) for the Gatekeeper workaround and
 the Screen Recording / Accessibility consents the user grants at runtime.
 
 ## Installing on a PC

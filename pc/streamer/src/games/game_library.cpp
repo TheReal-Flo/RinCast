@@ -1,6 +1,5 @@
 #include "game_library.h"
 
-#include <shellapi.h>
 
 #include <algorithm>
 #include <cctype>
@@ -122,8 +121,7 @@ bool GameLibrary::Launch(const std::string& id) {
     for (const auto& g : m_cache) {
         if (g.id == id) {
             RC_LOGI("Launching %s", g.name.c_str());
-            return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", Widen(g.launchUrl).c_str(), nullptr,
-                                                           nullptr, SW_SHOWNORMAL)) > 32;
+            return OpenExternal(g.launchUrl);
         }
     }
     return false;

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the native macOS streamer in mac/ and packs a versioned release zip.
+# Builds the macOS streamer (pc/mac: the shared streamer with its macOS platform parts) and
+# packs a versioned release zip.
 #
 #   scripts/build-mac.sh [--test] [--no-package] [--arch universal|arm64|x86_64]
 #                        [--config Release|Debug] [--build-dir DIR] [--out-dir DIR]
@@ -11,7 +12,7 @@
 #
 # No Apple Developer certificate or notarisation is needed to build: the streamer is
 # a plain command-line executable, and Screen Recording / Accessibility are runtime
-# TCC grants made by the user, not signing entitlements (see mac/README.md).
+# TCC grants made by the user, not signing entitlements (see pc/mac/README.md).
 #
 # CI and the release workflow call this without --test: hosted runners drop IPv6
 # link-local multicast, so the discovery test in the shared core suite can't pass
@@ -70,15 +71,15 @@ version=$(head -n 1 "$root/VERSION" | tr -d '[:space:]')
 echo "== RinCast $version: macOS streamer ($label, $config)"
 
 # 12.3 is when ScreenCaptureKit arrived. The macOS 13 audio APIs are guarded at
-# runtime in mac_capture.mm, so the binary still starts on Monterey (video only).
-cmake -S "$root/mac" -B "$build_dir" \
+# runtime in platform/mac/audio_mac.mm, so the binary still starts on Monterey (video only).
+cmake -S "$root/pc/mac" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE="$config" \
     "-DCMAKE_OSX_ARCHITECTURES=$arch_flags" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=12.3 \
     -DRINCAST_CORE_TESTS=ON
 cmake --build "$build_dir" --config "$config" --parallel
 
-bin="$build_dir/rincast-streamer-mac"
+bin="$build_dir/rincast-streamer"
 [[ -x $bin ]] || die "$bin was not built"
 if [[ $arch == universal ]]; then
     slices=$(lipo -info "$bin")
@@ -90,7 +91,7 @@ fi
 
 if ((tests)); then
     echo "== Core tests"
-    "$build_dir/shared/rincast-core-tests"
+    "$build_dir/rincast-core/rincast-core-tests"
 fi
 
 if ((!package)); then
@@ -102,8 +103,8 @@ fi
 stage="$build_dir/package"
 rm -rf "$stage"
 mkdir -p "$stage/RinCast"
-cp "$bin" "$stage/RinCast/rincast-streamer-mac"
-cp "$root/mac/README.md" "$stage/RinCast/README.md"
+cp "$bin" "$stage/RinCast/rincast-streamer"
+cp "$root/pc/mac/README.md" "$stage/RinCast/README.md"
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$root/VERSION" "$stage/RinCast/"
 
 mkdir -p "$out_dir"

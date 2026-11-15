@@ -73,7 +73,7 @@ bool SteamDriverPackagesPresent() {
            std::filesystem::exists(dir / L"SteamStreamingMicrophone.inf", ec);
 }
 
-int DownloadAndStartSteamSetup() {
+static int StartSteamSetup() {
     wchar_t temp[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, temp)) return int(GetLastError());
     const std::filesystem::path dir = std::filesystem::path(temp) / L"RinCast";
@@ -97,7 +97,7 @@ int DownloadAndStartSteamSetup() {
     return 0;
 }
 
-int InstallSteamDevices() {
+static int InstallDrivers() {
     if (!SteamDevicesSupported()) return ERROR_NOT_SUPPORTED;
     // No downloaded scripts, user-supplied paths or command interpolation. Resolve
     // the Steam service's shared driver directory inside the elevated process.
@@ -160,6 +160,29 @@ public static class SteamAudioInstaller {
     if (waited == WAIT_OBJECT_0) GetExitCodeProcess(sei.hProcess, &code);
     CloseHandle(sei.hProcess);
     return int(code);
+}
+
+SteamSetupResult DownloadAndStartSteamSetup() {
+    const int code = StartSteamSetup();
+    return {code,
+            code == 0                          ? "" :
+            code == int(TRUST_E_NOSIGNATURE)   ? "audio.steamUntrusted" :
+            code == ERROR_CANCELLED            ? "audio.steamCancelled" :
+                                                 "audio.steamDownloadFailed",
+            false};
+}
+
+SteamSetupResult InstallSteamDevices() {
+    const int code = InstallDrivers();
+    // "No devices" is what the page says if they don't appear after a clean install.
+    return {code,
+            code == ERROR_CANCELLED               ? "audio.installCancelled" :
+            code == ERROR_FILE_NOT_FOUND          ? "audio.installMissing" :
+            code == ERROR_NOT_SUPPORTED           ? "audio.installUnsupported" :
+            code == ERROR_SUCCESS_REBOOT_REQUIRED ? "audio.installReboot" :
+            code == 0                             ? "audio.installNoDevices" :
+                                                    "audio.installFailed",
+            code == 0 || code == ERROR_SUCCESS_REBOOT_REQUIRED};
 }
 
 }  // namespace rcs::audio

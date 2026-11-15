@@ -1,6 +1,5 @@
 #include "cloud_client.h"
 
-#include <winhttp.h>
 
 #include <cstring>
 
@@ -11,7 +10,9 @@
 #include "rc/platform.h"
 #include "rc/protocol.h"
 
+#ifdef _MSC_VER
 #pragma comment(lib, "winhttp.lib")
+#endif
 
 namespace rcs {
 
