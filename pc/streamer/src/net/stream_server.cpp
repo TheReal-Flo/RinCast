@@ -227,7 +227,7 @@ void StreamServer::HandleHello(const uint8_t* data, size_t size, const rc::NetAd
 
     // One headset at a time; the same device may reconnect and take over.
     if (m_session && m_session->DeviceId() != info.deviceId && now - m_session->LastReceiveNs() < 5'000'000'000LL) {
-        const std::string busyWith = m_session->DeviceName();
+        const std::string busyWith = m_session->DisplayName();
         lock.unlock();
         SendReject(from, "busy", "This PC is streaming to " + busyWith + ".");
         return;

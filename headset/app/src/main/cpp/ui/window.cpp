@@ -64,27 +64,32 @@ void WindowManager::PurgeRemoved() {
     }
 }
 
-Quat WindowManager::FaceTowards(const Vec3& position, const Vec3& target) {
-    // Window +Z faces the target; keep it upright, allow gentle pitch.
-    Vec3 f = position - target;
-    const float horizontal = std::sqrt(f.x * f.x + f.z * f.z);
-    const float pitch = std::atan2(f.y, std::max(horizontal, 0.01f));
-    const float clampedPitch = std::clamp(pitch, -0.6f, 0.6f);
-    f = Normalize(Vec3{f.x, std::tan(clampedPitch) * horizontal, f.z});
-    return LookRotation(f, {0, 1, 0});
+Quat WindowManager::FaceTowards(const Vec3& position, const Vec3& target, const Quat* headOrientation) {
+    // Window +Z faces the target, upright while that leaves it readable. A window right above or
+    // below the head - a user lying down, looking up at it - is turned flat instead, because an
+    // upright one is seen edge-on there; its up then comes from the head, so the text still reads
+    // the right way round.
+    const Vec3 f = Normalize(position - target);
+    Vec3 up{0, 1, 0};
+    if (std::fabs(f.y) > 0.9f) up = headOrientation ? headOrientation->Rotate({0, 1, 0}) : Vec3{0, 0, -1};
+    return LookRotation(f, up);
 }
 
 Pose WindowManager::PlaceInFront(const Pose& head, float distance, float yawOffsetDeg, float heightOffset,
                                  float pitchDeg) {
+    // Horizontally in front of a user sitting or standing, along the gaze when they look steeply
+    // up or down (lying down), so the window is where they are looking. Offsets follow the head's
+    // up, which is the world's while it is upright and "towards the feet" when lying.
     Vec3 fwd = head.Forward();
-    fwd.y = 0;
+    const bool steep = std::fabs(fwd.y) > 0.5f;
+    if (!steep) fwd.y = 0;
     fwd = Normalize(fwd);
-    const Quat yaw = Quat::Yaw(-yawOffsetDeg * kPi / 180.f);
+    const Vec3 up = steep ? head.orientation.Rotate({0, 1, 0}) : Vec3{0, 1, 0};
+    const Quat yaw = Quat::AxisAngle(up, -yawOffsetDeg * kPi / 180.f);
     const Vec3 dir = yaw.Rotate(fwd);
     const float pitch = pitchDeg * kPi / 180.f;
-    Vec3 pos = head.position + dir * (distance * std::cos(pitch));
-    pos.y = head.position.y + heightOffset + distance * std::sin(pitch);
-    return {FaceTowards(pos, head.position), pos};
+    const Vec3 pos = head.position + dir * (distance * std::cos(pitch)) + up * (heightOffset + distance * std::sin(pitch));
+    return {FaceTowards(pos, head.position, &head.orientation), pos};
 }
 
 // Ray against a window's content (flat or cylindrical) and chrome.
@@ -182,10 +187,10 @@ void WindowManager::Update(const HandRay hands[2], const Pose& head, float dt, f
             m_drag.distance = std::clamp(m_drag.distance + r.push * dt * 1.6f, 0.35f, 8.f);
             const Vec3 grab = r.origin + r.dir * m_drag.distance;
             const Quat rolled = Quat::AxisAngle({0, 0, 1}, w.roll);
-            const Quat facing = FaceTowards(grab, head.position) * rolled;
+            const Quat facing = FaceTowards(grab, head.position, &head.orientation) * rolled;
             const Vec3 target = grab + facing.Rotate(m_drag.offsetLocal);
             w.pose.position = Damp(w.pose.position, target, 22.f, dt);
-            w.pose.orientation = Slerp(w.pose.orientation, FaceTowards(w.pose.position, head.position) * rolled, Clamp01(dt * 18.f));
+            w.pose.orientation = Slerp(w.pose.orientation, FaceTowards(w.pose.position, head.position, &head.orientation) * rolled, Clamp01(dt * 18.f));
         } else if (m_drag.zone == HitZone::Tilt) {
             // Like a steering wheel, still facing you: the corner held follows the ray. Within 3
             // degrees of level it snaps level (the keyboard's tilt handle).
@@ -350,19 +355,38 @@ void WindowManager::RenderCanvases(float dt, float time) {
         if (w.appear < 0.01f && !w.visible) continue;
         if (w.canvasLayer) continue;
         if (w.showChrome) RenderChrome(w, m_chromeHover[w.id]);
+        w.canvasRedrawn = false;
         if (w.kind != WindowKind::Ui || !w.build) continue;
         const int rw = int(w.canvasW * w.rtScale), rh = int(w.canvasH * w.rtScale);
-        if (w.rt.color.width != rw || w.rt.color.height != rh) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
+        const bool resized = w.rt.color.width != rw || w.rt.color.height != rh;
+        // Drawn every frame only while it can change from one to the next: pointed at (hover,
+        // clicks, scrolling, typing), a moment after, while something on it animates (needsRedraw
+        // from the last drawing) and while it fades in or out. Otherwise ten times a second, soon
+        // enough for news from the PC. All of them every frame, supersampled and mipmapped, kept
+        // the GPU busy for nothing.
+        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
+        const auto active = [](const PointerState& s) { return s.hovering || s.down || s.pressed || s.released; };
+        const bool pointed = active(p) || (w.twoHands && (active(w.hands[0]) || active(w.hands[1])));
+        if (pointed) w.lastPointedTime = time;
+        const bool lively = time - w.lastPointedTime < 0.2f || w.appear < 0.995f || !w.visible;
+        w.pendingDt += dt;
+        if (!resized && !w.needsRedraw && !lively && time - w.lastRedrawTime < 0.1f) continue;
+        const float drawDt = std::min(w.pendingDt, 0.25f);
+        w.pendingDt = 0;
+        w.lastRedrawTime = time;
+        w.needsRedraw = false;
+        w.canvasRedrawn = true;
+        if (resized) w.rt.Create(rw, rh, GL_SRGB8_ALPHA8, false, true);
         glBindFramebuffer(GL_FRAMEBUFFER, w.rt.fbo);
         glClearColor(0, 0, 0, 0);
         glViewport(0, 0, rw, rh);
         glClear(GL_COLOR_BUFFER_BIT);
         // Widgets work in logical px; the renderer supersamples by rtScale.
         m_r->Begin(rw, rh, w.rtScale);
-        const PointerState p = m_pointers.count(w.id) ? m_pointers[w.id] : PointerState{};
-        m_ui->Begin(w.id, p, dt, time);
+        m_ui->Begin(w.id, p, drawDt, time);
         w.build(*m_ui, Rect{0, 0, float(w.canvasW), float(w.canvasH)});
         m_ui->End();
+        w.needsRedraw = m_ui->WantsRedraw();  // a spinner, a highlight still fading
         m_r->End();
         glBindTexture(GL_TEXTURE_2D, w.rt.color.id);
         glGenerateMipmap(GL_TEXTURE_2D);

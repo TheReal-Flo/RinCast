@@ -66,6 +66,7 @@ class SceneRenderer {
     GLuint m_motionTexture = 0;
     int m_motionWidth = 0, m_motionHeight = 0;
     bool m_upscalerReady = false;
+    bool m_rawSrgbWrites = false;  // GL_EXT_sRGB_write_control: video goes into sRGB images as it is
     GLuint m_gsrTexture = 0, m_gsrFbo = 0;
     int m_gsrWidth = 0, m_gsrHeight = 0;
     GLuint m_gridVao = 0, m_gridVbo = 0;

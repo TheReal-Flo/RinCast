@@ -26,6 +26,8 @@ std::string SystemProperty(const char* name) {
 std::vector<const char*> Headset::Extensions() {
     return {
         // Quest
+        XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME,
+        XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME,
         XR_FB_BODY_TRACKING_EXTENSION_NAME,
         XR_META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
         XR_META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,

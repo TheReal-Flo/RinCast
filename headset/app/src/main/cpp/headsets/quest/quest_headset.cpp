@@ -26,7 +26,11 @@ class QuestHeadset : public Headset {
     }
 
     std::vector<ControllerProfile> Controllers() const override {
-        return {{"/interaction_profiles/oculus/touch_controller", nullptr, true, true}};
+        return {
+            {"/interaction_profiles/facebook/touch_controller_pro", XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME, true, true},
+            {"/interaction_profiles/meta/touch_controller_plus", XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME, true, true},
+            {"/interaction_profiles/oculus/touch_controller", nullptr, true, true},
+        };
     }
 
     bool BodySupported(const XrContext& xr) const override { return QuestBody::Supported(xr); }

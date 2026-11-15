@@ -283,6 +283,29 @@ struct GazePayload {
 };
 static_assert(sizeof(GazePayload) == 28);
 
+// Optional tracking extension, after TrackingPayload, GazePayload and BatteryPayload. Old peers
+// can ignore it; old packets without it retain model-based controller aiming.
+struct ControllerAimPayload {
+    uint32_t validMask;  // bit per controller; poses share the tracking prediction time
+    Pose poses[2];
+};
+static_assert(sizeof(ControllerAimPayload) == 60);
+inline constexpr uint32_t kBatteryMagic = 0x54424352;  // RCBT
+enum BatteryFlags : uint32_t {
+    kBatteryValid = 1 << 0,
+    kBatteryChargingKnown = 1 << 1,
+    kBatteryCharging = 1 << 2,
+};
+struct BatteryState {
+    float level;  // 0..1; meaningful only with kBatteryValid
+    uint32_t flags;
+};
+struct BatteryPayload {
+    uint32_t magic;  // kBatteryMagic
+    BatteryState devices[3];  // headset, left physical controller, right physical controller
+};
+static_assert(sizeof(BatteryPayload) == 28);
+
 // --- Tracked hands in games -------------------------------------------------
 inline constexpr int kHandJointCount = 26;  // XR_EXT_hand_tracking
 inline constexpr int kHandBoneCount = 31;   // SteamVR's hand skeleton
@@ -369,6 +392,7 @@ constexpr uint32_t kAudioSampleRate = 48000;
 namespace msg {
 // headset -> PC
 inline constexpr const char* kClientInfo = "client.info";           // device caps, display, codecs
+inline constexpr const char* kControllerProfiles = "controller.profiles";
 inline constexpr const char* kRequestSettings = "settings.get";
 inline constexpr const char* kUpdateSettings = "settings.set";
 inline constexpr const char* kStartDesktop = "desktop.start";
@@ -385,7 +409,9 @@ inline constexpr const char* kText = "input.text";
 inline constexpr const char* kGamepad = "input.gamepad";
 inline constexpr const char* kRecenter = "vr.recenter";
 inline constexpr const char* kStats = "stats.client";
-inline constexpr const char* kVrPhase = "vr.phase";                 // "shiftNs": move the VR frame timing, + = later
+// "shiftNs": move the VR frame timing, + = later. Or "slipNs": move it later by that much,
+// spread over time (kVrPhaseSlipRate), for a PC whose server.info says "vrPhaseSlip".
+inline constexpr const char* kVrPhase = "vr.phase";
 // PC -> headset
 inline constexpr const char* kServerInfo = "server.info";
 inline constexpr const char* kSettings = "settings";
@@ -395,6 +421,16 @@ inline constexpr const char* kVrState = "vr.state";                 // idle / la
 inline constexpr const char* kStreamConfig = "stream.config";       // codec + resolution per stream
 inline constexpr const char* kServerStats = "stats.server";
 inline constexpr const char* kNotice = "notice";
+// Once a second while SteamVR takes poses: how long tracking packets waited on the PC before
+// the driver picked one up for a frame. "waitNs" for most of them (the circular average over
+// one vsync period), "lowNs" for the 2% that waited least (below 0: missed it), "periodNs".
+// A headset may hold its poses back by up to that much less a margin, and sample them later.
+inline constexpr const char* kVrPoseWait = "vr.poseWait";
 }  // namespace msg
+
+// How fast the PC moves its VR frame timing for a "slipNs": 3% of the time that passes, so a
+// whole frame at 120 Hz takes 280 ms and the game runs 3% slow for that long. The headset
+// waits that out before it steers the timing again.
+inline constexpr double kVrPhaseSlipRate = 0.03;
 
 }  // namespace rc

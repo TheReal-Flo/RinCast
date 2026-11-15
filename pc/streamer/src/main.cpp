@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <wrl.h>
 
 #include <memory>
@@ -46,6 +47,38 @@ void ApplyWindowStyle(HWND hwnd) {
     DwmSetWindowAttribute(hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &black, sizeof(black));
     int corner = 2;  // DWMWCP_ROUND
     DwmSetWindowAttribute(hwnd, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &corner, sizeof(corner));
+}
+
+// The native folder dialog, opened at `start` when that folder exists. "" = cancelled.
+std::string PickFolderDialog(HWND owner, const std::string& start) {
+    std::string picked;
+    IFileDialog* dialog = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+        return picked;
+    DWORD options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    const std::filesystem::path begin = Widen(start);
+    if (!start.empty() && std::filesystem::exists(begin)) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(begin.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
+            dialog->SetFolder(item);
+            item->Release();
+        }
+    }
+    if (SUCCEEDED(dialog->Show(owner))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dialog->GetResult(&item))) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                picked = Narrow(path);
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+    dialog->Release();
+    return picked;
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -328,6 +361,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
         if (!PostMessageW(g_hwnd, WM_APP_UI, 0, reinterpret_cast<LPARAM>(text))) delete text;
     });
     App::Get().ShowWindowRequest = [] { PostMessageW(g_hwnd, WM_APP_SHOW, 0, 0); };
+    App::Get().FolderPicker = [](const std::string& start) { return PickFolderDialog(g_hwnd, start); };
 
     const bool minimized = cmdLine && wcsstr(cmdLine, L"--minimized") != nullptr;
     InitWebView(g_hwnd);

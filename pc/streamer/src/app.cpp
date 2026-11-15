@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "audio/audio.h"
+#include "audio/steam_devices.h"
 #include "rc/platform.h"
 #include "rc/project.h"
 #include "rc/protocol.h"
@@ -73,6 +74,7 @@ bool App::Init() {
 
     timeBeginPeriod(1);
     SettingsStore::Get().Load();
+    ScanScreenshots();
     const Settings settings = SettingsStore::Get().Snapshot();
     SetStartWithWindows(settings.startWithWindows);
     // Default devices a killed streamer left switched to the headset's.
@@ -100,8 +102,8 @@ bool App::Init() {
     m_server.SetApprovalCallback([this](const HelloInfo& hello) {
         json prompt{{"type", "approval"},
                     {"deviceId", hello.deviceId},
-                    {"deviceName", hello.deviceName},
-                    {"model", hello.model},
+                    {"deviceName", rcs::HeadsetName(hello.model).empty() ? hello.deviceName : rcs::HeadsetName(hello.model)},
+                    {"model", rcs::HeadsetName(hello.model).empty() ? hello.model : rcs::HeadsetName(hello.model)},
                     {"address", hello.address.IpString()}};
         {
             std::lock_guard lock(m_uiMutex);
@@ -115,6 +117,7 @@ bool App::Init() {
         return false;
     }
     m_cloud.Start(&m_server);
+    steamvr::WatchForcedDriver();
 
     if (settings.autoRegisterSteamVrDriver && steamvr::SteamVrPath()) {
         RunAsync([] { steamvr::RegisterDriver(); });
@@ -165,19 +168,19 @@ void App::OnSessionStarted(ClientSession* session) {
         for (auto& d : s.trustedDevices) {
             if (d.id == session->DeviceId()) {
                 d.lastSeen = now;
-                d.name = session->DeviceName();
+                d.name = session->DisplayName();
                 if (!session->DeviceKey().empty()) d.publicKey = session->DeviceKey();
                 return;
             }
         }
         // Approved locally (or via the account): remember it.
-        s.trustedDevices.push_back({session->DeviceId(), session->DeviceName(), session->Model(), now, now, session->DeviceKey()});
+        s.trustedDevices.push_back({session->DeviceId(), session->DisplayName(), session->Model(), now, now, session->DeviceKey()});
     });
     {
         std::lock_guard lock(m_uiMutex);
         m_pendingApproval = nullptr;
     }
-    PushUi({{"type", "session"}, {"connected", true}, {"deviceName", session->DeviceName()}});
+    PushUi({{"type", "session"}, {"connected", true}, {"deviceName", session->DisplayName()}});
     if (SettingsStore::Get().Snapshot().preventSleep)
         SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
 }
@@ -191,6 +194,50 @@ void App::OnSessionEnded(ClientSession* session, const std::string& reason) {
 
 void App::OnVrStateChanged(const std::string& state, const std::string& producer, const std::string& app) {
     PushUi({{"type", "vrState"}, {"state", state}, {"producer", producer}, {"app", app}});
+}
+
+json App::ScreenshotsJson() const {
+    std::lock_guard lock(m_screenshotsMutex);
+    json items = json::array();
+    for (const auto& e : m_screenshots) items.push_back({{"name", e.name}, {"path", e.path}});
+    return items;
+}
+
+// What the folder already holds, newest first: the card survives streamer restarts.
+void App::ScanScreenshots() {
+    namespace fs = std::filesystem;
+    const std::string dir = SettingsStore::Get().Snapshot().screenshotDir;
+    std::error_code ec;
+    if (dir.empty() || !fs::exists(dir, ec)) return;
+    std::vector<ScreenshotEntry> found;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        if (!e.is_regular_file(ec)) continue;
+        std::string ext = e.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") continue;
+        found.push_back({e.path().filename().string(), e.path().string(),
+                         int64_t(fs::last_write_time(e.path(), ec).time_since_epoch().count())});
+    }
+    std::sort(found.begin(), found.end(), [](const ScreenshotEntry& a, const ScreenshotEntry& b) { return a.when > b.when; });
+    if (found.size() > 8) found.resize(8);
+    std::lock_guard lock(m_screenshotsMutex);
+    m_screenshots = std::move(found);
+}
+
+void App::AddScreenshot(const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string ext = fs::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") return;
+    ScreenshotEntry e{fs::path(path).filename().string(), path,
+                      int64_t(fs::last_write_time(path, ec).time_since_epoch().count())};
+    {
+        std::lock_guard lock(m_screenshotsMutex);
+        m_screenshots.insert(m_screenshots.begin(), std::move(e));
+        while (m_screenshots.size() > 8) m_screenshots.pop_back();
+    }
+    PushUi({{"type", "screenshots"}, {"items", ScreenshotsJson()}});
 }
 
 json App::StateJson() {
@@ -208,6 +255,7 @@ json App::StateJson() {
         {"downloadUrl", rc::kDownloadUrl},
         {"downloadSite", rc::kDownloadSite},
         {"settings", s.ToJson(true)},
+        {"screenshots", ScreenshotsJson()},
         {"cloud", m_cloud.StatusJson()},
         {"system",
          {{"gpu", m_gpu.name},
@@ -223,7 +271,8 @@ json App::StateJson() {
             {"active", Narrow(openxr::ActiveRuntime())}}},
           {"audioDriver",
            {{"speaker", drv.speaker}, {"microphone", drv.microphone}, {"microphoneFeed", drv.microphoneFeed},
-            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed}}},
+            {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed},
+                       {"packages", audio::SteamDriverPackagesPresent()}, {"supported", audio::SteamDevicesSupported()}}},
             {"active", {{"speaker", route.speakerSet}, {"microphone", route.micSet}}}}},
           {"addresses", m_cloud.LanAddresses()},
           {"vpnAddresses", vpnAddresses},
@@ -300,6 +349,8 @@ std::string App::ApplySettingSideEffects(const json& changed) {
         SettingsStore::Get().Update([](Settings& s) { s.startWithWindows = !s.startWithWindows; });
     }
     if (changed.contains("pcName") || changed.contains("allowRemote") || changed.contains("cloudUrl")) m_cloud.Wake();
+    if (changed.contains("controllerMode")) m_bridge.SetTouchControllers(SettingsStore::Get().Snapshot().controllerMode == "touch");
+    if (changed.contains("screenshotDir")) ScanScreenshots();
     if (auto session = m_server.ActiveSession()) session->OnSettingsChanged();
     return error;
 }
@@ -370,6 +421,47 @@ void App::HandleUiMessage(const std::string& text) {
             const std::string err = m_cloud.ApproveHeadsetCode(code);
             reply({{"ok", err.empty()}, {"error", err}});
         });
+    } else if (type == "installSteamAudio" || type == "installSteam") {
+        // Steam's devices and Steam itself come under Valve's terms, which the user
+        // accepts on the Audio page first. Not only a disabled button: checked here too.
+        if (!m.value("acceptSteamTerms", false)) {
+            reply({{"ok", false}, {"error", "audio.termsRequired"}});
+            return;
+        }
+        if (type == "installSteam") {
+            RunAsync([=] {
+                const int code = audio::DownloadAndStartSteamSetup();
+                const char* error = code == 0 ? "" :
+                    code == int(TRUST_E_NOSIGNATURE) ? "audio.steamUntrusted" :
+                    code == ERROR_CANCELLED ? "audio.steamCancelled" : "audio.steamDownloadFailed";
+                reply({{"ok", code == 0}, {"error", error}, {"code", code}});
+            });
+            return;
+        }
+        if (m_installingSteamAudio.exchange(true)) {
+            reply({{"ok", false}, {"error", "audio.installBusy"}});
+            return;
+        }
+        RunAsync([=, this] {
+            const int code = audio::InstallSteamDevices();
+            bool ready = false;
+            if (code == 0 || code == ERROR_SUCCESS_REBOOT_REQUIRED) {
+                // Device installation can finish before WASAPI publishes the endpoints.
+                for (int i = 0; i < 20; ++i) {
+                    const auto status = audio::QueryDriver(audio::DeviceSet::Steam);
+                    ready = status.speaker && status.microphone && status.microphoneFeed;
+                    if (ready) break;
+                    Sleep(500);
+                }
+            }
+            const char* error = code == ERROR_CANCELLED ? "audio.installCancelled" :
+                code == ERROR_FILE_NOT_FOUND ? "audio.installMissing" :
+                code == ERROR_NOT_SUPPORTED ? "audio.installUnsupported" :
+                code == ERROR_SUCCESS_REBOOT_REQUIRED ? "audio.installReboot" :
+                code == 0 ? "audio.installNoDevices" : "audio.installFailed";
+            m_installingSteamAudio = false;
+            reply({{"ok", ready}, {"error", error}, {"code", code}});
+        });
     } else if (type == "registerSteamVrDriver") {
         RunAsync([=] { reply({{"ok", steamvr::RegisterDriver()}}); });
     } else if (type == "setOpenXrRuntime") {
@@ -420,6 +512,22 @@ void App::HandleUiMessage(const std::string& text) {
         const std::string url = m.value("url", "");
         if (url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0)
             ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (type == "openPath") {
+        const std::string path = m.value("path", "");
+        std::error_code ec;
+        if (!path.empty() && std::filesystem::exists(path, ec))
+            ShellExecuteW(nullptr, L"open", Widen(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (type == "openScreenshots") {
+        // The folder may be empty (the default) or not made yet; show it either way.
+        std::string dir = SettingsStore::Get().Snapshot().screenshotDir;
+        if (dir.empty()) dir = DefaultScreenshotDir();
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        ShellExecuteW(nullptr, L"open", Widen(dir).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (type == "pickFolder") {
+        // On the UI thread: the dialog is modal to the main window and pumps its own
+        // messages, so the stream and the UI underneath it keep going.
+        reply({{"ok", true}, {"path", FolderPicker ? FolderPicker(m.value("start", "")) : ""}});
     }
 }
 
