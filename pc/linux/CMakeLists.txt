@@ -23,6 +23,9 @@ add_subdirectory(${RC_ROOT}/shared ${CMAKE_BINARY_DIR}/rincast-core)
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
+# Every file in platform/linux is Linux's part.
+file(GLOB RC_LINUX_SOURCES CONFIGURE_DEPENDS ${RC_LINUX}/*.cpp)
+
 add_executable(rincast-streamer
   # Shared with Windows
   ${RC_SRC}/app.cpp
@@ -34,6 +37,7 @@ add_executable(rincast-streamer
   ${RC_SRC}/stream/video_sender.cpp
   ${RC_SRC}/stream/desktop_stream_common.cpp
   ${RC_SRC}/vr/vr_bridge_host.cpp
+  ${RC_SRC}/vr/monado.cpp
   ${RC_SRC}/cloud/cloud_client.cpp
   ${RC_SRC}/games/game_library.cpp
   # Linux and macOS
@@ -41,28 +45,26 @@ add_executable(rincast-streamer
   ${RC_POSIX}/util_posix.cpp
   ${RC_POSIX}/http_curl.cpp
   ${RC_POSIX}/system_posix.cpp
-  ${RC_POSIX}/vr_stream_unavailable.cpp
-  ${RC_POSIX}/audio_devices_none.cpp
   # Linux
-  ${RC_LINUX}/util_linux.cpp
-  ${RC_LINUX}/gpu_linux.cpp
-  ${RC_LINUX}/monitors_linux.cpp
-  ${RC_LINUX}/desktop_stream_linux.cpp
-  ${RC_LINUX}/input_linux.cpp
-  ${RC_LINUX}/audio_linux.cpp
-  ${RC_LINUX}/encoder_linux.cpp
+  ${RC_LINUX_SOURCES}
 )
 target_include_directories(rincast-streamer PRIVATE ${RC_SRC} ${RC_ROOT}/pc/common ${RC_TP})
-target_link_libraries(rincast-streamer PRIVATE rincast-core Threads::Threads)
+target_link_libraries(rincast-streamer PRIVATE rincast-core Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(rincast-streamer PRIVATE -Wall -Wno-unused-parameter)
 
-# Optional until the packages in docs/LINUX.md are installed: without them the streamer still
-# builds, and says in its log what it can't do.
-pkg_check_modules(CURL IMPORTED_TARGET libcurl)
-if(CURL_FOUND)
-  target_compile_definitions(rincast-streamer PRIVATE RINCAST_HAVE_CURL=1)
-  target_link_libraries(rincast-streamer PRIVATE PkgConfig::CURL)
-endif()
+# The packages in docs/LINUX.md.
+pkg_check_modules(RC_LINUX_DEPS REQUIRED IMPORTED_TARGET
+  libcurl
+  libavcodec libavutil libavfilter libswscale libva libva-drm libdrm
+  x11 xext xfixes xtst xrandr xdamage
+  gio-2.0 gio-unix-2.0 libpipewire-0.3 libei-1.0 wayland-client libpulse
+  gtk+-3.0 webkit2gtk-4.1 ayatana-appindicator3-0.1
+  vulkan
+)
+# RINCAST_GUI_MAIN: main() is the GTK window's (main_gtk.cpp), which falls back to the terminal
+# front end (main_terminal.cpp's RunInTerminal) without a display.
+target_compile_definitions(rincast-streamer PRIVATE RINCAST_HAVE_CURL=1 RINCAST_GUI_MAIN=1)
+target_link_libraries(rincast-streamer PRIVATE PkgConfig::RC_LINUX_DEPS)
 
 # The web UI next to the executable, as on Windows.
 add_custom_command(TARGET rincast-streamer POST_BUILD

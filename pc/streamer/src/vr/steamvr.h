@@ -36,7 +36,11 @@ std::wstring ActiveRuntime();
 bool IsRinCastAvailable();  // public builds don't include RinCast XR
 bool IsRinCastActive();
 bool IsSteamVrActive();
-// Requires elevation (UAC prompt). target: "rincast" | "steamvr"
+// RinCast's Monado service (vr/monado.h) is there, and is the active runtime.
+bool IsMonadoAvailable();
+bool IsMonadoActive();
+// target: "rincast" | "steamvr" | "monado". Windows asks for elevation (UAC prompt); Linux sets
+// the user's own active runtime (~/.config/openxr/1/active_runtime.json).
 bool SetActiveRuntime(const std::string& target);
 
 }  // namespace rcs::openxr

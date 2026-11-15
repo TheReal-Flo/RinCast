@@ -171,6 +171,7 @@ const STRINGS = {
     "vr.driver": "RinCast driver",
     "vr.added": "Added",
     "vr.notAdded": "Not added yet",
+    "vr.monadoHint": "Monado is the OpenXR runtime RinCast brings along. RinCast starts it when your headset enters VR.",
 
     "devices.allowed": "Always allowed",
     "devices.new": "New headsets",
@@ -496,6 +497,7 @@ const STRINGS = {
     "vr.driver": "RinCast 驱动",
     "vr.added": "已添加",
     "vr.notAdded": "尚未添加",
+    "vr.monadoHint": "Monado 是 RinCast 自带的 OpenXR 运行时。头显进入 VR 时，RinCast 会启动它。",
 
     "devices.allowed": "始终允许",
     "devices.new": "新头显",
@@ -821,6 +823,7 @@ const STRINGS = {
     "vr.driver": "RinCast 驅動程式",
     "vr.added": "已新增",
     "vr.notAdded": "尚未新增",
+    "vr.monadoHint": "Monado 是 RinCast 內建的 OpenXR 執行環境。頭戴裝置進入 VR 時，RinCast 會啟動它。",
 
     "devices.allowed": "一律允許",
     "devices.new": "新頭戴裝置",
@@ -1146,6 +1149,7 @@ const STRINGS = {
     "vr.driver": "RinCast-Treiber",
     "vr.added": "Hinzugefügt",
     "vr.notAdded": "Noch nicht hinzugefügt",
+    "vr.monadoHint": "Monado ist die OpenXR-Laufzeit, die RinCast mitbringt. RinCast startet sie, wenn dein Headset in VR wechselt.",
 
     "devices.allowed": "Immer erlaubt",
     "devices.new": "Neue Headsets",
@@ -1471,6 +1475,7 @@ const STRINGS = {
     "vr.driver": "Driver de RinCast",
     "vr.added": "Añadido",
     "vr.notAdded": "Aún sin añadir",
+    "vr.monadoHint": "Monado es el runtime de OpenXR que incluye RinCast. RinCast lo inicia cuando tu visor entra en VR.",
 
     "devices.allowed": "Siempre permitidos",
     "devices.new": "Cascos nuevos",
@@ -1796,6 +1801,7 @@ const STRINGS = {
     "vr.driver": "Pilote RinCast",
     "vr.added": "Ajouté",
     "vr.notAdded": "Pas encore ajouté",
+    "vr.monadoHint": "Monado est le runtime OpenXR fourni avec RinCast. RinCast le démarre quand votre casque passe en VR.",
 
     "devices.allowed": "Toujours autorisés",
     "devices.new": "Nouveaux casques",
@@ -2121,6 +2127,7 @@ const STRINGS = {
     "vr.driver": "RinCast ドライバー",
     "vr.added": "追加済み",
     "vr.notAdded": "未追加",
+    "vr.monadoHint": "Monado は RinCast に付属する OpenXR ランタイムです。ヘッドセットが VR に入ると RinCast が起動します。",
 
     "devices.allowed": "常に許可",
     "devices.new": "新しいヘッドセット",

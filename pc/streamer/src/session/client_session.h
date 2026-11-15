@@ -112,6 +112,8 @@ class ClientSession : public std::enable_shared_from_this<ClientSession> {
     void StopVr();
     void RestartVr();
     void LaunchSteamVr();
+    // The VR runtime is RinCast's Monado service (Linux; on Windows when chosen): start it.
+    void LaunchMonado();
     void UpdateAudio();
     void ApplyClientInfo(const json& m);
     void MeasurePoseWait(int64_t receivedNs);

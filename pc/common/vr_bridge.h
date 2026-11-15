@@ -1,6 +1,7 @@
 // Shared-memory bridge between the RinCast Streamer and the VR producers that
-// run inside other processes: the SteamVR driver (vrserver.exe) and the
-// RinCast OpenXR runtime (inside the game).
+// run inside other processes: the SteamVR driver (vrserver.exe), the
+// RinCast OpenXR runtime (inside the game) and RinCast's Monado service
+// (pc/monado, Windows and Linux).
 //
 //  Streamer  --(config, tracking, haptics ack)-->  shared memory  <--(frames, haptics)--  driver/runtime
 //
@@ -9,9 +10,10 @@
 // eyes side by side, and mark the slot ready. Small scalar state uses a
 // seqlock so neither side ever blocks the other.
 //
-// On Linux the producer is the RinCast Monado runtime (docs/LINUX.md): the same layout in POSIX
-// shared memory, futex counters for the two events, and the frames as DMA-BUF images (passed
-// over a Unix socket, not named in here).
+// On Linux the producer is RinCast's Monado service (docs/LINUX.md): the same layout in POSIX
+// shared memory, futex counters for the two events, and the frame images as Vulkan memory the
+// streamer allocates and passes over a Unix socket (vr_bridge_images.h). On Windows Monado
+// opens the same D3D11 textures as the SteamVR driver, from Vulkan.
 #pragma once
 
 #include <cstdint>
@@ -48,7 +50,7 @@ inline constexpr int kHapticsRing = 32;
 inline constexpr int kBodyTrackers = 10;  // rc::kBodyTrackerCount
 inline constexpr int kHandBones = 31;     // rc::kHandBoneCount
 
-enum class ProducerKind : uint32_t { None = 0, SteamVR = 1, OpenXR = 2 };
+enum class ProducerKind : uint32_t { None = 0, SteamVR = 1, OpenXR = 2, Monado = 3 };
 
 enum SlotState : LONG { kSlotFree = 0, kSlotWriting = 1, kSlotReady = 2, kSlotReading = 3 };
 
@@ -181,6 +183,10 @@ struct Shared {
     // Linux: the events, as counters a futex waits on (see Signal / WaitSignal below).
     volatile LONG frameSignal;             // producer increments per published frame
     volatile LONG trackingSignal;          // streamer increments per tracking sample
+    // The frame images (vr_bridge_images.h): which set is current, and the GPU they live on,
+    // which the producer renders with too.
+    volatile LONG imageGeneration;         // bumped whenever the streamer makes new images
+    uint8_t deviceUuid[16];                // VkPhysicalDeviceIDProperties::deviceUUID
 #endif
 };
 

@@ -33,6 +33,26 @@ jobs:
       - name: Controller resource checks
         run: python scripts/validate-controller-resources.py
 
+  monado-windows:
+    name: Monado (Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      # vcpkg builds Monado's dependencies (Eigen, glslang, the Vulkan loader); its binary cache
+      # keeps that to the first run.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\vcpkg-cache
+          key: vcpkg-monado-${{ hashFiles('pc/monado/vcpkg.json') }}
+      - name: Build
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}\vcpkg-cache,readwrite
+        run: |
+          New-Item -ItemType Directory -Force "${{ runner.temp }}\vcpkg-cache" | Out-Null
+          cmake -S pc\monado -B build\monado -G "Visual Studio 17 2022" -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build\monado --config Release --parallel --target rincast-monado
+
   audio-driver:
     name: Audio driver
     runs-on: windows-2022
@@ -83,19 +103,27 @@ jobs:
           ./gradlew assembleDebug --console=plain
 
   linux:
-    name: Linux streamer (shared layer)
+    name: Linux streamer
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      # The session, server, settings and account code the Windows streamer shares with Linux and
-      # macOS, built with the Linux platform parts (docs/LINUX.md): a change that only compiles on
-      # Windows fails here, not later on someone's Linux PC or Mac.
+      # The Linux streamer (docs/LINUX.md): the session, server, settings and account code the
+      # Windows streamer shares with Linux and macOS, with the Linux platform parts. A change that
+      # only compiles on Windows fails here, not later on someone's Linux PC or Mac.
       - name: Install the build tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config libcurl4-openssl-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config             libcurl4-openssl-dev libavcodec-dev libavutil-dev libavfilter-dev libswscale-dev libva-dev libdrm-dev             libx11-dev libxext-dev libxfixes-dev libxtst-dev libxrandr-dev libxdamage-dev             libglib2.0-dev libpipewire-0.3-dev libei-dev libwayland-dev libpulse-dev             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libvulkan-dev \
+            libeigen3-dev libudev-dev glslang-tools python3
       - name: Build
         run: |
           cmake -S pc/linux -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/linux
+      # RinCast's Monado service and OpenXR runtime (pc/monado), Linux's PC VR.
+      - name: Build Monado
+        run: |
+          cmake -S pc/monado -B build/monado -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/monado --target rincast-monado
 
   macos:
     name: macOS streamer

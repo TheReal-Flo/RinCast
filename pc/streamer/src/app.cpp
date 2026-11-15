@@ -19,6 +19,7 @@
 #include "session/client_session.h"
 #include "settings.h"
 #include "version.h"
+#include "vr/monado.h"
 #include "vr/steamvr.h"
 
 #ifdef _WIN32
@@ -134,6 +135,7 @@ bool App::Init() {
 void App::Shutdown() {
     m_server.Stop();
     m_cloud.Stop();
+    monado::Stop();  // it renders into the bridge's images
     m_bridge.Stop();
     audio::RestoreDefaults();
     KeepAwake(false);
@@ -269,6 +271,13 @@ json App::StateJson() {
         {"system",
          {{"gpu", m_gpu.name},
           {"os", WindowsVersion()},
+#if defined(_WIN32)
+          {"platform", "windows"},
+#elif defined(__APPLE__)
+          {"platform", "macos"},
+#else
+          {"platform", "linux"},
+#endif
           {"encoder",
            {{"backend", m_caps.backend}, {"h264", m_caps.h264}, {"hevc", m_caps.hevc}, {"av1", m_caps.av1},
             {"hevc10", m_caps.hevc10}}},
@@ -277,7 +286,9 @@ json App::StateJson() {
             {"driverRegistered", steamvr::IsDriverRegistered()}}},
           {"openxr",
            {{"rincastAvailable", openxr::IsRinCastAvailable()}, {"rincastActive", openxr::IsRinCastActive()}, {"steamvrActive", openxr::IsSteamVrActive()},
+            {"monadoAvailable", openxr::IsMonadoAvailable()}, {"monadoActive", openxr::IsMonadoActive()},
             {"active", Narrow(openxr::ActiveRuntime())}}},
+          {"monado", {{"running", monado::IsRunning()}}},
           {"audioDriver",
            {{"speaker", drv.speaker}, {"microphone", drv.microphone}, {"microphoneFeed", drv.microphoneFeed},
             {"steam", {{"speaker", steam.speaker}, {"microphone", steam.microphone && steam.microphoneFeed},

@@ -1,6 +1,6 @@
-// RinCast Streamer on Linux and macOS, for now without a window (Linux gets a GTK + WebKitGTK one
-// with its desktop step, docs/LINUX.md). It runs the same service as on Windows and asks in the
-// terminal when a headset wants to connect:
+// RinCast Streamer in a terminal: macOS for now, and Linux without a display or with --headless
+// (its window is platform/linux/main_gtk.cpp). It runs the same service as on Windows and asks
+// in the terminal when a headset wants to connect:
 //
 //   ./rincast-streamer            then answer "y" (allow, remember), "o" (allow once) or "n"
 #include <fcntl.h>
@@ -63,7 +63,7 @@ void Answer(char c) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int rcs::RunInTerminal(int, char**) {
     signal(SIGINT, OnSignal);
     signal(SIGTERM, OnSignal);
     signal(SIGPIPE, SIG_IGN);
@@ -97,3 +97,9 @@ int main(int argc, char** argv) {
     App::Get().Shutdown();
     return 0;
 }
+
+// Linux's main() is the window's (platform/linux/main_gtk.cpp), which comes here without a
+// display; macOS has only this front end.
+#ifndef RINCAST_GUI_MAIN
+int main(int argc, char** argv) { return rcs::RunInTerminal(argc, argv); }
+#endif

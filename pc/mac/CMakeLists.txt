@@ -36,6 +36,7 @@ add_executable(rincast-streamer
   ${RC_SRC}/stream/video_sender.cpp
   ${RC_SRC}/stream/desktop_stream_common.cpp
   ${RC_SRC}/vr/vr_bridge_host.cpp
+  ${RC_SRC}/vr/monado.cpp
   ${RC_SRC}/cloud/cloud_client.cpp
   ${RC_SRC}/games/game_library.cpp
   # Linux and macOS

@@ -20,6 +20,7 @@
 #include "../stream/desktop_stream.h"
 #include "../stream/foveator.h"
 #include "../stream/vr_stream.h"
+#include "../vr/monado.h"
 #include "../vr/steamvr.h"
 #include "../vr/vr_bridge_host.h"
 #include "rc/platform.h"
@@ -994,6 +995,12 @@ void ClientSession::StartVr() {
     cfg.adaptiveQuant = pc.adaptiveQuantization;
     cfg.twoPass = pc.twoPassEncoding;
     cfg.motionField = st.frameGeneration;
+#ifndef _WIN32
+    // Linux encodes the frame as the VR runtime rendered it: no foveated squeeze and no motion
+    // field yet (platform/linux/vr_stream_linux.cpp), so the headset isn't told of either.
+    cfg.motionField = false;
+    st.gazeFoveation = false;
+#endif
     if (st.gazeFoveation) {
         cfg.foveaSize = st.eyesTracked ? Foveator::kFoveaSize : Foveator::kFixedFoveaSize;
         cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth, cfg.foveaSize);
@@ -1094,7 +1101,45 @@ void ClientSession::StopVr() {
     old.reset();
 }
 
+void ClientSession::LaunchMonado() {
+#ifdef __APPLE__
+    NotifyVrState("error", "", "", "PC VR isn't available on a Mac: there's no VR runtime to stream from.");
+    return;
+#endif
+    if (!monado::IsAvailable()) {
+        NotifyVrState("error", "monado", "", "RinCast's Monado runtime isn't installed with this streamer.");
+        return;
+    }
+    StartVr();
+    if (m_vr && m_vr->Running()) {
+        m_vr->RequestKeyframe();
+        return;
+    }
+    // Monado renders for one display: the one just configured.
+    const rcvr::DisplayConfig d = App::Get().Bridge().LastConfig();
+    char display[160];
+    std::snprintf(display, sizeof(display), "%ux%u@%.2f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f", d.eyeWidth,
+                  d.eyeHeight, double(d.refreshRate), double(d.fovTan[0][0]), double(d.fovTan[0][1]),
+                  double(d.fovTan[0][2]), double(d.fovTan[0][3]), double(d.fovTan[1][0]), double(d.fovTan[1][1]),
+                  double(d.fovTan[1][2]), double(d.fovTan[1][3]));
+    if (!monado::Start(display)) {
+        NotifyVrState("error", "monado", "", "RinCast's Monado runtime didn't start. See monado.log in the logs folder.");
+        return;
+    }
+    // Unlike SteamVR, Monado shows nothing of its own: it's ready, and frames come with a game.
+    NotifyVrState("waiting", "monado", "");
+    if (!openxr::IsMonadoActive())
+        SendControl({{"type", rc::msg::kNotice},
+                     {"level", "warning"},
+                     {"text", "Monado isn't the PC's OpenXR runtime: games will use another one. Choose Monado in "
+                              "RinCast Streamer's VR settings."}});
+}
+
 void ClientSession::LaunchSteamVr() {
+    // Linux has only Monado; on Windows it's the user's choice.
+    if (SettingsStore::Get().Snapshot().openxrRuntime == "monado" || !steamvr::SteamVrPath()) {
+        if (monado::IsAvailable() || SettingsStore::Get().Snapshot().openxrRuntime == "monado") return LaunchMonado();
+    }
     if (!steamvr::SteamVrPath()) {
         NotifyVrState("error", "steamvr", "", "SteamVR is not installed on this PC.");
         return;

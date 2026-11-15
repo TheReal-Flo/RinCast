@@ -17,6 +17,9 @@
 #include <cerrno>
 #include <cstring>
 #endif
+#ifdef __linux__
+#include "../platform/linux/vr_images_linux.h"
+#endif
 
 namespace rcs {
 
@@ -105,6 +108,9 @@ void VrBridgeHost::Stop() {
     if (m_shared) munmap(m_shared, sizeof(rcvr::Shared));
     m_shared = nullptr;
     shm_unlink(rcvr::kSharedMemoryName);
+#ifdef __linux__
+    VrImages::Get().Destroy();
+#endif
 #else
     for (auto& h : m_textureHandles)
         if (h) CloseHandle(h), h = nullptr;
@@ -120,13 +126,19 @@ void VrBridgeHost::Stop() {
 
 bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height) {
 #ifndef _WIN32
-    // Linux: the runtime owns the images and hands them over as DMA-BUF; here only the size
-    // it is to render at.
+    // Linux: Vulkan images on the encoder's GPU, handed to the Monado service over a socket
+    // (pc/common/vr_bridge_images.h). macOS has no VR producer: only the size is kept.
     m_generation++;
     for (int i = 0; i < rcvr::kFrameSlots; i++) m_shared->slots[i].state = rcvr::kSlotFree;
     m_shared->textureWidth = width;
     m_shared->textureHeight = height;
     m_shared->latestReadySlot = -1;
+#ifdef __linux__
+    if (!VrImages::Get().Create(m_shared, width, height)) {
+        RC_LOGE("VR bridge: the frame images couldn't be made (%ux%u)", width, height);
+        return false;
+    }
+#endif
     return true;
 #else
     ComPtr<ID3D11Device1> device1;

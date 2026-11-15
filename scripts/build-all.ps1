@@ -1,7 +1,7 @@
 <#
   Builds every RinCast component and stages the PC package in dist\RinCast.
 
-      powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1 [-Config Release] [-Skip pc,audio,headset,server]
+      powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1 [-Config Release] [-Skip pc,monado,audio,headset,server]
                  [-WdkRoot <path>] [-Deps <folder>] [-TestSign] [-SignedAudio <folder>] [-OpenXR]
                  [-Package] [-DebugApk] [-BuildDir <folder>] [-OutDir <folder>]
 
@@ -28,7 +28,8 @@
 
   Requirements: Visual Studio 2022 (C++ desktop workload), CMake 3.22+,
   Android Studio (JBR, SDK, NDK 27.3.13750724), Go 1.26+, and for the audio
-  driver the WDK (scripts\fetch-deps.ps1).
+  driver the WDK (scripts\fetch-deps.ps1). Monado (pc\monado) also needs vcpkg (VCPKG_ROOT, or the
+  one Visual Studio brings) and Git; without vcpkg it is skipped and the package has no Monado.
 #>
 [CmdletBinding()]
 param(
@@ -149,6 +150,29 @@ if ($Skip -notcontains 'pc') {
         $licenses['VDXR-third-party.txt'] = 'pc\runtime-openxr\THIRD_PARTY.vdxr'
     }
     foreach ($k in $licenses.Keys) { Copy-Item (Join-Path $root $licenses[$k]) (Join-Path "$stage\LICENSES" $k) -Force }
+}
+
+# ---- Monado: RinCast's OpenXR runtime next to SteamVR (pc\monado) --------------------
+if ($Skip -notcontains 'monado') {
+    Step 'Monado (OpenXR runtime)'
+    # VCPKG_ROOT, GitHub's runners' copy, or the one any Visual Studio edition installed.
+    $vsCopies = @("${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio") |
+        Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem "$_\*\*\VC\vcpkg" -Directory -ErrorAction SilentlyContinue } |
+        ForEach-Object { $_.FullName }
+    $vcpkg = @($env:VCPKG_ROOT, $env:VCPKG_INSTALLATION_ROOT) + @($vsCopies) |
+        Where-Object { $_ -and (Test-Path "$_\scripts\buildsystems\vcpkg.cmake") } | Select-Object -First 1
+    if (-not $vcpkg) {
+        Write-Warning 'vcpkg not found (set VCPKG_ROOT); skipping Monado. The package offers SteamVR only.'
+    } else {
+        Run cmake @('-S', "$root\pc\monado", '-B', "$build\monado", '-G', 'Visual Studio 17 2022', '-A', 'x64',
+                    "-DCMAKE_TOOLCHAIN_FILE=$vcpkg\scripts\buildsystems\vcpkg.cmake", '-DVCPKG_TARGET_TRIPLET=x64-windows')
+        Run cmake @('--build', "$build\monado", '--config', $Config, '--parallel', '--target', 'rincast-monado')
+        if ((Test-Path $stage) -and (Get-Command Copy-Replacing -ErrorAction SilentlyContinue)) {
+            Copy-Replacing "$build\monado\monado" $stage
+            New-Item -ItemType Directory -Force "$stage\LICENSES" | Out-Null
+            Copy-Item "$build\monado\_deps\monado-src\LICENSE" "$stage\LICENSES\Monado.txt" -Force
+        }
+    }
 }
 
 # ---- Audio driver -------------------------------------------------------------

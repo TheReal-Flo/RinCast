@@ -11,6 +11,7 @@
 #include "rc/platform.h"
 #include "util.h"
 #include "vr/face_share.h"
+#include "vr/monado.h"
 #include "vr/steamvr.h"
 
 namespace rcs {
@@ -89,15 +90,70 @@ namespace openxr {
 
 namespace fs = std::filesystem;
 
-// TODO (VR step): the RinCast Monado runtime's manifest, and making it the active runtime
-// (~/.config/openxr/1/active_runtime.json).
+namespace {
+
+// ~/.config/openxr/1/active_runtime.json: the user's own choice of OpenXR runtime on Linux, a
+// file or a link to the runtime's manifest (the system's in /etc/xdg is the fallback).
+fs::path ActiveRuntimeFile() {
+    fs::path config;
+    if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) config = xdg;
+    else if (const char* home = std::getenv("HOME"); home && *home) config = fs::path(home) / ".config";
+    else return {};
+    return config / "openxr" / "1" / "active_runtime.json";
+}
+
+}  // namespace
+
 fs::path RinCastManifest() { return {}; }
 std::optional<fs::path> SteamVrManifest() { return std::nullopt; }
-std::wstring ActiveRuntime() { return {}; }
+
+std::wstring ActiveRuntime() {
+    const fs::path file = ActiveRuntimeFile();
+    std::error_code ec;
+    if (file.empty() || !fs::exists(file, ec)) return {};
+    const fs::path target = fs::is_symlink(file, ec) ? fs::read_symlink(file, ec) : file;
+    return Widen(target.string());
+}
+
 bool IsRinCastAvailable() { return false; }
 bool IsRinCastActive() { return false; }
 bool IsSteamVrActive() { return false; }
+
+#ifdef __linux__
+bool IsMonadoAvailable() { return monado::IsAvailable(); }
+
+bool IsMonadoActive() {
+    std::error_code ec;
+    const fs::path file = ActiveRuntimeFile();
+    return monado::IsAvailable() && !file.empty() && fs::equivalent(file, monado::Manifest(), ec);
+}
+
+// Points the user's active runtime at RinCast's Monado. What was there before is kept next to it
+// (active_runtime.json.before-rincast), to go back to by hand.
+bool SetActiveRuntime(const std::string& target) {
+    if (target != "monado" || !monado::IsAvailable()) return false;
+    if (IsMonadoActive()) return true;
+    const fs::path file = ActiveRuntimeFile();
+    if (file.empty()) return false;
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    if (fs::exists(fs::symlink_status(file, ec))) {
+        fs::path backup = file;
+        backup += ".before-rincast";
+        fs::remove(backup, ec);
+        fs::rename(file, backup, ec);
+        if (ec) return false;
+    }
+    fs::create_symlink(monado::Manifest(), file, ec);
+    if (ec) RC_LOGW("OpenXR: couldn't make RinCast the active runtime: %s", ec.message().c_str());
+    return !ec;
+}
+#else
+// macOS: no OpenXR runtime to stream from.
+bool IsMonadoAvailable() { return false; }
+bool IsMonadoActive() { return false; }
 bool SetActiveRuntime(const std::string&) { return false; }
+#endif
 
 }  // namespace openxr
 

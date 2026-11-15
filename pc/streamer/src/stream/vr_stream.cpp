@@ -145,6 +145,7 @@ static const char* ProducerName(rcvr::ProducerKind k) {
     switch (k) {
         case rcvr::ProducerKind::SteamVR: return "steamvr";
         case rcvr::ProducerKind::OpenXR: return "openxr";
+        case rcvr::ProducerKind::Monado: return "monado";
         default: return "";
     }
 }

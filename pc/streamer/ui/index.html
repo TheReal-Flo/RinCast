@@ -153,13 +153,14 @@
     <section class="page" data-page="vr" aria-labelledby="h-vr">
       <h1 id="h-vr" tabindex="-1" data-i18n="nav.vr">SteamVR</h1>
       <dl class="facts tight" id="vrFacts"></dl>
-      <div class="btns spaced">
+      <p class="note" id="monadoHint" data-i18n="vr.monadoHint" hidden>Monado is the OpenXR runtime RinCast brings along. RinCast starts it when your headset enters VR.</p>
+      <div class="btns spaced" id="steamvrButtons">
         <button class="btn" id="launchSteamVR" data-i18n="vr.start">Start SteamVR</button>
         <button class="btn" id="restartSteamVR" data-i18n="vr.restart">Restart SteamVR</button>
         <button class="btn" id="registerDriver" data-i18n="vr.register">Add RinCast to SteamVR</button>
         <button class="btn primary" id="getSteamVR" data-i18n="vr.get">Get SteamVR</button>
       </div>
-      <label class="check spaced"><input type="checkbox" data-setting="autoRegisterSteamVrDriver"><span data-i18n="vr.autoRegister">Add RinCast to SteamVR automatically</span></label>
+      <label class="check spaced" id="autoRegisterRow"><input type="checkbox" data-setting="autoRegisterSteamVrDriver"><span data-i18n="vr.autoRegister">Add RinCast to SteamVR automatically</span></label>
       <h2 id="controllerModeLabel" data-i18n="vr.controllerMode">Controller compatibility</h2>
       <div class="options inline" role="radiogroup" aria-labelledby="controllerModeLabel" aria-describedby="controllerModeHint">
         <label><input type="radio" name="controllerMode" data-setting="controllerMode" value="native"><span data-i18n="vr.controllerNative">Native controllers</span></label>
@@ -171,6 +172,7 @@
         <div class="options inline" id="runtimeSeg" role="radiogroup" aria-labelledby="runtimeLabel" aria-describedby="runtimeNote">
           <label><input type="radio" name="openxrRuntime" value="rincast"><span>RinCast</span></label>
           <label><input type="radio" name="openxrRuntime" value="steamvr"><span>SteamVR</span></label>
+          <label id="runtimeMonado"><input type="radio" name="openxrRuntime" value="monado"><span>Monado</span></label>
         </div>
         <p class="note" id="runtimeNote"></p>
       </div>

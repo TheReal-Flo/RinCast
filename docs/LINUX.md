@@ -39,35 +39,35 @@ captures and encodes; its audio only captures.
 ## PC VR: Monado
 
 SteamVR on Linux can't hand frames to a driver, so VR runs through Monado, the open OpenXR
-runtime, the way WiVRn does. Monado's compositor targets and drivers live in its tree, so the
-runtime is Monado (pinned, fetched at build time) with two RinCast pieces added, built as
-`rincast-monado` (its `monado-service` plus the OpenXR manifest):
+runtime, the way WiVRn does: RinCast's Monado service (`pc/monado`, see its README) is Monado's
+own service and OpenXR runtime, built from Monado's sources at a pinned version, with RinCast's
+devices (the headset and Touch controllers, from the bridge's tracking) and a compositor target
+of its own in place of Monado's hardware drivers and display output. The same service runs on
+Windows as a choice next to SteamVR.
 
-- **Driver** (`drivers/rincast`): the headset, controllers, hands and body trackers as Monado
-  devices, fed from the bridge's tracking snapshots, with the display config (resolution, rate,
-  field of view, IPD) from the bridge.
-- **Compositor target** (`comp_target_rincast`): Monado's compositor renders the game's layers
-  into the target's images; the target exports them as DMA-BUF and hands them to the streamer,
-  paced by the bridge's virtual vsync, which the streamer steers to the headset's display (the
-  same phase steering and pose hold as on Windows).
+The streamer and the service share `pc/common/vr_bridge.h`'s layout in POSIX shared memory
+(`/rincast-vr-bridge.v1`), with futex counters for the events. The frame images are Vulkan images
+the streamer allocates on the GPU it encodes on (linear where that GPU can render to them) and
+passes to the service over a Unix socket (`$XDG_RUNTIME_DIR/rincast-vr.sock`,
+`pc/common/vr_bridge_images.h`). The service renders each frame into one, timed to the vsync the
+streamer steers to the headset's display (the same phase steering as on Windows). The streamer
+encodes it as a DMA-BUF with VAAPI, or reads it back for NVENC and software encoding (importing
+it into CUDA instead is a later step). SteamVR games run through xrizer or OpenComposite on top.
 
-The streamer and the runtime share `pc/common/vr_bridge.h`'s layout in POSIX shared memory
-(`/rincast-vr-bridge.v1`), with eventfds instead of named events and the frame images passed
-once as DMA-BUF file descriptors over a Unix socket (`$XDG_RUNTIME_DIR/rincast-vr.sock`). The
-streamer encodes them with VAAPI or NVENC (imported via CUDA's external memory). SteamVR games
-run through xrizer or OpenComposite on top of it, as with WiVRn.
+The streamer starts the service when a headset launches VR and makes it the user's active OpenXR
+runtime when asked (`~/.config/openxr/1/active_runtime.json`).
 
 ## Order
 
 1. **Done.** Neutral session headers; the Linux build of the shared layer with the session,
-   server, settings and cloud (`pc/linux/CMakeLists.txt`), with stub platform parts. It runs
-   headless: headsets find it and ask to connect (answered in the terminal), but it offers no
-   desktop or VR yet.
-2. Desktop: X11 capture, FFmpeg encoder, XTest input, Pulse audio, GTK/WebKit window.
-3. Desktop on Wayland: portal ScreenCast + PipeWire, RemoteDesktop/libei input.
-4. VR: the bridge on POSIX, the Monado driver and compositor target, the streamer's VR stream
-   over DMA-BUF.
-5. Packaging (AppImage or a tarball with an install script; Flatpak later, its sandbox needs
+   server, settings and cloud (`pc/linux/CMakeLists.txt`).
+2. **Written, not yet run on a Linux desktop.** Desktop: X11 capture, FFmpeg encoder, XTest
+   input, Pulse audio and the headset microphone, the GTK/WebKit window.
+3. **Written, not yet run.** Desktop on Wayland: portal ScreenCast + PipeWire, RemoteDesktop/libei
+   input (`/dev/uinput` as the fallback).
+4. **Written, not yet run.** VR: the bridge on POSIX, RinCast's Monado service (`pc/monado`), the
+   streamer's VR stream from the shared Vulkan images.
+5. Packaging (a tarball with an install script, or an AppImage; Flatpak later, its sandbox needs
    portals for everything anyway).
 
 ## Building (WSL or a Linux PC, Ubuntu 24.04+ / Debian 13 package names)

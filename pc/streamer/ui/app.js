@@ -771,12 +771,25 @@ async function registerDriver() {
 
 function renderVr() {
   const sys = state.system;
-  $$("#runtimeSeg input").forEach((b) => { b.checked = (b.value === "rincast" && sys.openxr.rincastActive) || (b.value === "steamvr" && sys.openxr.steamvrActive); });
-  $("#runtimeRow").hidden = sys.openxr.rincastAvailable === false;
-  $("#runtimeNote").textContent = sys.openxr.rincastActive || sys.openxr.steamvrActive ? "" : t("vr.otherRuntime");
+  const ox = sys.openxr;
+  // Linux and macOS have no SteamVR to stream from: VR is Monado's there.
+  const steamvrPossible = (sys.platform ?? "windows") === "windows";
+  const active = { rincast: ox.rincastActive, steamvr: ox.steamvrActive, monado: ox.monadoActive };
+  $$("#runtimeSeg input").forEach((b) => {
+    b.checked = !!active[b.value];
+    if (b.value === "rincast") b.closest("label").hidden = !ox.rincastAvailable;
+    if (b.value === "steamvr") b.closest("label").hidden = !steamvrPossible;
+  });
+  $("#runtimeMonado").hidden = !ox.monadoAvailable;
+  $("#runtimeRow").hidden = !ox.rincastAvailable && !ox.monadoAvailable;
+  $("#runtimeNote").textContent = ox.rincastActive || ox.steamvrActive || ox.monadoActive ? "" : t("vr.otherRuntime");
+  $("#monadoHint").hidden = !ox.monadoAvailable;
+  $("#steamvrButtons").hidden = !steamvrPossible;
+  $("#autoRegisterRow").hidden = !steamvrPossible;
   setFacts($("#vrFacts"), [
-    [t("vr.status"), !sys.steamvr.installed ? t("vr.notInstalled") : sys.steamvr.running ? t("vr.running") : t("vr.notRunning"), sys.steamvr.installed ? "" : "no"],
-    sys.steamvr.installed && [t("vr.driver"), sys.steamvr.driverRegistered ? t("vr.added") : t("vr.notAdded"), sys.steamvr.driverRegistered ? "" : "no"],
+    steamvrPossible && [t("vr.status"), !sys.steamvr.installed ? t("vr.notInstalled") : sys.steamvr.running ? t("vr.running") : t("vr.notRunning"), sys.steamvr.installed ? "" : "no"],
+    steamvrPossible && sys.steamvr.installed && [t("vr.driver"), sys.steamvr.driverRegistered ? t("vr.added") : t("vr.notAdded"), sys.steamvr.driverRegistered ? "" : "no"],
+    ox.monadoAvailable && ["Monado", sys.monado?.running ? t("vr.running") : t("vr.notRunning"), ""],
   ]);
   $("#registerDriver").hidden = !sys.steamvr.installed || sys.steamvr.driverRegistered;
   $("#launchSteamVR").hidden = !sys.steamvr.installed || sys.steamvr.running;

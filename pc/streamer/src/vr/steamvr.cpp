@@ -13,6 +13,7 @@
 
 #include "../settings.h"
 #include "../util.h"
+#include "monado.h"
 #include "../settings.h"
 #include "rc/platform.h"
 
@@ -394,9 +395,16 @@ bool IsSteamVrActive() {
     return m && SamePath(ActiveRuntime(), *m);
 }
 
+bool IsMonadoAvailable() { return monado::IsAvailable(); }
+
+bool IsMonadoActive() { return monado::IsAvailable() && SamePath(ActiveRuntime(), monado::Manifest()); }
+
 bool SetActiveRuntime(const std::string& target) {
     fs::path manifest;
-    if (target == "rincast") {
+    if (target == "monado") {
+        manifest = monado::Manifest();
+        if (!monado::IsAvailable()) return false;
+    } else if (target == "rincast") {
         manifest = RinCastManifest();
         // Public builds don't include it. Pointing Windows at a missing manifest would
         // break OpenXR for every app.

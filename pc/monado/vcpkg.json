@@ -1,0 +1,24 @@
+{
+    "name": "rincast-monado",
+    "version-string": "1.0",
+    "dependencies": [
+        {
+            "name": "wil",
+            "platform": "windows"
+        },
+        {
+            "name": "pthreads",
+            "platform": "windows"
+        },
+        "cjson",
+        "eigen3",
+        {
+            "name": "glslang",
+            "features": [
+                "tools"
+            ]
+        },
+        "vulkan"
+    ],
+    "builtin-baseline": "4334d8b4c8916018600212ab4dd4bbdc343065d1"
+}

@@ -30,6 +30,17 @@ Notable changes to RinCast. Versions follow [Semantic Versioning](https://semver
   Intel Macs) next to the Windows package, with its checksum in `SHA256SUMS.txt`. CI builds
   and packages it for every push and pull request, and builds the streamer's shared code for
   Linux too, so a change that only compiles on Windows shows up right away.
+- A streamer for Linux (work in progress, not yet tested on a Linux desktop; see
+  `docs/LINUX.md`): the desktop on X11 and on Wayland (through the desktop's screen-sharing and
+  remote-input prompts), encoded with FFmpeg (VAAPI on AMD and Intel, NVENC on NVIDIA, software
+  otherwise), the PC's sound and the headset's microphone as "RinCast Microphone" through
+  PulseAudio or PipeWire, and the same window as on Windows (GTK and WebKitGTK, with a tray icon).
+  Without a display it runs in the terminal.
+- PC VR through Monado, the open OpenXR runtime: RinCast's own Monado service (`pc/monado`)
+  renders OpenXR games into the streamer's frames, timed to the headset's display like the
+  SteamVR driver. On Linux it's how PC VR works; on Windows it's a third choice under *OpenXR
+  games run through*, next to SteamVR. Finger tracking and body trackers don't reach Monado
+  games yet. See `pc/monado/README.md`.
 
 ### Fixed
 

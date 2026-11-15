@@ -1,11 +1,16 @@
-// util.h on Linux: the XDG folders, autostart and the system's name. What Linux and macOS share
-// is in platform/posix/util_posix.cpp.
+// util.h on Linux: the XDG folders, autostart, keeping the PC awake and the system's name. What
+// Linux and macOS share is in platform/posix/util_posix.cpp.
+#include <gio/gio.h>
+#include <gio/gunixfdlist.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <unistd.h>
 
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 
+#include "rc/platform.h"
 #include "util.h"
 
 namespace rcs {
@@ -86,8 +91,70 @@ std::string WindowsVersion() {
     return std::string(u.sysname) + " " + u.release;
 }
 
-// TODO (window step): org.freedesktop.ScreenSaver.Inhibit / logind's sleep inhibitor over D-Bus.
-void KeepAwake(bool) {}
+namespace {
+
+std::mutex g_awakeMutex;
+uint32_t g_screenSaverCookie = 0;  // from org.freedesktop.ScreenSaver.Inhibit; 0: none
+int g_logindFd = -1;               // logind's inhibitor lock: held while the fd is open
+
+// The desktop's screensaver service (GNOME, KDE, Xfce and others): no blanking, no idle sleep.
+bool InhibitScreenSaver(GDBusConnection* session) {
+    GVariant* reply = g_dbus_connection_call_sync(
+        session, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+        "Inhibit", g_variant_new("(ss)", "RinCast Streamer", "A headset is streaming from this PC"),
+        G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, nullptr);
+    if (!reply) return false;
+    g_variant_get(reply, "(u)", &g_screenSaverCookie);
+    g_variant_unref(reply);
+    return g_screenSaverCookie != 0;
+}
+
+// Without one (no desktop session, a minimal window manager): logind's idle and sleep inhibitor.
+bool InhibitLogind() {
+    GDBusConnection* system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
+    if (!system) return false;
+    GUnixFDList* fds = nullptr;
+    GVariant* reply = g_dbus_connection_call_with_unix_fd_list_sync(
+        system, "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", "Inhibit",
+        g_variant_new("(ssss)", "idle:sleep", "RinCast Streamer", "A headset is streaming from this PC", "block"),
+        G_VARIANT_TYPE("(h)"), G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, &fds, nullptr, nullptr);
+    if (reply && fds) {
+        gint32 handle = -1;
+        g_variant_get(reply, "(h)", &handle);
+        g_logindFd = g_unix_fd_list_get(fds, handle, nullptr);
+    }
+    if (reply) g_variant_unref(reply);
+    if (fds) g_object_unref(fds);
+    g_object_unref(system);
+    return g_logindFd >= 0;
+}
+
+}  // namespace
+
+// Called every second while streaming (and with false when it ends): only a change of state
+// talks to D-Bus.
+void KeepAwake(bool on) {
+    std::lock_guard lock(g_awakeMutex);
+    const bool held = g_screenSaverCookie != 0 || g_logindFd >= 0;
+    if (on == held) return;
+    GDBusConnection* session = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+    if (on) {
+        if (!(session && InhibitScreenSaver(session)) && !InhibitLogind())
+            RC_LOGW("Can't keep this PC awake: neither the screensaver service nor logind answered");
+    } else {
+        if (g_screenSaverCookie && session) {
+            GVariant* reply = g_dbus_connection_call_sync(
+                session, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                "UnInhibit", g_variant_new("(u)", g_screenSaverCookie), nullptr, G_DBUS_CALL_FLAGS_NONE, 2000,
+                nullptr, nullptr);
+            if (reply) g_variant_unref(reply);
+        }
+        g_screenSaverCookie = 0;
+        if (g_logindFd >= 0) close(g_logindFd);  // releases logind's lock
+        g_logindFd = -1;
+    }
+    if (session) g_object_unref(session);
+}
 
 }  // namespace rcs
 

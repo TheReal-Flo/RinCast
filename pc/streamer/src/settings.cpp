@@ -135,7 +135,11 @@ void Settings::FromJson(const json& j) {
     desktopBitrateMbps = std::clamp(desktopBitrateMbps, 5, 200);
     fecPercent = std::clamp(fecPercent, 0, 25);
     if (codec != "auto" && codec != "h264" && codec != "hevc" && codec != "av1") codec = "auto";
-    if (openxrRuntime != "rincast" && openxrRuntime != "steamvr") openxrRuntime = "steamvr";
+#ifdef _WIN32
+    if (openxrRuntime != "rincast" && openxrRuntime != "steamvr" && openxrRuntime != "monado") openxrRuntime = "steamvr";
+#else
+    openxrRuntime = "monado";
+#endif
     if (audioDevices != "auto" && audioDevices != "rincast" && audioDevices != "steam" && audioDevices != "system")
         audioDevices = "auto";
     // An empty folder used to mean "the default" quietly. Say the default instead, so

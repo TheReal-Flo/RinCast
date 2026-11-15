@@ -30,6 +30,7 @@ add_executable(rincast-streamer WIN32
   src/audio/audio.cpp
   src/audio/steam_devices.cpp
   src/vr/vr_bridge_host.cpp
+  src/vr/monado.cpp
   src/vr/face_share.cpp
   src/vr/steamvr.cpp
   src/games/game_library.cpp

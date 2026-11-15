@@ -52,7 +52,13 @@ struct Settings {
     std::string audioDevices = "auto";  // auto | rincast | steam | system
 
     // VR
-    std::string openxrRuntime = "steamvr";  // rincast | steamvr (what we make active while streaming)
+    // What OpenXR games run through, and what a headset launches for VR: rincast | steamvr | monado.
+    // Linux and macOS have no SteamVR to stream from: Monado (pc/monado) there.
+#ifdef _WIN32
+    std::string openxrRuntime = "steamvr";
+#else
+    std::string openxrRuntime = "monado";
+#endif
     bool autoRegisterSteamVrDriver = true;
     std::string controllerMode = "native";  // native | touch (SteamVR compatibility)
 
